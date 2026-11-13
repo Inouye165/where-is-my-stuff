@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Phone Camera — WhereIsMyStuff</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1115;
+      --card: #181c23;
+      --border: rgba(255, 255, 255, 0.1);
+      --text: #f3f5f8;
+      --muted: #9aa3b2;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --success: #22c55e;
+      --danger: #ef4444;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f4f6f9;
+        --card: #ffffff;
+        --border: rgba(15, 23, 42, 0.1);
+        --text: #0f172a;
+        --muted: #64748b;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+    }
+    .capture-card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 1.75rem 1.5rem;
+      text-align: center;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.25);
+    }
+    .brand {
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      margin: 0 0 0.4rem;
+      font-size: 1.35rem;
+      line-height: 1.25;
+    }
+    .subtitle {
+      margin: 0 0 1.5rem;
+      font-size: 0.94rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+    .capture-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      width: 100%;
+      padding: 2rem 1.25rem;
+      border-radius: 16px;
+      border: 2px dashed var(--accent);
+      background: rgba(59, 130, 246, 0.09);
+      color: var(--text);
+      font-size: 1.05rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.12s ease, background 0.15s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .capture-btn:active {
+      transform: scale(0.98);
+      background: rgba(59, 130, 246, 0.16);
+    }
+    .capture-btn.disabled {
+      opacity: 0.55;
+      pointer-events: none;
+    }
+    .capture-icon {
+      width: 48px;
+      height: 48px;
+      color: var(--accent);
+    }
+    .preview-wrap {
+      display: none;
+      margin-top: 1.25rem;
+    }
+    .preview-wrap img {
+      width: 100%;
+      max-height: 260px;
+      object-fit: cover;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      margin-top: 1rem;
+      padding: 0.5rem 0.9rem;
+      border-radius: 999px;
+      font-size: 0.88rem;
+      font-weight: 600;
+    }
+    .status-pill.success {
+      background: rgba(34, 197, 94, 0.14);
+      color: var(--success);
+    }
+    .status-pill.error {
+      background: rgba(239, 68, 68, 0.14);
+      color: var(--danger);
+    }
+    .retake-btn {
+      margin-top: 1rem;
+      width: 100%;
+      padding: 0.8rem 1rem;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text);
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <main class="capture-card">
+    <div class="brand">WhereIsMyStuff</div>
+    <h1 id="capture-title">Take a photo</h1>
+    <p id="capture-subtitle" class="subtitle">Snap a picture and it will appear on your computer automatically.</p>
+
+    <label id="capture-trigger" for="mobile-camera-input" class="capture-btn">
+      <svg class="capture-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+        <circle cx="12" cy="13" r="4"></circle>
+      </svg>
+      <span id="capture-btn-label">Tap to open camera</span>
+      <input type="file" id="mobile-camera-input" accept="image/*" capture="environment" style="display: none;">
+    </label>
+
+    <div id="preview-wrap" class="preview-wrap">
+      <img id="preview-img" src="" alt="Captured photo">
+    </div>
+
+    <div id="status-area"></div>
+    <button type="button" id="retake-btn" class="retake-btn" style="display: none;">Take another photo</button>
+  </main>
+
+  <script type="module">
+    import { compressImageFile } from '/js/photo-compress.js';
+
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token') || '';
+    const titleEl = document.getElementById('capture-title');
+    const subtitleEl = document.getElementById('capture-subtitle');
+    const triggerEl = document.getElementById('capture-trigger');
+    const btnLabelEl = document.getElementById('capture-btn-label');
+    const inputEl = document.getElementById('mobile-camera-input');
+    const previewWrap = document.getElementById('preview-wrap');
+    const previewImg = document.getElementById('preview-img');
+    const statusArea = document.getElementById('status-area');
+    const retakeBtn = document.getElementById('retake-btn');
+
+    function setStatus(msg, kind) {
+      statusArea.innerHTML = '';
+      if (!msg) return;
+      const pill = document.createElement('div');
+      pill.className = `status-pill ${kind}`;
+      pill.textContent = msg;
+      statusArea.appendChild(pill);
+    }
+
+    function showExpired(msg) {
+      triggerEl.style.display = 'none';
+      subtitleEl.textContent = msg || 'This QR code has expired. Open a new one on your computer.';
+      setStatus('Link expired', 'error');
+    }
+
+    async function init() {
+      if (!token) {
+        showExpired('Missing capture token. Scan the QR code on your computer screen.');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/v1/photos/capture-sessions/${encodeURIComponent(token)}`);
+        if (!res.ok) {
+          showExpired('This link is invalid or has expired.');
+          return;
+        }
+        const data = await res.json();
+        if (data.status === 'expired') {
+          showExpired();
+          return;
+        }
+        if (data.label) {
+          titleEl.textContent = data.label;
+        }
+      } catch {
+        setStatus('Could not reach server on Wi-Fi.', 'error');
+      }
+    }
+
+    async function handleFile(file) {
+      if (!file || !token) return;
+      triggerEl.classList.add('disabled');
+      btnLabelEl.textContent = 'Sending photo...';
+      setStatus('', '');
+
+      try {
+        const compressed = await compressImageFile(file);
+        const fd = new FormData();
+        fd.append('file', compressed);
+        const res = await fetch(`/api/v1/photos/capture-sessions/${encodeURIComponent(token)}/upload`, {
+          method: 'POST',
+          body: fd,
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (res.status === 410 || res.status === 404) {
+            showExpired(body.detail);
+            return;
+          }
+          throw new Error(body.detail || 'Upload failed.');
+        }
+
+        const previewUrl = URL.createObjectURL(compressed);
+        previewImg.src = previewUrl;
+        previewWrap.style.display = 'block';
+        triggerEl.style.display = 'none';
+        retakeBtn.style.display = 'block';
+        subtitleEl.textContent = 'You can close this tab or take another shot.';
+        setStatus('✓ Sent to your computer!', 'success');
+      } catch (err) {
+        triggerEl.classList.remove('disabled');
+        btnLabelEl.textContent = 'Tap to open camera';
+        setStatus(err.message || 'Upload failed. Try again.', 'error');
+      }
+    }
+
+    inputEl.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) handleFile(file);
+    });
+
+    retakeBtn.addEventListener('click', () => {
+      inputEl.value = '';
+      inputEl.click();
+    });
+
+    init();
+  </script>
+</body>
+</html>
+

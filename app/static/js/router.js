@@ -1,0 +1,313 @@
+/**
+ * Hash Router & View Navigation Engine
+ */
+import { isUnknownPlaceholder, state, updateNavStateAndCounts } from './state.js';
+import { guardNavigation, isGridDirty } from './unsaved-guard.js';
+
+function runGuarded(fn) {
+  if (!isGridDirty()) {
+    fn();
+    return;
+  }
+  guardNavigation(fn);
+}
+import {
+  closeSlideDrawer,
+  renderCatalogView,
+  renderDrawerView,
+  renderHomePlacesView,
+  renderItemView,
+  renderNeedsHomeView,
+  renderRoomView,
+  renderStorageUnitView
+} from './views.js';
+
+const LAST_ROUTE_KEY = 'wims_last_route';
+const LAST_SCROLL_KEY = 'wims_last_scroll';
+
+export function saveLastRoute(hash) {
+  try {
+    if (hash) localStorage.setItem(LAST_ROUTE_KEY, hash);
+  } catch {}
+}
+
+export function getSavedLastRoute() {
+  try {
+    return localStorage.getItem(LAST_ROUTE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function saveLastScroll(scrollTop) {
+  try {
+    localStorage.setItem(LAST_SCROLL_KEY, String(Math.max(0, Math.round(scrollTop || 0))));
+  } catch {}
+}
+
+export function restoreLastScroll() {
+  try {
+    const raw = localStorage.getItem(LAST_SCROLL_KEY);
+    const val = raw ? parseInt(raw, 10) : 0;
+    if (!val || Number.isNaN(val)) return;
+    requestAnimationFrame(() => {
+      const scroller = document.getElementById('unit-scroll-region') || document.getElementById('app-workspace');
+      if (scroller) scroller.scrollTop = val;
+    });
+  } catch {}
+}
+
+export function updateHash(hash) {
+  saveLastRoute(hash);
+  if (window.location.hash !== hash) {
+    history.pushState(null, '', hash);
+  }
+}
+
+export function handleHashRouting() {
+  const hash = window.location.hash || '';
+  if (hash) saveLastRoute(hash);
+  if (!hash || hash === '#' || hash === '#/' || hash === '#/places' || hash === '#/rooms' || hash === '#/storage') {
+    switchAppTab('places', false);
+  } else if (hash === '#/needs-home') {
+    navToNeedsHome(false);
+  } else if (hash === '#/items') {
+    switchAppTab('items', false);
+  } else if (hash.startsWith('#/unit/')) {
+    const id = parseInt(hash.replace('#/unit/', ''), 10);
+    if (id) navToStorageUnit(id, false);
+  } else if (hash.startsWith('#/drawer/')) {
+    const id = parseInt(hash.replace('#/drawer/', ''), 10);
+    if (id) navToDrawer(id, false);
+  } else if (hash.startsWith('#/room/')) {
+    const id = parseInt(hash.replace('#/room/', ''), 10);
+    if (id) navToRoom(id, false);
+  } else if (hash.startsWith('#/item/')) {
+    const id = parseInt(hash.replace('#/item/', ''), 10);
+    if (id) navToItem(id, false);
+  }
+}
+
+export function updatePageTitle(label = '') {
+  if (typeof document === 'undefined') return;
+  document.title = label ? `${label} - WhereIsMyStuff` : 'WhereIsMyStuff';
+}
+
+export function switchAppTab(tabName, recordHistory = true) {
+  runGuarded(() => {
+    const normalized = tabName === 'storage' || tabName === 'rooms' ? 'places' : tabName;
+
+    state.activeTab = normalized;
+    state.currentView = normalized === 'places' ? 'home' : normalized;
+    state.currentLocationId = null;
+    state.spotlightDrawerId = null;
+
+    if (normalized === 'places') updatePageTitle('');
+    else if (normalized === 'items') updatePageTitle('Items');
+
+    if (recordHistory) {
+      state.historyStack.push({ tab: normalized, view: state.currentView, id: null });
+      updateHash(normalized === 'places' ? '#/' : `#/${normalized}`);
+    }
+
+    updateNavStateAndCounts();
+    renderCurrentWorkspace();
+  });
+}
+
+export function navToHome() {
+  runGuarded(() => {
+    state.homeSearchQuery = '';
+    switchAppTab('places', true);
+  });
+}
+
+export function navToNeedsHome(recordHistory = true) {
+  runGuarded(() => {
+    state.activeTab = 'places';
+    state.currentView = 'needs-home';
+    state.currentLocationId = null;
+    state.spotlightDrawerId = null;
+    updatePageTitle('Needs a home');
+
+    if (recordHistory) {
+      state.historyStack.push({ tab: 'places', view: 'needs-home', id: null });
+      updateHash('#/needs-home');
+    }
+
+    updateNavStateAndCounts();
+    renderNeedsHomeView();
+  });
+}
+
+export function navToRoom(roomId, recordHistory = true) {
+  runGuarded(() => {
+    state.activeTab = 'places';
+    state.currentView = 'room';
+    state.currentLocationId = roomId;
+    state.spotlightDrawerId = null;
+    const room = state.locationMap.get(roomId);
+    updatePageTitle(room ? room.name : 'Room');
+
+    if (recordHistory) {
+      state.historyStack.push({ tab: 'places', view: 'room', id: roomId });
+      updateHash(`#/room/${roomId}`);
+    }
+
+    updateNavStateAndCounts();
+    renderRoomView(roomId);
+  });
+}
+
+export function navToStorageUnit(unitId, recordHistory = true, spotlightDrawerId = null) {
+  runGuarded(() => {
+    state.activeTab = 'places';
+    state.currentView = 'unit';
+    state.currentLocationId = unitId;
+    state.spotlightDrawerId = spotlightDrawerId;
+    const unit = state.locationMap.get(unitId);
+    updatePageTitle(unit ? unit.name : 'Container');
+
+    if (recordHistory) {
+      state.historyStack.push({ tab: 'places', view: 'unit', id: unitId });
+      updateHash(`#/unit/${unitId}`);
+    }
+
+    updateNavStateAndCounts();
+    renderStorageUnitView(unitId);
+  });
+}
+
+export function navToDrawer(drawerId, recordHistory = true) {
+  runGuarded(() => {
+    state.activeTab = 'places';
+    state.currentView = 'drawer';
+    state.currentLocationId = drawerId;
+    state.spotlightDrawerId = null;
+    const drawer = state.locationMap.get(drawerId);
+    updatePageTitle(drawer ? drawer.name : 'Drawer');
+
+    if (recordHistory) {
+      state.historyStack.push({ tab: 'places', view: 'drawer', id: drawerId });
+      updateHash(`#/drawer/${drawerId}`);
+    }
+
+    updateNavStateAndCounts();
+    renderDrawerView(drawerId);
+  });
+}
+
+export function navToItem(itemId, recordHistory = true) {
+  runGuarded(() => {
+    closeSlideDrawer();
+    state.activeTab = 'items';
+    state.currentView = 'item';
+    state.currentLocationId = itemId;
+    state.spotlightDrawerId = null;
+    const item = state.items.find(i => i.id === itemId);
+    updatePageTitle(item ? item.name : 'Item');
+
+    if (recordHistory) {
+      state.historyStack.push({ tab: 'items', view: 'item', id: itemId });
+      updateHash(`#/item/${itemId}`);
+    }
+
+    updateNavStateAndCounts();
+    renderItemView(itemId);
+  });
+}
+
+export function locateDrawerInUnit(unitId, drawerId) {
+  let resolvedUnitId = unitId;
+  if (!resolvedUnitId && drawerId) {
+    const d = state.locationMap.get(drawerId);
+    if (d && d.parent_id) resolvedUnitId = d.parent_id;
+  }
+  if (!resolvedUnitId) return;
+
+  closeSlideDrawer();
+  navToStorageUnit(resolvedUnitId, true, drawerId);
+
+  clearTimeout(state.spotlightTimer);
+  state.spotlightTimer = setTimeout(() => {
+    state.spotlightDrawerId = null;
+    document.querySelector('.drawer-card.spotlight-highlight')?.classList.remove('spotlight-highlight');
+    document.querySelector('.spotlight-badge')?.remove();
+  }, 8000);
+}
+
+export function handleGlobalBack() {
+  runGuarded(() => {
+    if (state.historyStack.length > 1) {
+      state.historyStack.pop();
+      const prev = state.historyStack[state.historyStack.length - 1];
+      if (prev.view === 'needs-home') {
+        navToNeedsHome(false);
+      } else if (prev.view === 'room' && prev.id) {
+        navToRoom(prev.id, false);
+      } else if (prev.view === 'unit' && prev.id) {
+        navToStorageUnit(prev.id, false);
+      } else if (prev.view === 'drawer' && prev.id) {
+        navToDrawer(prev.id, false);
+      } else if (prev.view === 'item' && prev.id) {
+        navToItem(prev.id, false);
+      } else {
+        switchAppTab(prev.tab || 'places', false);
+      }
+      return;
+    }
+
+    if (state.currentView === 'item' && state.currentLocationId) {
+      const item = state.items.find(i => i.id === state.currentLocationId);
+      if (item && item.location_id) {
+        navToDrawer(item.location_id, true);
+        return;
+      }
+      switchAppTab('items', true);
+      return;
+    } else if (state.currentView === 'drawer' && state.currentLocationId) {
+      const d = state.locationMap.get(state.currentLocationId);
+      if (d && d.parent_id) {
+        navToStorageUnit(d.parent_id, true);
+        return;
+      }
+    } else if (state.currentView === 'unit' && state.currentLocationId) {
+      const u = state.locationMap.get(state.currentLocationId);
+      const parent = u && u.parent_id ? state.locationMap.get(u.parent_id) : null;
+      if (parent && !isUnknownPlaceholder(parent)) {
+        navToRoom(parent.id, true);
+        return;
+      }
+      navToNeedsHome(true);
+      return;
+    }
+
+    navToHome();
+  });
+}
+
+export function renderCurrentWorkspace() {
+  const workspace = document.getElementById('app-workspace');
+  if (!workspace) return;
+
+  const isHomeCanvas = state.activeTab === 'places' && state.currentView === 'home';
+  workspace.classList.toggle('is-home-canvas', isHomeCanvas);
+  workspace.classList.toggle('is-unit-view', state.currentView === 'unit');
+
+  if (state.currentView === 'needs-home') {
+    renderNeedsHomeView();
+  } else if (state.currentView === 'room' && state.currentLocationId) {
+    renderRoomView(state.currentLocationId);
+  } else if (state.currentView === 'unit' && state.currentLocationId) {
+    renderStorageUnitView(state.currentLocationId);
+  } else if (state.currentView === 'drawer' && state.currentLocationId) {
+    renderDrawerView(state.currentLocationId);
+  } else if (state.currentView === 'item' && state.currentLocationId) {
+    renderItemView(state.currentLocationId);
+  } else if (state.activeTab === 'items') {
+    renderCatalogView();
+  } else {
+    renderHomePlacesView();
+  }
+}
+
