@@ -19,8 +19,9 @@ import {
   renderContainerGridHtml,
   renderInlineGridDesignerHtml
 } from './grid-designer.js';
-import { chooseAddAction, openAddItemModal, openQuickPhotoModal } from './modals.js';
-import { registerDesktopPhotoHandler, requestPhotoForInput } from './phone-capture.js';
+import { chooseAddAction, openAddItemModal, openQuickPhotoModal, openRapidEntryModal } from './modals.js';
+import { openLocationPhoneCaptureModal, registerDesktopPhotoHandler, requestPhotoForInput } from './phone-capture.js';
+import { compressImageFile } from './photo-compress.js';
 import { openPhotoEditorModal } from './photo-editor.js';
 import { handleGlobalBack, navToHome, navToItem, navToRoom, renderCurrentWorkspace } from './router.js';
 import {
@@ -1381,6 +1382,7 @@ export function renderStorageUnitView(unitId) {
               hidden
             >
               <button type="button" class="unit-more-item" role="menuitem" onclick="closeUnitMoreMenu(false); openEditStorageModal(${safeUnitId})">Rename or edit</button>
+              <button type="button" class="unit-more-item" role="menuitem" onclick="closeUnitMoreMenu(false); scanPhoneForLocation(${safeUnitId})">Add photos via Phone (QR)</button>
               <button type="button" class="unit-more-item" role="menuitem" onclick="closeUnitMoreMenu(false); openPrintQrModal(${safeUnitId})">Print QR label</button>
               <button type="button" class="unit-more-item" role="menuitem" onclick="openMoveContainerModal(${safeUnitId})">Move to another room</button>
               <button type="button" class="unit-more-item danger" role="menuitem" onclick="deleteContainerFromMenu(${safeUnitId})">Delete container</button>
@@ -1510,6 +1512,222 @@ function renderDrawerCard(drawer) {
   `;
 }
 
+let drawerCarouselIndexByLoc = new Map();
+let drawerPhotosExpandedByLoc = new Map();
+let drawerLabelEditId = null;
+
+export function toggleDrawerPhotosExpanded(drawerId) {
+  const next = !drawerPhotosExpandedByLoc.get(drawerId);
+  drawerPhotosExpandedByLoc.set(drawerId, next);
+  renderDrawerView(drawerId);
+}
+
+function getDrawerPhotosList(drawer) {
+  const list = [];
+  const seen = new Set();
+  if (Array.isArray(drawer?.photos)) {
+    for (const p of drawer.photos) {
+      const safe = sanitizePhotoUrl(p.photo_path || '');
+      if (safe && !seen.has(safe)) {
+        seen.add(safe);
+        list.push({
+          id: p.id,
+          url: safe,
+          thumb: sanitizePhotoUrl(p.thumbnail_path || '') || safe,
+          caption: p.caption || drawer.name,
+        });
+      }
+    }
+  }
+  for (const fallback of [drawer?.container_photo, drawer?.context_photo]) {
+    const safe = sanitizePhotoUrl(fallback || '');
+    if (safe && !seen.has(safe)) {
+      seen.add(safe);
+      list.push({ id: null, url: safe, thumb: safe, caption: drawer?.name || 'Photo' });
+    }
+  }
+  return list;
+}
+
+export function stepDrawerCarousel(drawerId, delta) {
+  const drawer = state.locationMap.get(drawerId);
+  const photos = getDrawerPhotosList(drawer);
+  if (photos.length <= 1) return;
+  const curr = drawerCarouselIndexByLoc.get(drawerId) || 0;
+  const next = (curr + delta + photos.length) % photos.length;
+  drawerCarouselIndexByLoc.set(drawerId, next);
+  renderDrawerView(drawerId);
+}
+
+export function selectDrawerCarouselIndex(drawerId, index) {
+  drawerCarouselIndexByLoc.set(drawerId, Math.max(0, Number(index) || 0));
+  renderDrawerView(drawerId);
+}
+
+export function toggleDrawerLabelEdit(drawerId, editing) {
+  drawerLabelEditId = editing ? drawerId : null;
+  renderDrawerView(drawerId);
+}
+
+export async function saveDrawerLabel(drawerId) {
+  const nameEl = document.getElementById(`drawer-label-input-${drawerId}`);
+  const descEl = document.getElementById(`drawer-desc-input-${drawerId}`);
+  const name = (nameEl?.value || '').trim();
+  const description = (descEl?.value || '').trim() || null;
+  if (!name) {
+    showToast('Label cannot be empty.', 'error');
+    return;
+  }
+  try {
+    await apiPatch(`/api/v1/locations/${drawerId}`, { name, description }, 'Could not update label.');
+    drawerLabelEditId = null;
+    showToast('Label updated!');
+    await loadAllData();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+export function scanPhoneForLocation(locationId) {
+  const loc = state.locationMap.get(locationId);
+  openLocationPhoneCaptureModal({
+    locationId,
+    locationName: loc ? loc.name : 'Drawer',
+    onDone: async ({ photos, shouldScan }) => {
+      await loadAllData();
+      if (shouldScan && photos && photos.length > 0) {
+        const updatedLoc = state.locationMap.get(locationId);
+        const latestSaved = updatedLoc?.photos?.[0];
+        openRapidEntryModal(locationId, {
+          photoId: latestSaved?.id || null,
+          photoUrl: latestSaved?.photo_path || photos[photos.length - 1].original_path,
+          autoScan: true,
+        });
+      }
+    },
+  });
+}
+
+export function triggerDrawerDirectPhotoUpload(drawerId) {
+  const input = document.getElementById(`drawer-direct-upload-${drawerId}`);
+  if (input) input.click();
+}
+
+export async function handleDrawerDirectPhotoUpload(drawerId, e) {
+  const files = Array.from(e.target?.files || []).filter(Boolean);
+  if (!files.length) return;
+  try {
+    for (const file of files) {
+      const compressed = await compressImageFile(file);
+      const fd = new FormData();
+      fd.append('file', compressed);
+      const res = await fetch(`/api/v1/locations/${drawerId}/photos`, { method: 'POST', body: fd });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || 'Photo upload failed.');
+      }
+    }
+    drawerCarouselIndexByLoc.set(drawerId, 0);
+    showToast(`Added ${pluralize(files.length, 'photo')}!`);
+    await loadAllData();
+  } catch (err) {
+    showToast(err.message || 'Could not upload photo.', 'error');
+  } finally {
+    if (e.target) e.target.value = '';
+  }
+}
+
+export async function deleteDrawerPhoto(drawerId, photoId) {
+  if (!photoId) return;
+  try {
+    await apiDelete(`/api/v1/locations/${drawerId}/photos/${photoId}`, 'Could not delete photo.');
+    drawerCarouselIndexByLoc.set(drawerId, 0);
+    showToast('Photo removed.');
+    await loadAllData();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+export async function quickAddDrawerItems(drawerId) {
+  const input = document.getElementById(`drawer-quick-add-${drawerId}`);
+  const raw = (input?.value || '').trim();
+  if (!raw) {
+    showToast('Type an item name (or comma/line separated items) first.', 'error');
+    return;
+  }
+  const lines = raw.includes('\n') ? raw : raw.split(',').map(s => s.trim()).filter(Boolean).join('\n');
+  try {
+    const created = await apiPost('/api/v1/items/bulk', { location_id: drawerId, raw_lines: lines }, 'Could not add items.');
+    if (input) input.value = '';
+    showToast(`Added ${pluralize(created.length, 'item')}!`);
+    await loadAllData();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+export async function adjustDrawerItemQty(itemId, delta) {
+  const item = state.items.find(i => i.id === itemId);
+  if (!item) return;
+  const currentQty = item.quantity === null || item.quantity === undefined ? 1 : Number(item.quantity);
+  const nextQty = currentQty + delta;
+  try {
+    if (nextQty <= 0) {
+      await apiDelete(`/api/v1/items/${itemId}`, 'Could not remove item.');
+      showToast(`Removed ${item.name} from bin.`);
+    } else {
+      await apiPatch(`/api/v1/items/${itemId}`, { quantity: nextQty }, 'Could not update quantity.');
+    }
+    await loadAllData();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+export async function removeDrawerItem(itemId) {
+  const item = state.items.find(i => i.id === itemId);
+  if (!item) return;
+  try {
+    await apiDelete(`/api/v1/items/${itemId}`, 'Could not remove item.');
+    showToast(`Removed ${item.name}.`);
+    await loadAllData();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+function renderDrawerItemCard(item) {
+  const safeId = Number(item.id);
+  const qty = item.quantity === null || item.quantity === undefined ? 1 : Number(item.quantity);
+  const thumb = sanitizePhotoUrl(item.item_photo || '');
+  const specsSnippet = item.description ? String(item.description).trim() : '';
+  return `
+    <div class="drawer-item-row">
+      <div class="drawer-item-row-main" onclick="navToItem(${safeId}, true)">
+        ${thumb
+      ? `<img class="drawer-item-thumb" src="${escapeHtml(thumb)}" alt="${escapeHtml(item.name)}">`
+      : `<div class="drawer-item-thumb drawer-item-thumb-empty">${lucideIcon('package', '', 20)}</div>`
+    }
+        <div class="drawer-item-info">
+          <h4 class="drawer-item-title">${escapeHtml(toSentenceCase(item.name))}</h4>
+          <p class="drawer-item-meta">
+            ${escapeHtml(item.category || 'Uncategorized')}
+            ${item.quantity !== null && item.quantity !== undefined ? ` · Qty ${qty}` : ''}
+          </p>
+          ${specsSnippet ? `<p class="drawer-item-specs">${escapeHtml(specsSnippet)}</p>` : ''}
+        </div>
+      </div>
+      <div class="drawer-item-actions">
+        <button type="button" class="btn btn-secondary btn-xs" title="Take 1 away" onclick="adjustDrawerItemQty(${safeId}, -1)">−</button>
+        <span class="drawer-item-qty">${qty}</span>
+        <button type="button" class="btn btn-secondary btn-xs" title="Add 1 more" onclick="adjustDrawerItemQty(${safeId}, 1)">+</button>
+        <button type="button" class="btn btn-secondary btn-xs danger-text" title="Remove from bin" onclick="removeDrawerItem(${safeId})">Remove</button>
+      </div>
+    </div>
+  `;
+}
+
 export function renderDrawerView(drawerId) {
   const drawer = state.locationMap.get(drawerId);
   const workspace = document.getElementById('app-workspace');
@@ -1536,44 +1754,116 @@ export function renderDrawerView(drawerId) {
   crumbs.push({ label: drawer.name });
 
   const items = state.items.filter(item => item.location_id === drawer.id);
-  const photo = sanitizePhotoUrl(drawer.container_photo || drawer.context_photo || '');
+  const photos = getDrawerPhotosList(drawer);
+  const rawIdx = drawerCarouselIndexByLoc.get(safeDrawerId) || 0;
+  const activeIdx = photos.length > 0 ? Math.min(rawIdx, photos.length - 1) : 0;
+  const activePhoto = photos[activeIdx] || null;
+  const isEditingLabel = drawerLabelEditId === safeDrawerId;
+
+  // Compact strip combining item photos (clicking opens item) + any extra bin photos
+  const itemGalleryEntries = items
+    .filter(it => sanitizePhotoUrl(it.item_photo || ''))
+    .map(it => ({
+      itemId: Number(it.id),
+      url: sanitizePhotoUrl(it.item_photo || ''),
+      label: it.name,
+    }));
+  const seenUrls = new Set(itemGalleryEntries.map(e => e.url));
+  const binOnlyEntries = photos
+    .filter(p => !seenUrls.has(p.url))
+    .map(p => ({ itemId: null, url: p.url, thumb: p.thumb, label: drawer.name, photoId: p.id }));
+  const carouselEntries = [...itemGalleryEntries, ...binOnlyEntries];
 
   workspace.innerHTML = `
     <div class="workspace-inner">
       ${renderStickyContextBar(
     crumbs,
     `
-          <button type="button" class="btn btn-primary btn-sm" onclick="openRapidEntryModal(${safeDrawerId})">${lucideIcon('camera', '', 15)} Scan with Camera</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="openAddItemModal(${safeDrawerId})">${lucideIcon('pencil', '', 15)} Add Item Manually</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="openQuickPhotoModal({ kind: 'bin', id: ${safeDrawerId}, title: 'Inside photo' })">Inside photo</button>
-          ${photo ? `<button type="button" class="btn btn-secondary btn-sm" onclick="editExistingPhoto({ kind: 'bin', id: ${safeDrawerId}, photoUrl: '${escapeJsStr(photo)}', title: 'Edit drawer photo' })">${lucideIcon('scissors', '', 15)} Crop</button>` : ''}
+          <button type="button" class="btn btn-primary btn-sm" onclick="scanPhoneForLocation(${safeDrawerId})">${lucideIcon('qrCode', '', 15)} Scan with Phone (QR)</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="openRapidEntryModal(${safeDrawerId})">${lucideIcon('camera', '', 15)} AI Scan / Batch</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="openAddItemModal(${safeDrawerId})">${lucideIcon('pencil', '', 15)} Add Item</button>
           <button type="button" class="btn btn-secondary btn-sm" onclick="openPrintQrModal(${safeDrawerId})">${lucideIcon('printer', '', 15)} QR label</button>
         `
   )}
 
       <div class="place-hero-card">
-        <div class="place-hero-left">
-          ${photo
-      ? `<img class="place-hero-thumb" src="${escapeHtml(photo)}" alt="${escapeHtml(drawer.name)}" onclick="openLightbox('${escapeJsStr(photo)}', '${escapeJsStr(drawer.name)}')">`
+        <div class="place-hero-left" style="width: 100%; align-items: flex-start;">
+          ${activePhoto
+      ? `<img class="place-hero-thumb" src="${escapeHtml(activePhoto.thumb)}" alt="${escapeHtml(drawer.name)}" onclick="openLightbox('${escapeJsStr(activePhoto.url)}', '${escapeJsStr(drawer.name)}')" style="cursor: pointer;">`
       : `<div class="place-hero-emoji">${lucideIcon('archive', '', 28)}</div>`
     }
-          <div>
-            <h1 class="place-hero-title">${escapeHtml(drawer.name)}</h1>
-            <p class="place-hero-sub">${escapeHtml(hier.humanPath)} · ${pluralize(items.length, 'item')}</p>
+          <div style="flex: 1; min-width: 0;">
+            ${isEditingLabel ? `
+              <div class="drawer-label-editor">
+                <input type="text" id="drawer-label-input-${safeDrawerId}" value="${escapeHtml(drawer.name)}" placeholder="Bin or drawer label" style="margin-bottom: 0.4rem;">
+                <input type="text" id="drawer-desc-input-${safeDrawerId}" value="${escapeHtml(drawer.description || '')}" placeholder="Optional notes">
+                <div style="display: flex; gap: 0.45rem; margin-top: 0.5rem;">
+                  <button type="button" class="btn btn-primary btn-sm" onclick="saveDrawerLabel(${safeDrawerId})">Save label</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="toggleDrawerLabelEdit(${safeDrawerId}, false)">Cancel</button>
+                </div>
+              </div>
+            ` : `
+              <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                <h1 class="place-hero-title">${escapeHtml(drawer.name)}</h1>
+                <button type="button" class="btn btn-secondary btn-xs" onclick="toggleDrawerLabelEdit(${safeDrawerId}, true)">${lucideIcon('pencil', '', 12)} Edit label</button>
+              </div>
+              ${drawer.description ? `<p class="place-hero-desc" style="margin: 0.25rem 0 0; color: var(--text-muted); font-size: 0.88rem;">${escapeHtml(drawer.description)}</p>` : ''}
+              <p class="place-hero-sub">${escapeHtml(hier.humanPath)} · ${pluralize(items.length, 'item')} · ${pluralize(photos.length, 'photo')}</p>
+            `}
           </div>
         </div>
       </div>
 
-      <div class="items-grid">
-        ${items.length > 0 ? items.map(item => renderItemCard(item)).join('') : `
-          <div class="empty-state" style="grid-column: 1 / -1;">
-            <h3 class="empty-state-title">This drawer is empty</h3>
-            <p class="empty-state-desc">Scan an open drawer with your camera or add an item manually.</p>
-            <div style="display: flex; gap: 0.6rem;">
-              <button type="button" class="btn btn-primary btn-sm" onclick="openRapidEntryModal(${safeDrawerId})">${lucideIcon('camera', '', 15)} Scan with Camera</button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="openAddItemModal(${safeDrawerId})">${lucideIcon('pencil', '', 15)} Add Item Manually</button>
-            </div>
+      <div class="drawer-quick-add-bar">
+        <input
+          type="text"
+          id="drawer-quick-add-${safeDrawerId}"
+          placeholder="Add items by text (e.g. 2x M3 screws, MT3608)..."
+          onkeydown="if (event.key === 'Enter') { event.preventDefault(); quickAddDrawerItems(${safeDrawerId}); }"
+        >
+        <button type="button" class="btn btn-primary btn-sm" onclick="quickAddDrawerItems(${safeDrawerId})">Add</button>
+      </div>
+
+      <div class="drawer-items-list">
+        ${items.length > 0 ? items.map(item => renderDrawerItemCard(item)).join('') : `
+          <div class="empty-state">
+            <h3 class="empty-state-title">This bin is empty</h3>
+            <p class="empty-state-desc">Type items above, or scan a photo with your phone or AI.</p>
           </div>
+        `}
+      </div>
+
+      <div class="drawer-carousel-card">
+        <div class="drawer-carousel-top">
+          <h3 class="drawer-section-heading">Photos (${carouselEntries.length})</h3>
+          <div style="display: flex; gap: 0.45rem; flex-wrap: wrap;">
+            <input type="file" id="drawer-direct-upload-${safeDrawerId}" accept="image/*" multiple style="display: none;" onchange="handleDrawerDirectPhotoUpload(${safeDrawerId}, event)">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="triggerDrawerDirectPhotoUpload(${safeDrawerId})">${lucideIcon('upload', '', 14)} Upload photo(s)</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="scanPhoneForLocation(${safeDrawerId})">${lucideIcon('qrCode', '', 14)} Phone QR</button>
+            ${activePhoto ? `
+              <button type="button" class="btn btn-primary btn-sm" onclick="openRapidEntryModal(${safeDrawerId}, { photoId: ${activePhoto.id ? Number(activePhoto.id) : 'null'}, photoUrl: '${escapeJsStr(activePhoto.url)}', autoScan: true })">
+                Scan with AI
+              </button>
+            ` : ''}
+          </div>
+        </div>
+
+        ${carouselEntries.length > 0 ? `
+          <div class="drawer-compact-carousel">
+            ${carouselEntries.map((entry, idx) => `
+              <div class="drawer-compact-slide">
+                <img
+                  src="${escapeHtml(entry.thumb || entry.url)}"
+                  alt="${escapeHtml(entry.label)}"
+                  title="${entry.itemId ? `Open ${escapeHtml(entry.label)}` : escapeHtml(entry.label)}"
+                  onclick="${entry.itemId ? `navToItem(${entry.itemId}, true)` : `openLightbox('${escapeJsStr(entry.url)}', '${escapeJsStr(entry.label)}')`}"
+                >
+                <span class="drawer-compact-slide-label">${escapeHtml(toSentenceCase(entry.label))}</span>
+              </div>
+            `).join('')}
+          </div>
+        ` : `
+          <p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">No photos for this bin yet. Upload photos or scan the QR code with your phone.</p>
         `}
       </div>
     </div>
@@ -1585,6 +1875,95 @@ function formatItemStatusLabel(status) {
   return String(status)
     .replace(/_/g, ' ')
     .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (!n) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function triggerItemAttachmentUpload(itemId) {
+  const input = document.getElementById(`item-attachment-input-${itemId}`);
+  if (input) input.click();
+}
+
+export async function handleItemAttachmentUpload(itemId, e) {
+  const files = Array.from(e.target?.files || []).filter(Boolean);
+  if (!files.length) return;
+  try {
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(`/api/v1/items/${itemId}/attachments`, { method: 'POST', body: fd });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || 'Attachment upload failed.');
+      }
+    }
+    showToast(`Added ${pluralize(files.length, 'file')}!`);
+    await loadAllData();
+    await loadItemAttachmentsIntoView(itemId);
+  } catch (err) {
+    showToast(err.message || 'Could not upload file.', 'error');
+  } finally {
+    if (e.target) e.target.value = '';
+  }
+}
+
+export async function deleteItemAttachment(itemId, attachmentId) {
+  try {
+    await apiDelete(`/api/v1/items/${itemId}/attachments/${attachmentId}`, 'Could not delete file.');
+    showToast('File removed.');
+    await loadAllData();
+    await loadItemAttachmentsIntoView(itemId);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+async function loadItemAttachmentsIntoView(itemId) {
+  const container = document.getElementById(`item-attachments-list-${itemId}`);
+  if (!container) return;
+  try {
+    const attachments = await apiGet(`/api/v1/items/${itemId}/attachments`);
+    if (!Array.isArray(attachments) || attachments.length === 0) {
+      container.innerHTML = `<p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">No datasheets, charts, or files attached yet.</p>`;
+      return;
+    }
+    container.innerHTML = attachments.map(att => {
+      const safeUrl = sanitizePhotoUrl(att.file_path || '');
+      const safeThumb = sanitizePhotoUrl(att.thumbnail_path || '');
+      const isImg = att.attachment_type === 'image' && safeUrl;
+      const badge = String(att.attachment_type || 'doc').toUpperCase();
+      const sizeStr = formatBytes(att.size_bytes);
+      return `
+        <div class="item-attachment-row">
+          <div class="item-attachment-left">
+            ${isImg
+          ? `<img class="item-attachment-thumb" src="${escapeHtml(safeThumb || safeUrl)}" alt="${escapeHtml(att.filename)}" onclick="openLightbox('${escapeJsStr(safeUrl)}', '${escapeJsStr(att.filename)}')">`
+          : `<span class="item-attachment-badge">${escapeHtml(badge)}</span>`
+        }
+            <div style="min-width: 0;">
+              <div class="item-attachment-name">${escapeHtml(att.title || att.filename)}</div>
+              <div class="item-attachment-meta">${escapeHtml(att.filename)}${sizeStr ? ` · ${escapeHtml(sizeStr)}` : ''}</div>
+            </div>
+          </div>
+          <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
+            ${isImg
+          ? `<button type="button" class="btn btn-secondary btn-xs" onclick="openLightbox('${escapeJsStr(safeUrl)}', '${escapeJsStr(att.filename)}')">View</button>`
+          : (safeUrl ? `<a class="btn btn-secondary btn-xs" href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener">Open</a>` : '')
+        }
+            <button type="button" class="btn btn-secondary btn-xs danger-text" onclick="deleteItemAttachment(${Number(itemId)}, ${Number(att.id)})">Delete</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch {
+    container.innerHTML = `<p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">Could not load attachments.</p>`;
+  }
 }
 
 export function renderItemView(itemId) {
@@ -1631,7 +2010,7 @@ export function renderItemView(itemId) {
 
   const itemPhoto = sanitizePhotoUrl(item.item_photo || '');
   const insidePhoto = sanitizePhotoUrl(
-    (loc && loc.container_photo) || (item.location_photos && item.location_photos.container_photo) || ''
+    (hier.unit && (hier.unit.container_photo || hier.unit.context_photo)) || ''
   );
   const spotPhoto = sanitizePhotoUrl(
     (loc && loc.context_photo) || (item.location_photos && item.location_photos.context_photo) || ''
@@ -1738,7 +2117,7 @@ export function renderItemView(itemId) {
         </div>
       </section>
 
-      <div class="item-detail-grid">
+      <div class="item-detail-grid" id="item-detail-grid-${safeItemId}">
         <div class="item-detail-col">
           <section class="item-detail-card">
             <span class="detail-section-title">Item Details</span>
@@ -1818,12 +2197,11 @@ export function renderItemView(itemId) {
               <div class="detail-photo-card">
                 <div
                   class="detail-photo-thumb item-view-photo-thumb"
-                  onclick="${insidePhoto ? `openLightbox('${escapeJsStr(insidePhoto)}', 'Inside photo')` : (loc ? `openQuickPhotoModal({ kind: 'bin', id: ${safeLocId}, title: 'Inside photo' })` : '')}"
+                  ${insidePhoto ? `onclick="openLightbox('${escapeJsStr(insidePhoto)}', '${escapeJsStr(hier.unit ? hier.unit.name : 'Container')}')"` : 'style="cursor: default;"'}
                 >
-                  ${insidePhoto ? `<img src="${escapeHtml(insidePhoto)}" alt="Inside">` : `<span style="font-size: 0.78rem; color: var(--accent-text); font-weight: 700;">${loc ? '+ Inside photo' : 'No container'}</span>`}
+                  ${insidePhoto ? `<img src="${escapeHtml(insidePhoto)}" alt="${escapeHtml(hier.unit ? hier.unit.name : 'Container')}">` : `<span style="font-size: 0.78rem; color: var(--text-muted);">No container photo</span>`}
                 </div>
-                <span class="detail-photo-caption">Inside photo</span>
-                ${insidePhoto && loc ? `<button type="button" class="detail-photo-edit-btn" onclick="editExistingPhoto({ kind: 'bin', id: ${safeLocId}, photoUrl: '${escapeJsStr(insidePhoto)}', title: 'Edit inside photo' })">${lucideIcon('scissors', '', 12)} Crop</button>` : ''}
+                <span class="detail-photo-caption">${escapeHtml(hier.unit ? hier.unit.name : 'Container')}</span>
               </div>
 
               <div class="detail-photo-card">
@@ -1845,6 +2223,19 @@ export function renderItemView(itemId) {
           </section>
 
           <section class="item-detail-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem;">
+              <span class="detail-section-title" style="margin-bottom: 0;">Datasheets, Charts &amp; Files</span>
+              <div>
+                <input type="file" id="item-attachment-input-${safeItemId}" multiple accept="image/*,.pdf,.svg,.csv,.txt,.md,.json,.xlsx,.xls,.doc,.docx,.zip" style="display: none;" onchange="handleItemAttachmentUpload(${safeItemId}, event)">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="triggerItemAttachmentUpload(${safeItemId})">+ Add PDF / chart / file</button>
+              </div>
+            </div>
+            <div id="item-attachments-list-${safeItemId}" class="item-attachments-list">
+              <p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">Loading files...</p>
+            </div>
+          </section>
+
+          <section class="item-detail-card">
             <span class="detail-section-title">Activity History</span>
             <div id="item-audit-history-${safeItemId}" class="item-audit-list">
               <p class="right-col-empty">Loading history…</p>
@@ -1856,6 +2247,7 @@ export function renderItemView(itemId) {
   `;
 
   loadItemAuditHistory(safeItemId);
+  loadItemAttachmentsIntoView(safeItemId);
 }
 
 async function loadItemAuditHistory(itemId) {
@@ -2121,7 +2513,7 @@ export function openItemDrawer(itemId) {
 
   const itemPhoto = sanitizePhotoUrl(item.item_photo || '');
   const insidePhoto = sanitizePhotoUrl(
-    (loc && loc.container_photo) || (item.location_photos && item.location_photos.container_photo) || ''
+    (hier.unit && (hier.unit.container_photo || hier.unit.context_photo)) || ''
   );
   const spotPhoto = sanitizePhotoUrl(
     (loc && loc.context_photo) || (item.location_photos && item.location_photos.context_photo) || ''

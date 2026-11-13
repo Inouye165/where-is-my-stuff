@@ -1,24 +1,36 @@
-import base64
 from io import BytesIO
-import json
-import os
 from typing import Dict, List, Optional, Set, Tuple
 from fastapi import UploadFile
 import qrcode
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.core.logging_config import logger
 from app.core.network import resolve_effective_base_url
-from app.models.location import Location
+from app.models.location import Location, LocationPhoto
 from app.repositories.location_repository import location_repository
-from app.schemas.item import DetectedItem, LocationPhotos, VisionAnalysisResponse
-from app.schemas.location import Breadcrumb, LocationCreate, LocationGridSave, LocationRead, LocationTree, LocationUpdate
+from app.schemas.item import LocationPhotos, VisionAnalysisResponse
+from app.schemas.location import (
+    Breadcrumb,
+    LocationCreate,
+    LocationGridSave,
+    LocationPhotoRead,
+    LocationRead,
+    LocationTree,
+    LocationUpdate,
+)
 from app.services.photo_service import photo_service
+from app.services.vision_service import vision_service
 
 
 class LocationHierarchySnapshot:
-    def __init__(self, locations: List[Location], direct_counts: Dict[int, int]) -> None:
+    def __init__(
+        self,
+        locations: List[Location],
+        direct_counts: Dict[int, int],
+        photos_by_location: Optional[Dict[int, List[LocationPhoto]]] = None,
+    ) -> None:
         self.loc_by_id: Dict[int, Location] = {loc.id: loc for loc in locations}
         self.children_by_parent: Dict[Optional[int], List[Location]] = {}
         for loc in locations:
@@ -26,6 +38,7 @@ class LocationHierarchySnapshot:
             self.children_by_parent.setdefault(parent_key, []).append(loc)
 
         self.direct_counts = direct_counts
+        self.photos_by_location: Dict[int, List[LocationPhoto]] = photos_by_location or {}
         self._crumbs_cache: Dict[int, List[Breadcrumb]] = {}
         self._total_counts_cache: Dict[int, int] = {}
         self._photos_cache: Dict[int, LocationPhotos] = {}
@@ -86,6 +99,7 @@ class LocationHierarchySnapshot:
 
     def to_read(self, loc: Location) -> LocationRead:
         children = self.children_by_parent.get(loc.id, [])
+        loc_photos = [LocationPhotoRead.model_validate(p) for p in self.photos_by_location.get(loc.id, [])]
         return LocationRead(
             id=loc.id,
             name=loc.name,
@@ -94,6 +108,7 @@ class LocationHierarchySnapshot:
             parent_id=loc.parent_id,
             container_photo=loc.container_photo,
             context_photo=loc.context_photo,
+            photos=loc_photos,
             grid_rows=loc.grid_rows,
             grid_cols=loc.grid_cols,
             grid_config=loc.grid_config,
@@ -116,7 +131,17 @@ class LocationService:
     def build_snapshot(db: Session, include_counts: bool = True) -> LocationHierarchySnapshot:
         locations = location_repository.list_all_ordered(db)
         counts = location_repository.get_direct_item_counts(db) if include_counts else {}
-        return LocationHierarchySnapshot(locations, counts)
+        photo_rows = (
+            db.execute(
+                select(LocationPhoto).order_by(LocationPhoto.created_at.desc(), LocationPhoto.id.desc())
+            )
+            .scalars()
+            .all()
+        )
+        photos_by_location: Dict[int, List[LocationPhoto]] = {}
+        for p in photo_rows:
+            photos_by_location.setdefault(p.location_id, []).append(p)
+        return LocationHierarchySnapshot(locations, counts, photos_by_location)
 
     @staticmethod
     def get_by_id(db: Session, location_id: int) -> Optional[Location]:
@@ -504,78 +529,130 @@ class LocationService:
         return buf.getvalue()
 
     @classmethod
+    def list_photos(cls, db: Session, location_id: int) -> List[LocationPhoto]:
+        cls.get_or_404(db, location_id)
+        return list(
+            db.execute(
+                select(LocationPhoto)
+                .where(LocationPhoto.location_id == location_id)
+                .order_by(LocationPhoto.created_at.desc(), LocationPhoto.id.desc())
+            )
+            .scalars()
+            .all()
+        )
+
+    @classmethod
+    def attach_photo(
+        cls,
+        db: Session,
+        location_id: int,
+        photo_path: str,
+        thumbnail_path: Optional[str] = None,
+        caption: Optional[str] = None,
+        photo_type: str = "container",
+    ) -> LocationPhoto:
+        loc = cls.get_or_404(db, location_id)
+        photo = LocationPhoto(
+            location_id=loc.id,
+            photo_path=photo_path,
+            thumbnail_path=thumbnail_path,
+            caption=caption,
+            photo_type=photo_type or "container",
+        )
+        db.add(photo)
+        if photo.photo_type == "context":
+            if not loc.context_photo:
+                loc.context_photo = photo_path
+        else:
+            if not loc.container_photo:
+                loc.container_photo = photo_path
+        db.commit()
+        db.refresh(photo)
+        return photo
+
+    @classmethod
+    def add_photo(
+        cls,
+        db: Session,
+        location_id: int,
+        file: UploadFile,
+        caption: Optional[str] = None,
+        photo_type: str = "container",
+    ) -> LocationPhoto:
+        photo_info = photo_service.process_and_save(file)
+        return cls.attach_photo(
+            db=db,
+            location_id=location_id,
+            photo_path=photo_info["original_path"],
+            thumbnail_path=photo_info.get("thumbnail_path"),
+            caption=caption,
+            photo_type=photo_type,
+        )
+
+    @classmethod
+    def delete_photo(cls, db: Session, location_id: int, photo_id: int) -> None:
+        loc = cls.get_or_404(db, location_id)
+        photo = db.execute(
+            select(LocationPhoto).where(
+                LocationPhoto.id == photo_id,
+                LocationPhoto.location_id == location_id,
+            )
+        ).scalar_one_or_none()
+        if not photo:
+            raise NotFoundError("Photo not found.")
+
+        old_path = photo.photo_path
+        db.delete(photo)
+        db.flush()
+
+        remaining = list(
+            db.execute(
+                select(LocationPhoto)
+                .where(LocationPhoto.location_id == location_id)
+                .order_by(LocationPhoto.created_at.desc(), LocationPhoto.id.desc())
+            )
+            .scalars()
+            .all()
+        )
+        if loc.container_photo == old_path:
+            next_container = next((p.photo_path for p in remaining if p.photo_type != "context"), None)
+            loc.container_photo = next_container or (remaining[0].photo_path if remaining else None)
+        if loc.context_photo == old_path:
+            loc.context_photo = next((p.photo_path for p in remaining if p.photo_type == "context"), None)
+
+        db.commit()
+        photo_service.cleanup_unreferenced_photo(db, old_path)
+
+    @classmethod
     async def analyze_drawer_photo(
         cls,
         db: Session,
         location_id: int,
         file: Optional[UploadFile] = None,
+        photo_id: Optional[int] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> VisionAnalysisResponse:
         loc = cls.get_or_404(db, location_id)
 
         saved_photo_file = None
         if file and file.filename:
-            old_container_photo = loc.container_photo
-            photo_info = photo_service.process_and_save(file)
-            loc.container_photo = photo_info["original_path"]
-            db.flush()
-            if old_container_photo and old_container_photo != loc.container_photo:
-                photo_service.cleanup_unreferenced_photo(db, old_container_photo)
-            saved_photo_file = photo_service.resolve_safe_upload_path(photo_info["original_path"])
+            photo_record = cls.add_photo(db=db, location_id=location_id, file=file, photo_type="container")
+            saved_photo_file = photo_service.resolve_safe_upload_path(photo_record.photo_path)
+        elif photo_id is not None:
+            photo_record = db.execute(
+                select(LocationPhoto).where(
+                    LocationPhoto.id == photo_id,
+                    LocationPhoto.location_id == location_id,
+                )
+            ).scalar_one_or_none()
+            if not photo_record:
+                raise NotFoundError("Photo not found.")
+            saved_photo_file = photo_service.resolve_safe_upload_path(photo_record.photo_path)
+        elif loc.container_photo:
+            saved_photo_file = photo_service.resolve_safe_upload_path(loc.container_photo)
 
-        gemini_key = os.environ.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY
-        if not gemini_key or not saved_photo_file or not saved_photo_file.exists():
-            return VisionAnalysisResponse(
-                items=[],
-                has_vision_api=bool(gemini_key),
-                message="Photo uploaded. Enter items line-by-line below to batch-add them to this drawer.",
-            )
-
-        try:
-            import httpx
-
-            b64_data = base64.b64encode(saved_photo_file.read_bytes()).decode("utf-8")
-            prompt = (
-                "Analyze this photo of an open storage drawer/bin. "
-                "List all visible tools, parts, hardware components, or items. "
-                "Return valid JSON matching: "
-                '{"items": [{"name": "...", "category": "...", "estimated_qty": 1, "brief_specs": "..."}]}'
-            )
-            url = (
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.5-flash:generateContent?key={gemini_key}"
-            )
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": prompt},
-                            {"inline_data": {"mime_type": "image/jpeg", "data": b64_data}},
-                        ]
-                    }
-                ],
-                "generationConfig": {"response_mime_type": "application/json"},
-            }
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.post(url, json=payload)
-                if resp.status_code == 200:
-                    resp_data = resp.json()
-                    text_content = resp_data["candidates"][0]["content"]["parts"][0]["text"]
-                    parsed = json.loads(text_content)
-                    detected = [DetectedItem(**it) for it in parsed.get("items", [])]
-                    return VisionAnalysisResponse(
-                        status="success",
-                        items=detected,
-                        has_vision_api=True,
-                        message=f"Vision AI detected {len(detected)} items in drawer.",
-                    )
-        except Exception as exc:
-            logger.warning("Optional Gemini vision analysis failed for location %d: %s", location_id, exc)
-
-        return VisionAnalysisResponse(
-            items=[],
-            has_vision_api=True,
-            message="Vision query finished. You can enter or confirm items below.",
-        )
+        return await vision_service.analyze_image(saved_photo_file, provider=provider, model=model)
 
 
 location_service = LocationService()

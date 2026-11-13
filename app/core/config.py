@@ -24,6 +24,7 @@ class Settings(BaseModel):
     UPLOAD_DIR: Path = BASE_DIR_DEFAULT / "data" / "uploads"
     ORIGINALS_DIR: Path = BASE_DIR_DEFAULT / "data" / "uploads" / "originals"
     THUMBNAILS_DIR: Path = BASE_DIR_DEFAULT / "data" / "uploads" / "thumbnails"
+    ATTACHMENTS_DIR: Path = BASE_DIR_DEFAULT / "data" / "uploads" / "attachments"
     BACKUP_DIR: Path = BASE_DIR_DEFAULT / "data" / "backups"
     LOG_DIR: Path = BASE_DIR_DEFAULT / "logs"
 
@@ -46,7 +47,13 @@ class Settings(BaseModel):
         default_factory=lambda: _parse_origins(os.getenv("CORS_ALLOWED_ORIGINS", ""))
     )
     PUBLIC_BASE_URL: Optional[str] = Field(default_factory=lambda: os.getenv("PUBLIC_BASE_URL") or None)
+    VISION_PROVIDER: str = Field(default_factory=lambda: os.getenv("VISION_PROVIDER", "local"))
+    OLLAMA_BASE_URL: str = Field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+    OLLAMA_VISION_MODEL: str = Field(default_factory=lambda: os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"))
     GEMINI_API_KEY: Optional[str] = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY") or None)
+    GEMINI_VISION_MODEL: str = Field(default_factory=lambda: os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash"))
+    OPENAI_API_KEY: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY") or None)
+    OPENAI_VISION_MODEL: str = Field(default_factory=lambda: os.getenv("OPENAI_VISION_MODEL", "gpt-4o-mini"))
 
     @property
     def sqlite_db_path(self) -> Optional[Path]:
@@ -63,6 +70,7 @@ class Settings(BaseModel):
             self.UPLOAD_DIR,
             self.ORIGINALS_DIR,
             self.THUMBNAILS_DIR,
+            self.ATTACHMENTS_DIR,
             self.BACKUP_DIR,
             self.LOG_DIR,
         ):

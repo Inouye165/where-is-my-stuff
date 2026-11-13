@@ -63,6 +63,30 @@ class LocationUpdate(BaseModel):
         return validate_safe_photo_ref(v)
 
 
+class LocationPhotoRead(BaseModel):
+    id: int
+    location_id: int
+    photo_path: str
+    thumbnail_path: Optional[str] = None
+    caption: Optional[str] = None
+    photo_type: str = "container"
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class LocationPhotoAttach(BaseModel):
+    photo_path: str = Field(..., min_length=1, max_length=300)
+    thumbnail_path: Optional[str] = Field(default=None, max_length=300)
+    caption: Optional[str] = Field(default=None, max_length=200)
+    photo_type: str = Field(default="container", max_length=32)
+
+    @field_validator("photo_path", "thumbnail_path")
+    @classmethod
+    def check_photo_paths(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_photo_ref(v)
+
+
 class LocationRead(BaseModel):
     id: int
     name: str
@@ -71,6 +95,7 @@ class LocationRead(BaseModel):
     parent_id: Optional[int] = None
     container_photo: Optional[str] = None
     context_photo: Optional[str] = None
+    photos: List[LocationPhotoRead] = Field(default_factory=list)
     grid_rows: Optional[int] = None
     grid_cols: Optional[int] = None
     grid_config: Optional[str] = None

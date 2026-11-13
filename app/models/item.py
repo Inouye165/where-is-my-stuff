@@ -47,3 +47,28 @@ class Item(Base):
         cascade="all, delete-orphan",
         order_by="desc(AuditLog.recorded_at)",
     )
+    attachments: Mapped[List["ItemAttachment"]] = relationship(
+        "ItemAttachment",
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="desc(ItemAttachment.created_at), desc(ItemAttachment.id)",
+    )
+
+
+class ItemAttachment(Base):
+    __tablename__ = "item_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    file_path: Mapped[str] = mapped_column(String(300), nullable=False)
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    attachment_type: Mapped[str] = mapped_column(String(32), nullable=False, default="document")
+    title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
+
+    item: Mapped["Item"] = relationship("Item", back_populates="attachments")

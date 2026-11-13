@@ -4,8 +4,8 @@
 import { apiDelete, apiGet, apiPatch, apiPost } from './api.js';
 import { closeModal, escapeHtml, pluralize, sanitizePhotoUrl, showToast, withSubmitLock } from './dom.js';
 import { openInlineGridDesigner } from './grid-designer.js';
-import { requestPhotoForInput, registerDesktopPhotoHandler } from './phone-capture.js';
-import { uploadPhotoAndGetPath } from './photo-compress.js';
+import { openLocationPhoneCaptureModal, requestPhotoForInput, registerDesktopPhotoHandler } from './phone-capture.js';
+import { compressImageFile, uploadPhotoAndGetPath } from './photo-compress.js';
 import { navToHome, navToStorageUnit } from './router.js';
 import {
   formatHumanPath,
@@ -422,14 +422,178 @@ export async function handleStorageDelete() {
 // ============================================================================
 // 4. SNAP & BATCH ENTRY MODAL
 // ============================================================================
-let rapidSelectedFile = null;
+let rapidSelectedFiles = [];
 let rapidRemotePhotoPath = null;
+let rapidPhotoId = null;
+let rapidScannedPhotoUrl = null;
 let rapidPreviewUrl = null;
+let rapidVisionMeta = null;
+let rapidDetectedItems = [];
 
-export function openRapidEntryModal(defaultLocationId = null) {
+function updateVisionStatusUI() {
+  const select = document.getElementById('rapid-vision-provider');
+  const statusEl = document.getElementById('rapid-vision-status');
+  const modelInput = document.getElementById('rapid-vision-model');
+  if (!select || !statusEl) return;
+
+  const provider = select.value || 'local';
+  const info = rapidVisionMeta?.providers?.[provider];
+  if (!info) {
+    statusEl.textContent = 'Ready';
+    statusEl.className = 'ai-provider-pill';
+    return;
+  }
+  if (modelInput && !modelInput.value) {
+    modelInput.placeholder = info.model ? `Default: ${info.model}` : 'Model name (optional)';
+  }
+  if (info.available) {
+    statusEl.textContent = provider === 'local' ? `Ollama ready (${info.model})` : `API key ready (${info.model})`;
+    statusEl.className = 'ai-provider-pill ready';
+  } else {
+    statusEl.textContent = provider === 'local'
+      ? 'Ollama not detected locally'
+      : 'API key not set in .env';
+    statusEl.className = 'ai-provider-pill warn';
+  }
+}
+
+export function onVisionProviderChange() {
+  const modelInput = document.getElementById('rapid-vision-model');
+  if (modelInput) modelInput.value = '';
+  updateVisionStatusUI();
+}
+
+async function loadVisionProviderStatus() {
+  const statusEl = document.getElementById('rapid-vision-status');
+  if (statusEl) {
+    statusEl.textContent = 'Checking models...';
+    statusEl.className = 'ai-provider-pill';
+  }
+  try {
+    rapidVisionMeta = await apiGet('/api/v1/photos/vision-providers');
+    const select = document.getElementById('rapid-vision-provider');
+    if (select && rapidVisionMeta?.default_provider) {
+      select.value = rapidVisionMeta.default_provider;
+    }
+  } catch {
+    rapidVisionMeta = null;
+  }
+  updateVisionStatusUI();
+}
+
+function renderRapidAiResults(items, message) {
+  const box = document.getElementById('rapid-ai-results');
+  if (!box) return;
+  rapidDetectedItems = items || [];
+
+  if (!rapidDetectedItems.length) {
+    box.style.display = 'block';
+    box.innerHTML = `<p class="ai-results-msg">${escapeHtml(message || 'No items detected. Enter items manually below.')}</p>`;
+    return;
+  }
+
+  box.style.display = 'block';
+  box.innerHTML = `
+    <div class="ai-results-header">
+      <span>${escapeHtml(message || `Detected ${rapidDetectedItems.length} items`)}</span>
+      <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="applyDetectedItemsToText()">Copy to text</button>
+        <button type="button" class="btn btn-primary btn-sm" id="rapid-ai-save-direct-btn" onclick="saveDetectedItemsDirect()">Save selected to bin</button>
+      </div>
+    </div>
+    <div class="ai-results-list">
+      ${rapidDetectedItems.map((it, idx) => `
+        <label class="ai-detected-row" style="align-items: flex-start;">
+          <input type="checkbox" class="ai-detected-chk" data-idx="${idx}" checked style="margin-top: 0.2rem;">
+          <div style="flex: 1; min-width: 0;">
+            <div style="display: flex; justify-content: space-between; gap: 0.5rem;">
+              <span class="ai-detected-name">${escapeHtml(it.name)}</span>
+              <span class="ai-detected-meta">×${Number(it.estimated_qty || 1)}${it.category ? ` · ${escapeHtml(it.category)}` : ''}</span>
+            </div>
+            ${it.brief_specs ? `<div class="ai-detected-specs">${escapeHtml(it.brief_specs)}</div>` : ''}
+          </div>
+        </label>
+      `).join('')}
+    </div>
+  `;
+}
+
+export async function saveDetectedItemsDirect() {
+  const locId = parseInt(document.getElementById('rapid-location-select')?.value, 10);
+  if (!locId) {
+    showToast('Please choose a bin or drawer first.', 'error');
+    return;
+  }
+  const checks = Array.from(document.querySelectorAll('.ai-detected-chk:checked'));
+  const selected = checks.map(chk => rapidDetectedItems[Number(chk.dataset.idx)]).filter(Boolean);
+  if (!selected.length) {
+    showToast('Select at least one detected item.', 'error');
+    return;
+  }
+
+  const fallbackCat = document.getElementById('rapid-category-input')?.value.trim() || null;
+  const loc = state.locationMap.get(locId);
+  const photoUrl = rapidScannedPhotoUrl || (loc?.photos?.[0]?.photo_path) || loc?.container_photo || null;
+
+  return withSubmitLock('rapid-ai-save-direct-btn', 'Saving...', async () => {
+    try {
+      for (const it of selected) {
+        await apiPost(
+          '/api/v1/items',
+          {
+            name: it.name,
+            category: it.category || fallbackCat,
+            quantity: Math.max(1, Number(it.estimated_qty || 1)),
+            description: it.brief_specs || null,
+            item_photo: photoUrl,
+            location_id: locId,
+          },
+          'Could not save detected item.'
+        );
+      }
+      showToast(`Saved ${pluralize(selected.length, 'item')} with specs & photo!`);
+      closeModal('drawer-rapid-entry-modal', true);
+      await loadAllData();
+    } catch (err) {
+      showToast(err.message || 'Could not save items.', 'error');
+    }
+  });
+}
+
+export function applyDetectedItemsToText() {
+  const checks = Array.from(document.querySelectorAll('.ai-detected-chk:checked'));
+  const lines = [];
+  for (const chk of checks) {
+    const idx = Number(chk.dataset.idx);
+    const it = rapidDetectedItems[idx];
+    if (!it) continue;
+    const qty = Math.max(1, Number(it.estimated_qty || 1));
+    lines.push(qty > 1 ? `${qty}x ${it.name}` : it.name);
+  }
+  if (!lines.length) {
+    showToast('Select at least one detected item.', 'error');
+    return;
+  }
+  const textarea = document.getElementById('rapid-items-text');
+  if (textarea) {
+    const existing = textarea.value.trim();
+    textarea.value = existing ? `${existing}\n${lines.join('\n')}` : lines.join('\n');
+  }
+  const catInput = document.getElementById('rapid-category-input');
+  if (catInput && !catInput.value.trim()) {
+    const firstCat = rapidDetectedItems.find(it => it.category)?.category;
+    if (firstCat) catInput.value = firstCat;
+  }
+  showToast(`Added ${pluralize(lines.length, 'item')} to list — click Save items to store.`);
+}
+
+export async function openRapidEntryModal(defaultLocationId = null, options = {}) {
   populateLocationDropdowns();
-  rapidSelectedFile = null;
+  rapidSelectedFiles = [];
   rapidRemotePhotoPath = null;
+  rapidPhotoId = options.photoId || null;
+  rapidScannedPhotoUrl = options.photoUrl ? sanitizePhotoUrl(options.photoUrl) : null;
+  rapidDetectedItems = [];
   if (rapidPreviewUrl) {
     URL.revokeObjectURL(rapidPreviewUrl);
     rapidPreviewUrl = null;
@@ -442,28 +606,140 @@ export function openRapidEntryModal(defaultLocationId = null) {
 
   const fileInput = document.getElementById('rapid-photo-input');
   if (fileInput) fileInput.value = '';
-  document.getElementById('rapid-photo-filename').textContent = 'No photo selected';
-  document.getElementById('rapid-photo-preview-wrap').style.display = 'none';
+
+  const resultsBox = document.getElementById('rapid-ai-results');
+  if (resultsBox) {
+    resultsBox.style.display = 'none';
+    resultsBox.innerHTML = '';
+  }
+
+  const safeExistingUrl = options.photoUrl ? sanitizePhotoUrl(options.photoUrl) : '';
+  if (safeExistingUrl) {
+    document.getElementById('rapid-photo-filename').textContent = 'Using selected drawer photo';
+    document.getElementById('rapid-photo-preview').src = safeExistingUrl;
+    document.getElementById('rapid-photo-preview-wrap').style.display = 'block';
+  } else {
+    document.getElementById('rapid-photo-filename').textContent = 'No photo selected';
+    document.getElementById('rapid-photo-preview-wrap').style.display = 'none';
+  }
+
   document.getElementById('rapid-items-text').value = '';
   document.getElementById('rapid-category-input').value = '';
-
   document.getElementById('drawer-rapid-entry-modal')?.classList.add('open');
+
+  await loadVisionProviderStatus();
+  if (options.autoScan && (rapidPhotoId || safeExistingUrl)) {
+    await runRapidAiScan();
+  }
 }
 
 export function triggerRapidPhotoInput() {
-  requestPhotoForInput('rapid-photo-input');
+  const input = document.getElementById('rapid-photo-input');
+  if (input) input.click();
+}
+
+export function startRapidPhoneCapture() {
+  const locId = parseInt(document.getElementById('rapid-location-select')?.value, 10);
+  if (!locId) {
+    showToast('Please choose a bin or drawer first.', 'error');
+    return;
+  }
+  const loc = state.locationMap.get(locId);
+  openLocationPhoneCaptureModal({
+    locationId: locId,
+    locationName: loc ? loc.name : 'Drawer',
+    onDone: async ({ photos, shouldScan }) => {
+      await loadAllData();
+      if (photos && photos.length > 0) {
+        const latest = photos[photos.length - 1];
+        const safeUrl = sanitizePhotoUrl(latest.original_path || '');
+        if (safeUrl) {
+          rapidRemotePhotoPath = safeUrl;
+          rapidSelectedFiles = [];
+          rapidPhotoId = null;
+          document.getElementById('rapid-photo-filename').textContent = `${photos.length} photo(s) from phone`;
+          document.getElementById('rapid-photo-preview').src = safeUrl;
+          document.getElementById('rapid-photo-preview-wrap').style.display = 'block';
+        }
+        if (shouldScan) {
+          const updatedLoc = state.locationMap.get(locId);
+          const latestSaved = updatedLoc?.photos?.[0];
+          if (latestSaved) rapidPhotoId = latestSaved.id;
+          await runRapidAiScan();
+        }
+      }
+    },
+  });
 }
 
 export function handleRapidPhotoSelected(e) {
-  const file = e.target.files && e.target.files[0];
-  if (!file) return;
-  rapidSelectedFile = file;
+  const files = Array.from(e.target.files || []).filter(Boolean);
+  if (!files.length) return;
+  rapidSelectedFiles = files;
   rapidRemotePhotoPath = null;
+  rapidPhotoId = null;
   if (rapidPreviewUrl) URL.revokeObjectURL(rapidPreviewUrl);
-  rapidPreviewUrl = URL.createObjectURL(file);
-  document.getElementById('rapid-photo-filename').textContent = file.name;
+  rapidPreviewUrl = URL.createObjectURL(files[0]);
+  document.getElementById('rapid-photo-filename').textContent = files.length === 1
+    ? files[0].name
+    : `${files.length} photos selected`;
   document.getElementById('rapid-photo-preview').src = rapidPreviewUrl;
   document.getElementById('rapid-photo-preview-wrap').style.display = 'block';
+}
+
+export async function runRapidAiScan() {
+  const locId = parseInt(document.getElementById('rapid-location-select')?.value, 10);
+  if (!locId) {
+    showToast('Please choose a bin or drawer first.', 'error');
+    return;
+  }
+
+  const provider = document.getElementById('rapid-vision-provider')?.value || 'local';
+  const model = document.getElementById('rapid-vision-model')?.value.trim() || '';
+
+  return withSubmitLock('rapid-ai-scan-btn', 'Scanning...', async () => {
+    try {
+      const fd = new FormData();
+      fd.append('provider', provider);
+      if (model) fd.append('model', model);
+
+      if (rapidSelectedFiles.length > 0) {
+        const compressed = await compressImageFile(rapidSelectedFiles[0]);
+        fd.append('file', compressed);
+      } else if (rapidPhotoId) {
+        fd.append('photo_id', String(rapidPhotoId));
+      }
+
+      const res = await fetch(`/api/v1/locations/${locId}/analyze-photo`, {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'AI scan failed.');
+      }
+      if (rapidSelectedFiles.length > 0) {
+        rapidSelectedFiles.shift();
+        await loadAllData();
+        const updatedLoc = state.locationMap.get(locId);
+        if (updatedLoc?.photos?.[0]) {
+          rapidPhotoId = updatedLoc.photos[0].id;
+          rapidScannedPhotoUrl = updatedLoc.photos[0].photo_path;
+        }
+      }
+      renderRapidAiResults(data.items || [], data.message);
+      document.getElementById('rapid-ai-results')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (data.status !== 'success') {
+        showToast(data.message || 'AI scan did not return items.', 'error');
+      } else if (!data.items || data.items.length === 0) {
+        showToast('AI scan finished, but no items were detected in this photo.', 'info');
+      } else {
+        showToast(`AI detected ${pluralize(data.items.length, 'item')} — review and click "Add selected to list".`);
+      }
+    } catch (err) {
+      showToast(err.message || 'AI scan failed.', 'error');
+    }
+  });
 }
 
 export async function submitRapidEntry() {
@@ -476,16 +752,24 @@ export async function submitRapidEntry() {
   const text = document.getElementById('rapid-items-text').value.trim();
   const category = document.getElementById('rapid-category-input').value.trim() || null;
 
-  if (!text && !rapidSelectedFile && !rapidRemotePhotoPath) {
+  if (!text && !rapidSelectedFiles.length && !rapidRemotePhotoPath && !rapidPhotoId) {
     showToast('Take a photo or list at least one item.', 'error');
     return;
   }
 
   return withSubmitLock('rapid-submit-btn', 'Saving...', async () => {
     try {
-      if (rapidRemotePhotoPath || rapidSelectedFile) {
-        const path = rapidRemotePhotoPath || await uploadPhotoAndGetPath(rapidSelectedFile);
-        await apiPatch(`/api/v1/locations/${locId}`, { container_photo: path }, 'Could not save drawer photo.');
+      if (rapidSelectedFiles.length > 0) {
+        for (const file of rapidSelectedFiles) {
+          const compressed = await compressImageFile(file);
+          const fd = new FormData();
+          fd.append('file', compressed);
+          const upRes = await fetch(`/api/v1/locations/${locId}/photos`, { method: 'POST', body: fd });
+          if (!upRes.ok) {
+            const errBody = await upRes.json().catch(() => ({}));
+            throw new Error(errBody.detail || 'Could not save drawer photo.');
+          }
+        }
       }
 
       if (text) {
@@ -496,7 +780,7 @@ export async function submitRapidEntry() {
         );
         showToast(`Added ${pluralize(created.length, 'item')}!`);
       } else {
-        showToast('Saved photo!');
+        showToast('Saved photo(s)!');
       }
 
       closeModal('drawer-rapid-entry-modal', true);

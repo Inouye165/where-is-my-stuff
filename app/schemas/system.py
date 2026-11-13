@@ -1,5 +1,5 @@
-from typing import Optional
-from pydantic import BaseModel
+from typing import List, Optional
+from pydantic import BaseModel, Field
 
 
 class PhotoUploadResponse(BaseModel):
@@ -11,11 +11,13 @@ class PhotoUploadResponse(BaseModel):
 class CaptureSessionCreate(BaseModel):
     label: Optional[str] = None
     base_url: Optional[str] = None
+    location_id: Optional[int] = Field(default=None, ge=1)
 
 
 class CaptureSessionCreateResponse(BaseModel):
     token: str
     label: str
+    location_id: Optional[int] = None
     expires_in_seconds: int
     capture_url: str
     qr_url: str
@@ -25,7 +27,9 @@ class CaptureSessionStatusResponse(BaseModel):
     token: str
     status: str
     label: str
+    location_id: Optional[int] = None
     photo: Optional[PhotoUploadResponse] = None
+    photos: List[PhotoUploadResponse] = Field(default_factory=list)
 
 
 class NetworkInfoResponse(BaseModel):

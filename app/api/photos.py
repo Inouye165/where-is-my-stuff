@@ -1,5 +1,7 @@
 from typing import Optional
-from fastapi import APIRouter, Body, File, Query, Request, Response, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, Query, Request, Response, UploadFile, status
+from sqlalchemy.orm import Session
+from app.core.database import get_db
 from app.schemas.system import (
     CaptureSessionCreate,
     CaptureSessionCreateResponse,
@@ -7,9 +9,16 @@ from app.schemas.system import (
     PhotoUploadResponse,
 )
 from app.services.capture_session_service import capture_session_service
+from app.services.location_service import location_service
 from app.services.photo_service import photo_service
+from app.services.vision_service import vision_service
 
 router = APIRouter(prefix="/photos", tags=["Photos"])
+
+
+@router.get("/vision-providers")
+async def get_vision_providers() -> dict:
+    return await vision_service.get_provider_status()
 
 
 @router.post("/upload", response_model=PhotoUploadResponse)
@@ -31,6 +40,7 @@ async def create_capture_session(
         label=payload.label if payload else None,
         host_header=request.headers.get("host"),
         base_url_param=payload.base_url if payload else None,
+        location_id=payload.location_id if payload else None,
     )
     return CaptureSessionCreateResponse(**data)
 
@@ -38,11 +48,14 @@ async def create_capture_session(
 @router.get("/capture-sessions/{token}", response_model=CaptureSessionStatusResponse)
 async def get_capture_session(token: str) -> CaptureSessionStatusResponse:
     sess = capture_session_service.get_session(token)
+    photos_list = [PhotoUploadResponse(**p) for p in sess.photos]
     return CaptureSessionStatusResponse(
         token=sess.token,
         status=sess.status,
         label=sess.label,
-        photo=PhotoUploadResponse(**sess.photo) if sess.photo else None,
+        location_id=sess.location_id,
+        photo=photos_list[-1] if photos_list else None,
+        photos=photos_list,
     )
 
 
@@ -64,8 +77,20 @@ async def get_capture_session_qr(
 async def upload_capture_session_photo(
     token: str,
     file: UploadFile = File(...),
+    db: Session = Depends(get_db),
 ) -> PhotoUploadResponse:
-    capture_session_service.require_active_session(token)
+    sess = capture_session_service.require_active_session(token)
     result = photo_service.process_and_save(file)
     capture_session_service.mark_uploaded(token, result)
+    if sess.location_id is not None:
+        try:
+            location_service.attach_photo(
+                db=db,
+                location_id=sess.location_id,
+                photo_path=result["original_path"],
+                thumbnail_path=result.get("thumbnail_path"),
+                photo_type="container",
+            )
+        except Exception:
+            pass
     return PhotoUploadResponse(**result)

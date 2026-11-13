@@ -1,9 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 import secrets
 from threading import Lock
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from fastapi import status
 import qrcode
 from app.core.exceptions import AppError, NotFoundError
@@ -16,8 +16,13 @@ class CaptureSession:
     label: str
     created_at: datetime
     expires_at: datetime
+    location_id: Optional[int] = None
     status: str = "pending"
-    photo: Optional[dict] = None
+    photos: List[dict] = field(default_factory=list)
+
+    @property
+    def photo(self) -> Optional[dict]:
+        return self.photos[-1] if self.photos else None
 
 
 class CaptureSessionService:
@@ -43,6 +48,7 @@ class CaptureSessionService:
         label: Optional[str] = None,
         host_header: Optional[str] = None,
         base_url_param: Optional[str] = None,
+        location_id: Optional[int] = None,
     ) -> dict:
         now = datetime.now(timezone.utc)
         token = secrets.token_urlsafe(24)
@@ -55,6 +61,7 @@ class CaptureSessionService:
                 label=clean_label,
                 created_at=now,
                 expires_at=now + timedelta(seconds=self.TTL_SECONDS),
+                location_id=location_id,
             )
 
         effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
@@ -62,6 +69,7 @@ class CaptureSessionService:
         return {
             "token": token,
             "label": clean_label,
+            "location_id": location_id,
             "expires_in_seconds": self.TTL_SECONDS,
             "capture_url": capture_url,
             "qr_url": f"/api/v1/photos/capture-sessions/{token}/qr",
@@ -99,7 +107,7 @@ class CaptureSessionService:
                     error_code="session_expired",
                 )
             sess.status = "uploaded"
-            sess.photo = photo_result
+            sess.photos.append(photo_result)
             return sess
 
     def generate_qr_png(

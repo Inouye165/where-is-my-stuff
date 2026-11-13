@@ -60,10 +60,50 @@ def _migration_003_location_grid_layout(conn: Connection) -> None:
             conn.execute(text(f"ALTER TABLE locations ADD COLUMN {col_name} {col_type}"))
 
 
+def _migration_004_location_photos(conn: Connection) -> None:
+    Base.metadata.create_all(bind=conn)
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_location_photos_location_id ON location_photos (location_id)"))
+
+    inspector = inspect(conn)
+    if "locations" not in inspector.get_table_names() or "location_photos" not in inspector.get_table_names():
+        return
+
+    existing_pairs = {
+        (int(r[0]), str(r[1]))
+        for r in conn.execute(text("SELECT location_id, photo_path FROM location_photos")).fetchall()
+    }
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rows = conn.execute(text("SELECT id, container_photo, context_photo FROM locations")).fetchall()
+    for loc_id, container_photo, context_photo in rows:
+        for photo_path, photo_type in ((container_photo, "container"), (context_photo, "context")):
+            if photo_path and (int(loc_id), str(photo_path)) not in existing_pairs:
+                conn.execute(
+                    text(
+                        "INSERT INTO location_photos (location_id, photo_path, thumbnail_path, photo_type, created_at) "
+                        "VALUES (:location_id, :photo_path, :thumbnail_path, :photo_type, :created_at)"
+                    ),
+                    {
+                        "location_id": int(loc_id),
+                        "photo_path": str(photo_path),
+                        "thumbnail_path": None,
+                        "photo_type": photo_type,
+                        "created_at": now_iso,
+                    },
+                )
+                existing_pairs.add((int(loc_id), str(photo_path)))
+
+
+def _migration_005_item_attachments(conn: Connection) -> None:
+    Base.metadata.create_all(bind=conn)
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_item_attachments_item_id ON item_attachments (item_id)"))
+
+
 MIGRATIONS: List[MigrationStep] = [
     (1, "001_initial_schema", _migration_001_initial_schema),
     (2, "002_performance_indexes", _migration_002_performance_indexes),
     (3, "003_location_grid_layout", _migration_003_location_grid_layout),
+    (4, "004_location_photos", _migration_004_location_photos),
+    (5, "005_item_attachments", _migration_005_item_attachments),
 ]
 
 

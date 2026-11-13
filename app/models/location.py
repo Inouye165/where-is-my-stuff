@@ -44,6 +44,12 @@ class Location(Base):
         "Location", back_populates="parent", cascade="all, delete-orphan"
     )
     items: Mapped[List["Item"]] = relationship("Item", back_populates="location")
+    photos: Mapped[List["LocationPhoto"]] = relationship(
+        "LocationPhoto",
+        back_populates="location",
+        cascade="all, delete-orphan",
+        order_by="LocationPhoto.created_at.desc(), LocationPhoto.id.desc()",
+    )
 
     def get_breadcrumbs(self) -> List[dict[str, Any]]:
         crumbs: List[dict[str, Any]] = []
@@ -65,3 +71,19 @@ class Location(Base):
     @property
     def full_path(self) -> str:
         return " > ".join(c["name"] for c in self.get_breadcrumbs())
+
+
+class LocationPhoto(Base):
+    __tablename__ = "location_photos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    location_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("locations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    photo_path: Mapped[str] = mapped_column(String(300), nullable=False)
+    thumbnail_path: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    caption: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    photo_type: Mapped[str] = mapped_column(String(32), nullable=False, default="container")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
+
+    location: Mapped["Location"] = relationship("Location", back_populates="photos")

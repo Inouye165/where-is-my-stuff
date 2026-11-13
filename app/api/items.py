@@ -1,10 +1,10 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.schemas.audit import AuditVerifyRequest
 from app.schemas.common import ItemSortOrder, ItemStatus
-from app.schemas.item import ItemBulkCreate, ItemCreate, ItemDetailRead, ItemRead, ItemUpdate
+from app.schemas.item import ItemAttachmentRead, ItemBulkCreate, ItemCreate, ItemDetailRead, ItemRead, ItemUpdate
 from app.services.inventory_service import inventory_service
 
 router = APIRouter(prefix="/items", tags=["Items"])
@@ -64,6 +64,28 @@ def verify_item_presence(
     new_loc = req.location_id if req else None
     item = inventory_service.verify_presence(db, item_id, notes=notes, new_location_id=new_loc)
     return inventory_service.to_detail_schema(item, db=db)
+
+
+@router.get("/{item_id}/attachments", response_model=List[ItemAttachmentRead])
+def list_item_attachments(item_id: int, db: Session = Depends(get_db)) -> List[ItemAttachmentRead]:
+    return [ItemAttachmentRead.model_validate(a) for a in inventory_service.list_attachments(db, item_id)]
+
+
+@router.post("/{item_id}/attachments", response_model=ItemAttachmentRead, status_code=status.HTTP_201_CREATED)
+def upload_item_attachment(
+    item_id: int,
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(default=None),
+    db: Session = Depends(get_db),
+) -> ItemAttachmentRead:
+    att = inventory_service.add_attachment(db=db, item_id=item_id, file=file, title=title)
+    return ItemAttachmentRead.model_validate(att)
+
+
+@router.delete("/{item_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_item_attachment(item_id: int, attachment_id: int, db: Session = Depends(get_db)) -> None:
+    inventory_service.delete_attachment(db=db, item_id=item_id, attachment_id=attachment_id)
+    return None
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

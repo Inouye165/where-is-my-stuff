@@ -1,16 +1,18 @@
 from datetime import datetime, timezone
 import re
 from typing import List, Optional
+from fastapi import UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.models.audit import AuditLog
-from app.models.item import Item
+from app.models.item import Item, ItemAttachment
 from app.models.location import Location
 from app.repositories.item_repository import item_repository
 from app.repositories.location_repository import location_repository
 from app.schemas.audit import AuditLogRead
 from app.schemas.common import ItemSortOrder
-from app.schemas.item import ItemBulkCreate, ItemCreate, ItemDetailRead, ItemRead, ItemUpdate, LocationPhotos
+from app.schemas.item import ItemAttachmentRead, ItemBulkCreate, ItemCreate, ItemDetailRead, ItemRead, ItemUpdate, LocationPhotos
 from app.schemas.location import Breadcrumb
 from app.services.location_service import LocationHierarchySnapshot, location_service
 from app.services.photo_service import photo_service
@@ -118,7 +120,8 @@ class InventoryService:
             )
             for log in item.audit_logs
         ]
-        return ItemDetailRead(**base.model_dump(), audit_logs=logs)
+        attachments = [ItemAttachmentRead.model_validate(a) for a in (item.attachments or [])]
+        return ItemDetailRead(**base.model_dump(), audit_logs=logs, attachments=attachments)
 
     @classmethod
     def list_items(
@@ -398,6 +401,72 @@ class InventoryService:
         db.flush()
         if old_photo:
             photo_service.cleanup_unreferenced_photo(db, old_photo)
+
+    @classmethod
+    def list_attachments(cls, db: Session, item_id: int) -> List[ItemAttachment]:
+        item = item_repository.get_by_id(db, item_id)
+        if not item:
+            raise NotFoundError("Item not found.")
+        return list(
+            db.execute(
+                select(ItemAttachment)
+                .where(ItemAttachment.item_id == item_id)
+                .order_by(ItemAttachment.created_at.desc(), ItemAttachment.id.desc())
+            )
+            .scalars()
+            .all()
+        )
+
+    @classmethod
+    def add_attachment(
+        cls,
+        db: Session,
+        item_id: int,
+        file: UploadFile,
+        title: Optional[str] = None,
+    ) -> ItemAttachment:
+        item = item_repository.get_by_id(db, item_id)
+        if not item:
+            raise NotFoundError("Item not found.")
+        meta = photo_service.process_and_save_attachment(file)
+        att = ItemAttachment(
+            item_id=item.id,
+            file_path=meta["file_path"],
+            thumbnail_path=meta.get("thumbnail_path"),
+            filename=meta["filename"],
+            content_type=meta.get("content_type"),
+            attachment_type=meta["attachment_type"],
+            title=(title or "").strip()[:200] or None,
+            size_bytes=meta.get("size_bytes", 0),
+        )
+        db.add(att)
+        if att.attachment_type == "image" and not item.item_photo:
+            item.item_photo = att.file_path
+        db.commit()
+        db.refresh(att)
+        return att
+
+    @classmethod
+    def delete_attachment(cls, db: Session, item_id: int, attachment_id: int) -> None:
+        item = item_repository.get_by_id(db, item_id)
+        if not item:
+            raise NotFoundError("Item not found.")
+        att = db.execute(
+            select(ItemAttachment).where(
+                ItemAttachment.id == attachment_id,
+                ItemAttachment.item_id == item_id,
+            )
+        ).scalar_one_or_none()
+        if not att:
+            raise NotFoundError("Attachment not found.")
+        old_path = att.file_path
+        old_thumb = att.thumbnail_path
+        db.delete(att)
+        db.flush()
+        if item.item_photo == old_path:
+            item.item_photo = None
+        db.commit()
+        photo_service.delete_attachment_files(db, old_path, old_thumb)
 
 
 inventory_service = InventoryService()

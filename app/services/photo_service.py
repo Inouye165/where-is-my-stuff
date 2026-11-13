@@ -13,6 +13,9 @@ from app.repositories.item_repository import item_repository
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 ALLOWED_PIL_FORMATS = {"JPEG", "PNG", "WEBP", "GIF", "BMP"}
+ALLOWED_DOC_EXTENSIONS = {
+    ".pdf", ".svg", ".csv", ".txt", ".md", ".json", ".xlsx", ".xls", ".doc", ".docx", ".zip"
+}
 READ_CHUNK_SIZE = 64 * 1024
 
 
@@ -166,6 +169,70 @@ class PhotoService:
         if removed:
             logger.info("Cleaned up unreferenced photo asset: %s", orig_file.name)
         return removed
+
+    def process_and_save_attachment(self, file: UploadFile) -> dict[str, Any]:
+        if not file or not file.filename:
+            raise BadRequestError("No file provided.")
+
+        original_name = Path(file.filename).name
+        ext = Path(original_name).suffix.lower()
+        if ext in ALLOWED_EXTENSIONS:
+            saved = self.process_and_save(file)
+            return {
+                "file_path": saved["original_path"],
+                "thumbnail_path": saved["thumbnail_path"],
+                "filename": original_name,
+                "content_type": file.content_type or "image/jpeg",
+                "attachment_type": "image",
+                "size_bytes": 0,
+            }
+
+        if ext not in ALLOWED_DOC_EXTENSIONS:
+            raise BadRequestError(
+                f"Unsupported file type '{ext}'. Allowed: images, PDF, SVG, CSV, TXT, MD, JSON, Office docs, ZIP."
+            )
+
+        raw = self._read_upload_bounded(file)
+        if not raw:
+            raise BadRequestError("Uploaded file is empty.")
+
+        settings.init_directories()
+        file_id = uuid.uuid4().hex
+        stored_name = f"{file_id}{ext}"
+        target_path = (settings.ATTACHMENTS_DIR / stored_name).resolve()
+        if not target_path.is_relative_to(settings.ATTACHMENTS_DIR.resolve()):
+            raise BadRequestError("Invalid attachment filename.")
+
+        target_path.write_bytes(raw)
+        attachment_type = "pdf" if ext == ".pdf" else ("chart" if ext in {".svg", ".csv"} else "document")
+        return {
+            "file_path": f"/uploads/attachments/{stored_name}",
+            "thumbnail_path": None,
+            "filename": original_name[:255],
+            "content_type": file.content_type or "application/octet-stream",
+            "attachment_type": attachment_type,
+            "size_bytes": len(raw),
+        }
+
+    def delete_attachment_files(self, db: Session, file_path: Optional[str], thumbnail_path: Optional[str] = None) -> None:
+        if not file_path or not file_path.startswith("/uploads/"):
+            return
+        if file_path.startswith("/uploads/originals/"):
+            self.cleanup_unreferenced_photo(db, file_path)
+            return
+        try:
+            resolved = self.resolve_safe_upload_path(file_path)
+            if resolved.exists() and resolved.is_file():
+                resolved.unlink(missing_ok=True)
+        except BadRequestError:
+            pass
+        if thumbnail_path:
+            try:
+                thumb = self.resolve_safe_upload_path(thumbnail_path)
+                if thumb.exists() and thumb.is_file():
+                    thumb.unlink(missing_ok=True)
+            except BadRequestError:
+                pass
 
 
 class AppImageReject(Exception):

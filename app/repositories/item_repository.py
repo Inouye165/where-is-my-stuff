@@ -2,7 +2,7 @@ from typing import List, Optional, Set
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 from app.models.item import Item
-from app.models.location import Location
+from app.models.location import Location, LocationPhoto
 from app.schemas.common import ItemSortOrder
 
 
@@ -97,7 +97,10 @@ class ItemRepository:
                 or_(Location.container_photo == photo_url, Location.context_photo == photo_url)
             )
         ).scalar() or 0
-        return int(item_refs) + int(loc_refs)
+        loc_photo_refs = db.execute(
+            select(func.count(LocationPhoto.id)).where(LocationPhoto.photo_path == photo_url)
+        ).scalar() or 0
+        return int(item_refs) + int(loc_refs) + int(loc_photo_refs)
 
 
 item_repository = ItemRepository()

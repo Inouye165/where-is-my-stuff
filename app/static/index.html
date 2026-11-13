@@ -476,18 +476,40 @@
         </div>
 
         <div class="form-field">
-          <label>Photo (Optional)</label>
-          <div class="rapid-photo-upload-row">
-            <input type="file" id="rapid-photo-input" accept="image/*" capture="environment" style="display: none;" onchange="handleRapidPhotoSelected(event)">
+          <label>Photo(s) (Optional)</label>
+          <div class="rapid-photo-upload-row" style="flex-wrap: wrap; gap: 0.5rem;">
+            <input type="file" id="rapid-photo-input" accept="image/*" multiple style="display: none;" onchange="handleRapidPhotoSelected(event)">
             <button type="button" class="btn btn-secondary btn-sm" onclick="triggerRapidPhotoInput()">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
-              Take or choose photo
+              Upload photo(s)
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="startRapidPhoneCapture()">
+              QR: Add from Phone
             </button>
             <span id="rapid-photo-filename" class="file-hint-label">No photo selected</span>
           </div>
           <div id="rapid-photo-preview-wrap" class="rapid-preview-box" style="display: none;">
             <img id="rapid-photo-preview" src="" alt="Preview">
           </div>
+        </div>
+
+        <div class="form-field ai-scan-panel">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.45rem;">
+            <label for="rapid-vision-provider" style="margin: 0;">AI Item Identification</label>
+            <span id="rapid-vision-status" class="ai-provider-pill">Checking models...</span>
+          </div>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+            <select id="rapid-vision-provider" style="flex: 1; min-width: 170px;" onchange="onVisionProviderChange()">
+              <option value="local">Local Model (Ollama)</option>
+              <option value="gemini">Paid: Google Gemini</option>
+              <option value="openai">Paid: OpenAI Vision</option>
+            </select>
+            <input type="text" id="rapid-vision-model" placeholder="Model name (optional)" style="flex: 1; min-width: 140px;">
+            <button type="button" class="btn btn-primary btn-sm" id="rapid-ai-scan-btn" onclick="runRapidAiScan()">
+              Scan with AI
+            </button>
+          </div>
+          <div id="rapid-ai-results" class="ai-results-box" style="display: none;"></div>
         </div>
 
         <div class="form-field">
@@ -742,16 +764,24 @@
         </div>
         <div id="phone-photo-status" class="phone-qr-status">Generating QR code...</div>
         <div id="phone-photo-url-hint" class="phone-qr-url"></div>
+        <div id="phone-photo-received-wrap" class="phone-received-wrap" style="display: none;">
+          <div id="phone-photo-received-count" class="phone-received-count"></div>
+          <div id="phone-photo-received-thumbs" class="phone-received-thumbs"></div>
+        </div>
         <button type="button" id="phone-photo-retry-btn" class="btn btn-secondary btn-sm" style="display: none; margin-top: 0.5rem;" onclick="refreshPhonePhotoQr()">
           Generate new QR
         </button>
       </div>
 
       <div class="modal-bottom phone-qr-bottom">
-        <button type="button" class="btn btn-secondary btn-sm" onclick="chooseDesktopFileFallback()">
+        <button type="button" id="phone-photo-computer-btn" class="btn btn-secondary btn-sm" onclick="chooseDesktopFileFallback()">
           Choose file from computer
         </button>
-        <button type="button" class="btn btn-secondary" onclick="closePhonePhotoModal()">Cancel</button>
+        <div style="display: flex; gap: 0.5rem;">
+          <button type="button" id="phone-photo-cancel-btn" class="btn btn-secondary" onclick="closePhonePhotoModal()">Cancel</button>
+          <button type="button" id="phone-photo-done-btn" class="btn btn-secondary" style="display: none;" onclick="finishLocationPhoneCapture(false)">Done</button>
+          <button type="button" id="phone-photo-scan-btn" class="btn btn-primary" style="display: none;" onclick="finishLocationPhoneCapture(true)">Done &amp; Scan AI</button>
+        </div>
       </div>
     </div>
   </div>

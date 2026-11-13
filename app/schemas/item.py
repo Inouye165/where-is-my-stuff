@@ -85,8 +85,24 @@ class ItemRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ItemAttachmentRead(BaseModel):
+    id: int
+    item_id: int
+    file_path: str
+    thumbnail_path: Optional[str] = None
+    filename: str
+    content_type: Optional[str] = None
+    attachment_type: str
+    title: Optional[str] = None
+    size_bytes: int = 0
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ItemDetailRead(ItemRead):
     audit_logs: List[AuditLogRead] = Field(default_factory=list)
+    attachments: List[ItemAttachmentRead] = Field(default_factory=list)
 
 
 class DetectedItem(BaseModel):
@@ -100,5 +116,7 @@ class VisionAnalysisResponse(BaseModel):
     status: str = "fallback"
     items: List[DetectedItem] = Field(default_factory=list)
     has_vision_api: bool = False
+    provider_used: Optional[str] = None
+    model_used: Optional[str] = None
     message: str = ""
     instructions: str = "Snap an open drawer photo or type items directly into the quick-entry box."

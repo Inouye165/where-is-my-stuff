@@ -1,11 +1,19 @@
 from typing import List, Optional, Union
-from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.network import get_lan_ip, resolve_effective_base_url
 from app.schemas.item import ItemRead, VisionAnalysisResponse
-from app.schemas.location import LocationCreate, LocationGridSave, LocationRead, LocationTree, LocationUpdate
+from app.schemas.location import (
+    LocationCreate,
+    LocationGridSave,
+    LocationPhotoAttach,
+    LocationPhotoRead,
+    LocationRead,
+    LocationTree,
+    LocationUpdate,
+)
 from app.schemas.system import NetworkInfoResponse
 from app.services.inventory_service import inventory_service
 from app.services.location_service import location_service
@@ -63,13 +71,69 @@ def get_location_qr(
     return Response(content=png_bytes, media_type="image/png")
 
 
+@router.get("/{location_id}/photos", response_model=List[LocationPhotoRead])
+def list_location_photos(location_id: int, db: Session = Depends(get_db)) -> List[LocationPhotoRead]:
+    return [LocationPhotoRead.model_validate(p) for p in location_service.list_photos(db, location_id)]
+
+
+@router.post("/{location_id}/photos", response_model=LocationPhotoRead, status_code=status.HTTP_201_CREATED)
+def upload_location_photo(
+    location_id: int,
+    file: UploadFile = File(...),
+    caption: Optional[str] = Form(default=None),
+    photo_type: str = Form(default="container"),
+    db: Session = Depends(get_db),
+) -> LocationPhotoRead:
+    photo = location_service.add_photo(
+        db=db,
+        location_id=location_id,
+        file=file,
+        caption=caption,
+        photo_type=photo_type,
+    )
+    return LocationPhotoRead.model_validate(photo)
+
+
+@router.post("/{location_id}/photos/attach", response_model=LocationPhotoRead, status_code=status.HTTP_201_CREATED)
+def attach_location_photo(
+    location_id: int,
+    data: LocationPhotoAttach,
+    db: Session = Depends(get_db),
+) -> LocationPhotoRead:
+    photo = location_service.attach_photo(
+        db=db,
+        location_id=location_id,
+        photo_path=data.photo_path,
+        thumbnail_path=data.thumbnail_path,
+        caption=data.caption,
+        photo_type=data.photo_type,
+    )
+    return LocationPhotoRead.model_validate(photo)
+
+
+@router.delete("/{location_id}/photos/{photo_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_location_photo(location_id: int, photo_id: int, db: Session = Depends(get_db)) -> None:
+    location_service.delete_photo(db, location_id, photo_id)
+    return None
+
+
 @router.post("/{location_id}/analyze-photo", response_model=VisionAnalysisResponse)
 async def analyze_drawer_photo(
     location_id: int,
     file: Optional[UploadFile] = File(default=None),
+    photo_id: Optional[int] = Form(default=None),
+    provider: Optional[str] = Form(default=None),
+    model: Optional[str] = Form(default=None),
     db: Session = Depends(get_db),
 ) -> VisionAnalysisResponse:
-    return await location_service.analyze_drawer_photo(db=db, location_id=location_id, file=file)
+    return await location_service.analyze_drawer_photo(
+        db=db,
+        location_id=location_id,
+        file=file,
+        photo_id=photo_id,
+        provider=provider,
+        model=model,
+    )
 
 
 @router.get("/{location_id}", response_model=LocationRead)
