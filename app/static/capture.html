@@ -197,7 +197,6 @@
 
     <div id="thumbs-strip" class="thumbs-strip"></div>
     <div id="status-area"></div>
-    <button type="button" id="retake-btn" class="retake-btn" style="display: none;">Take another photo</button>
   </main>
 
   <script type="module">
@@ -216,8 +215,14 @@
     const previewImg = document.getElementById('preview-img');
     const thumbsStrip = document.getElementById('thumbs-strip');
     const statusArea = document.getElementById('status-area');
-    const retakeBtn = document.getElementById('retake-btn');
     let uploadedCount = 0;
+    const createdPreviewUrls = [];
+    window.addEventListener('pagehide', () => {
+      for (const u of createdPreviewUrls) {
+        try { URL.revokeObjectURL(u); } catch {}
+      }
+      createdPreviewUrls.length = 0;
+    });
 
     function setStatus(msg, kind) {
       statusArea.innerHTML = '';
@@ -287,6 +292,7 @@
 
           uploadedCount += 1;
           const previewUrl = URL.createObjectURL(compressed);
+          createdPreviewUrls.push(previewUrl);
           previewImg.src = previewUrl;
           previewWrap.style.display = 'block';
           const thumb = document.createElement('img');
@@ -298,7 +304,6 @@
         triggerEl.classList.remove('disabled');
         galleryTriggerEl.style.pointerEvents = 'auto';
         btnLabelEl.textContent = 'Take another photo';
-        retakeBtn.style.display = 'none';
         subtitleEl.textContent = 'Photos sent! Keep snapping or close this tab when finished.';
         setStatus(`✓ ${uploadedCount} ${uploadedCount === 1 ? 'photo' : 'photos'} sent to your computer!`, 'success');
       } catch (err) {
@@ -317,11 +322,6 @@
     galleryInputEl.addEventListener('change', (e) => {
       handleFiles(e.target.files);
       galleryInputEl.value = '';
-    });
-
-    retakeBtn.addEventListener('click', () => {
-      inputEl.value = '';
-      inputEl.click();
     });
 
     init();

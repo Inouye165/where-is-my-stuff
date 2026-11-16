@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import threading
 from typing import Callable, List, Tuple
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection, Engine
@@ -130,26 +131,31 @@ def get_current_schema_version(engine: Engine) -> int:
         return int(row or 0)
 
 
+_MIGRATION_LOCK = threading.Lock()
+
+
 def run_migrations(engine: Engine) -> int:
-    with engine.begin() as conn:
-        _ensure_migrations_table(conn)
-        applied_rows = conn.execute(text("SELECT version FROM schema_migrations")).fetchall()
-        applied_versions = {int(r[0]) for r in applied_rows}
+    with _MIGRATION_LOCK:
+        with engine.begin() as conn:
+            _ensure_migrations_table(conn)
+            conn.execute(text("DELETE FROM schema_migrations WHERE version < 0"))
+            applied_rows = conn.execute(text("SELECT version FROM schema_migrations")).fetchall()
+            applied_versions = {int(r[0]) for r in applied_rows}
 
-        for version, name, step_fn in MIGRATIONS:
-            if version in applied_versions:
-                continue
-            logger.info("Applying database migration v%d (%s)", version, name)
-            step_fn(conn)
-            now_iso = datetime.now(timezone.utc).isoformat()
-            conn.execute(
-                text(
-                    "INSERT INTO schema_migrations (version, name, applied_at) "
-                    "VALUES (:version, :name, :applied_at)"
-                ),
-                {"version": version, "name": name, "applied_at": now_iso},
-            )
+            for version, name, step_fn in MIGRATIONS:
+                if version in applied_versions:
+                    continue
+                logger.info("Applying database migration v%d (%s)", version, name)
+                step_fn(conn)
+                now_iso = datetime.now(timezone.utc).isoformat()
+                conn.execute(
+                    text(
+                        "INSERT INTO schema_migrations (version, name, applied_at) "
+                        "VALUES (:version, :name, :applied_at)"
+                    ),
+                    {"version": version, "name": name, "applied_at": now_iso},
+                )
 
-        current = conn.execute(text("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")).scalar()
-        return int(current or 0)
+            current = conn.execute(text("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")).scalar()
+            return int(current or 0)
 

@@ -30,7 +30,7 @@ The physical world is nested. The data model reflects this via a recursive paren
 
 ### Visual Verification Dimensions
 Every container or location can carry two critical visual references:
-1. **Context Photo (`location_photo`)**: Shows where the container lives in the room/shed (e.g., wide shot of Shelf 3 in the North Shed).
+1. **Context Photo (`context_photo`)**: Shows where the container lives in the room/shed (e.g., wide shot of Shelf 3 in the North Shed).
 2. **Container Photo (`container_photo`)**: Shows the exterior of the bin, tote, or organizer with its label/markings so it is instantly recognizable on sight.
 3. **Item Photo (`item_photo`, optional)**: Shows the item itself for rapid identification.
 

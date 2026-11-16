@@ -1,4 +1,5 @@
 import os
+import uuid
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -12,15 +13,19 @@ router = APIRouter(tags=["System"])
 
 
 def _check_uploads_writable() -> bool:
+    probe = settings.UPLOAD_DIR / f".health_probe_{os.getpid()}_{uuid.uuid4().hex}"
     try:
         settings.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
         settings.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
-        probe = settings.UPLOAD_DIR / f".health_probe_{os.getpid()}"
         probe.write_bytes(b"ok")
-        probe.unlink(missing_ok=True)
         return True
     except OSError:
         return False
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 @router.get("/health", response_model=HealthResponse)

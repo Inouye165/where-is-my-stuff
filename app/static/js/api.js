@@ -8,24 +8,39 @@ const UPLOAD_TIMEOUT_MS = 45000;
 const syncChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('wims_sync') : null;
 
 export function notifyCrossTabSync() {
-  const ts = String(Date.now());
-  try {
-    if (syncChannel) syncChannel.postMessage({ type: 'refresh', ts });
-  } catch {}
+  const ts = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  if (syncChannel) {
+    try {
+      syncChannel.postMessage({ type: 'refresh', ts });
+      return;
+    } catch {}
+  }
   try {
     localStorage.setItem('wims_sync_ts', ts);
   } catch {}
 }
 
 export function onCrossTabSync(callback) {
+  let debounceTimer = null;
+  let lastSeenToken = null;
+
+  const scheduleRefresh = (token) => {
+    if (token && token === lastSeenToken) return;
+    if (token) lastSeenToken = token;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      callback();
+    }, 50);
+  };
+
   if (syncChannel) {
     syncChannel.addEventListener('message', e => {
-      if (e && e.data && e.data.type === 'refresh') callback();
+      if (e && e.data && e.data.type === 'refresh') scheduleRefresh(e.data.ts);
     });
-  }
-  if (typeof window !== 'undefined') {
+  } else if (typeof window !== 'undefined') {
     window.addEventListener('storage', e => {
-      if (e && e.key === 'wims_sync_ts') callback();
+      if (e && e.key === 'wims_sync_ts') scheduleRefresh(e.newValue);
     });
   }
 }
@@ -58,7 +73,9 @@ export async function apiFetch(url, options = {}) {
 
     if (!response.ok) {
       const errBody = await response.json().catch(() => null);
-      throw new Error(extractErrorMessage(errBody, fallbackError));
+      const httpErr = new Error(extractErrorMessage(errBody, fallbackError));
+      httpErr.status = response.status;
+      throw httpErr;
     }
 
     const isMutation = fetchOpts.method && fetchOpts.method !== 'GET' && !String(url).includes('/search/');
@@ -77,6 +94,12 @@ export async function apiFetch(url, options = {}) {
     if (err && err.name === 'AbortError') {
       throw new Error('Request timed out. Check your Wi-Fi connection and try again.');
     }
+    if (err instanceof TypeError) {
+      const host = (typeof window !== 'undefined' && window.location && window.location.host)
+        ? ` (${window.location.host})`
+        : '';
+      throw new Error(`Cannot reach the server${host}. Make sure the server is running and try again.`);
+    }
     throw err;
   } finally {
     clearTimeout(timer);
@@ -87,8 +110,8 @@ export function apiGet(url, fallbackError = 'Could not load data.') {
   return apiFetch(url, { method: 'GET', fallbackError });
 }
 
-export function apiPost(url, payload = undefined, fallbackError = 'Could not save data.') {
-  const opts = { method: 'POST', fallbackError };
+export function apiPost(url, payload = undefined, fallbackError = 'Could not save data.', options = {}) {
+  const opts = { method: 'POST', fallbackError, ...options };
   if (payload !== undefined) {
     opts.headers = { 'Content-Type': 'application/json' };
     opts.body = JSON.stringify(payload);
@@ -118,12 +141,13 @@ export function apiDelete(url, fallbackError = 'Could not delete record.') {
   return apiFetch(url, { method: 'DELETE', fallbackError });
 }
 
-export function apiUpload(url, formData, fallbackError = 'Photo upload failed.') {
+export function apiUpload(url, formData, fallbackError = 'Photo upload failed.', options = {}) {
   return apiFetch(url, {
     method: 'POST',
     body: formData,
     timeoutMs: UPLOAD_TIMEOUT_MS,
-    fallbackError
+    fallbackError,
+    ...options
   });
 }
 

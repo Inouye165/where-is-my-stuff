@@ -1,7 +1,8 @@
-from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from app.schemas.common import LocationType, validate_safe_photo_ref
+from app.schemas.common import LocationType, UTCDateTime, validate_safe_photo_ref
+
+LocationPhotoType = Literal["container", "context"]
 
 
 class Breadcrumb(BaseModel):
@@ -70,7 +71,7 @@ class LocationPhotoRead(BaseModel):
     thumbnail_path: Optional[str] = None
     caption: Optional[str] = None
     photo_type: str = "container"
-    created_at: datetime
+    created_at: UTCDateTime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -79,7 +80,7 @@ class LocationPhotoAttach(BaseModel):
     photo_path: str = Field(..., min_length=1, max_length=300)
     thumbnail_path: Optional[str] = Field(default=None, max_length=300)
     caption: Optional[str] = Field(default=None, max_length=200)
-    photo_type: str = Field(default="container", max_length=32)
+    photo_type: LocationPhotoType = "container"
 
     @field_validator("photo_path", "thumbnail_path")
     @classmethod
@@ -108,8 +109,8 @@ class LocationRead(BaseModel):
     item_count: int = 0
     total_item_count: int = 0
     child_count: int = 0
-    created_at: datetime
-    updated_at: datetime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
 
     model_config = ConfigDict(from_attributes=True)
 

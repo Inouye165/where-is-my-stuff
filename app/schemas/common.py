@@ -1,9 +1,20 @@
+from datetime import datetime, timezone
 from enum import Enum
 import re
-from typing import Any, Optional
-from pydantic import BaseModel
+from typing import Annotated, Optional
+from pydantic import AfterValidator
 
 SAFE_UPLOAD_URL_RE = re.compile(r"^/uploads/[a-zA-Z0-9._/\-]+$")
+
+
+def _as_utc(value: datetime) -> datetime:
+    # SQLite DateTime columns round-trip naive values; they are always stored as UTC.
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+UTCDateTime = Annotated[datetime, AfterValidator(_as_utc)]
 
 
 class LocationType(str, Enum):
@@ -13,6 +24,10 @@ class LocationType(str, Enum):
     container = "container"
     bin = "bin"
     drawer = "drawer"
+    box = "box"
+    kit = "kit"
+    compartment = "compartment"
+    cubby = "cubby"
     other = "other"
 
 
@@ -43,15 +58,4 @@ def validate_safe_photo_ref(value: Optional[str]) -> Optional[str]:
     if not SAFE_UPLOAD_URL_RE.match(cleaned):
         raise ValueError("Photo reference must be a local '/uploads/...' path.")
     return cleaned
-
-
-class ErrorDetail(BaseModel):
-    code: str
-    message: str
-    request_id: str
-
-
-class ErrorEnvelope(BaseModel):
-    detail: Any
-    error: ErrorDetail
 

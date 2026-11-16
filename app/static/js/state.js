@@ -5,15 +5,6 @@ import { apiGet } from './api.js';
 import { escapeHtml, showToast } from './dom.js';
 
 export const UNASSIGNED_ROOM_LABEL = 'Needs a home';
-export const HOME_SEARCH_PLACEHOLDER = 'What are you looking for?';
-
-export const STARTER_ROOMS = [
-  { name: 'Garage', emoji: '🔧' },
-  { name: 'Office', emoji: '💻' },
-  { name: 'Bedroom', emoji: '🛏️' },
-  { name: 'Closet', emoji: '🚪' },
-  { name: 'Kitchen', emoji: '🍳' }
-];
 
 export const ROOM_EMOJI_KEYWORDS = [
   { match: /garage|workshop|shop|tool|shed/i, emoji: '🔧' },
@@ -61,6 +52,8 @@ export const state = {
 
   // Search & Filter State
   homeSearchQuery: '',
+  homeSearchResults: null,
+  homeSearchLoading: false,
   homeSearchHintIndex: 0,
   photoSearchPreviewUrl: '',
   photoSearchLoading: false,
@@ -71,14 +64,12 @@ export const state = {
   selectedSort: 'name_asc',
 
   // Active Modals / Sheets
-  activeDrawerItem: null,
   storageTypeChoice: 'unit',
   quickPhotoTarget: null,
   roomEmojis: loadJsonStorage('wims_room_emojis', {}),
-  dismissedStarters: loadJsonStorage('wims_dismissed_starters', []),
 
   // Theme ('system' | 'light' | 'dark')
-  themePref: (typeof localStorage !== 'undefined' && localStorage.getItem('wims_theme_pref')) || 'system',
+  themePref: (typeof localStorage !== 'undefined' && localStorage.getItem('wims_theme_pref')) || 'dark',
   spotlightTimer: null,
   onWorkspaceRefresh: null
 };
@@ -97,9 +88,14 @@ export function indexLocations() {
   const rawRooms = [];
   const rawContainers = [];
 
-  function walk(node) {
+  function walk(node, parentNode = null) {
     state.locationMap.set(node.id, node);
     const ltype = getLocType(node);
+    const parentType = parentNode ? getLocType(parentNode) : null;
+    const isTopOrRoomChild = !parentNode
+      || parentType === 'room'
+      || parentType === 'site'
+      || isUnknownPlaceholder(parentNode);
 
     if (!node.parent_id && (ltype === 'room' || ltype === 'site') && !isUnknownPlaceholder(node)) {
       rawRooms.push(node);
@@ -107,20 +103,20 @@ export function indexLocations() {
 
     if (
       ltype === 'container' ||
-      (node.parent_id && node.children && node.children.length > 0 && ltype !== 'room' && ltype !== 'site')
+      (isTopOrRoomChild && node.children && node.children.length > 0 && ltype !== 'room' && ltype !== 'site')
     ) {
       rawContainers.push(node);
     }
 
     if (node.children && node.children.length > 0) {
       for (const child of node.children) {
-        walk(child);
+        walk(child, node);
       }
     }
   }
 
   for (const root of state.locations) {
-    walk(root);
+    walk(root, null);
   }
 
   const byName = new Map();
@@ -208,6 +204,23 @@ export function getLocationAncestors(locationId) {
   return trail;
 }
 
+export function getSubtreeItems(locationId) {
+  const root = state.locationMap.get(Number(locationId));
+  if (!root) return [];
+  const ids = new Set();
+  function collect(node) {
+    if (!node || ids.has(node.id)) return;
+    ids.add(node.id);
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        collect(child);
+      }
+    }
+  }
+  collect(root);
+  return state.items.filter(item => item.location_id && ids.has(item.location_id));
+}
+
 export function getLocationHierarchy(locationId) {
   const loc = state.locationMap.get(locationId);
   if (!loc) {
@@ -215,51 +228,63 @@ export function getLocationHierarchy(locationId) {
       room: null,
       unit: null,
       drawer: null,
+      box: null,
+      subLocations: [],
+      trail: [],
       roomName: UNASSIGNED_ROOM_LABEL,
       unitName: 'No container',
       drawerName: 'Unassigned',
+      boxName: null,
       humanPath: UNASSIGNED_ROOM_LABEL,
+      searchPath: UNASSIGNED_ROOM_LABEL,
       isNeedsHome: true
     };
   }
 
-  const ancestors = getLocationAncestors(loc.id);
+  const containerIdSet = new Set(state.containers.map(c => c.id));
+  const trail = getLocationAncestors(loc.id).filter(n => !isUnknownPlaceholder(n));
   let room = null;
   let unit = null;
-  let drawer = null;
+  const subNodes = [];
 
-  for (const node of ancestors) {
+  for (const node of trail) {
     const ltype = getLocType(node);
-    if (isUnknownPlaceholder(node)) {
-      continue;
-    }
-    if (!room && (ltype === 'room' || ltype === 'site')) {
+    if (!unit && subNodes.length === 0 && (ltype === 'room' || ltype === 'site')) {
       room = node;
-    } else if (!unit && (ltype === 'container' || (node.children && node.children.length > 0))) {
+    } else if (!unit && subNodes.length === 0 && (ltype === 'container' || containerIdSet.has(node.id))) {
       unit = node;
     } else {
-      drawer = node;
+      subNodes.push(node);
     }
   }
+
+  const drawer = subNodes[0] || null;
+  const subLocations = subNodes.slice(1);
+  const box = subLocations.length > 0 ? subLocations[subLocations.length - 1] : null;
 
   const isNeedsHome = !room;
   const roomName = room ? room.name : UNASSIGNED_ROOM_LABEL;
   const unitName = unit ? unit.name : (drawer ? 'Loose spot' : roomName);
   const drawerName = drawer ? drawer.name : (unit ? unit.name : roomName);
+  const boxName = box ? box.name : null;
 
-  const segments = [roomName];
-  if (unit && unit.name !== roomName) segments.push(unit.name);
-  if (drawer && drawer.name !== unitName) segments.push(drawer.name);
+  const segments = isNeedsHome
+    ? [UNASSIGNED_ROOM_LABEL, ...trail.map(n => n.name)]
+    : trail.map(n => n.name);
 
   return {
     room,
     unit,
     drawer,
+    box,
+    subLocations,
+    trail,
     roomName,
     unitName,
     drawerName,
-    humanPath: segments.join(' › '),
-    searchPath: segments.join(' > '),
+    boxName,
+    humanPath: segments.length > 0 ? segments.join(' › ') : UNASSIGNED_ROOM_LABEL,
+    searchPath: segments.length > 0 ? segments.join(' > ') : UNASSIGNED_ROOM_LABEL,
     isNeedsHome
   };
 }
@@ -296,7 +321,7 @@ export function populateLocationDropdowns() {
   const itemSelect = document.getElementById('item-location-select');
   if (itemSelect) {
     const prev = itemSelect.value;
-    itemSelect.innerHTML = '<option value="">-- Choose a drawer, container, or room --</option>';
+    itemSelect.innerHTML = '<option value="">-- Choose a box, drawer, container, or room --</option>';
     for (const loc of allLocations) {
       const opt = document.createElement('option');
       opt.value = loc.id;
@@ -310,9 +335,10 @@ export function populateLocationDropdowns() {
   if (rapidSelect) {
     const prev = rapidSelect.value;
     rapidSelect.innerHTML = '';
+    const leafTypes = new Set(['box', 'kit', 'bin', 'drawer', 'compartment', 'cubby']);
     const sortedForRapid = allLocations.slice().sort((a, b) => {
-      const aIsBin = getLocType(a) === 'bin' ? 0 : 1;
-      const bIsBin = getLocType(b) === 'bin' ? 0 : 1;
+      const aIsBin = leafTypes.has(getLocType(a)) ? 0 : 1;
+      const bIsBin = leafTypes.has(getLocType(b)) ? 0 : 1;
       if (aIsBin !== bIsBin) return aIsBin - bIsBin;
       return formatHumanPath(a.full_path).localeCompare(formatHumanPath(b.full_path));
     });
@@ -385,18 +411,39 @@ export function populateStorageParentDropdown(kind, selectedParentId = null, exc
       parentSelect.appendChild(opt);
     }
 
-    for (const starter of getStarterSuggestions()) {
+    const namedRoomIds = new Set(state.namedRooms.map(r => r.id));
+    const nestedRooms = Array.from(state.locationMap.values())
+      .filter(l => l.parent_id && !namedRoomIds.has(l.id) && !isUnknownPlaceholder(l)
+        && (getLocType(l) === 'room' || getLocType(l) === 'site'))
+      .sort((a, b) => formatHumanPath(a.full_path).localeCompare(formatHumanPath(b.full_path)));
+    for (const room of nestedRooms) {
+      if (excludeId && (room.id === excludeId || getLocationAncestors(room.id).some(a => a.id === excludeId))) continue;
       const opt = document.createElement('option');
-      opt.value = `__starter__:${starter.name}:${starter.emoji}`;
-      opt.textContent = `${starter.emoji} ${starter.name}`;
+      opt.value = room.id;
+      opt.textContent = `${getRoomEmoji(room)} ${formatHumanPath(room.full_path)}`;
       parentSelect.appendChild(opt);
     }
   } else if (kind === 'drawer') {
+    const containerIds = new Set(state.containers.map(c => c.id));
     for (const c of state.containers) {
-      if (excludeId && c.id === excludeId) continue;
+      if (excludeId && (c.id === excludeId || getLocationAncestors(c.id).some(a => a.id === excludeId))) continue;
       const opt = document.createElement('option');
       opt.value = c.id;
       opt.textContent = formatHumanPath(c.full_path);
+      parentSelect.appendChild(opt);
+    }
+    const subParents = Array.from(state.locationMap.values())
+      .filter(l => {
+        if (isUnknownPlaceholder(l) || containerIds.has(l.id)) return false;
+        const lt = getLocType(l);
+        return lt !== 'room' && lt !== 'site';
+      })
+      .sort((a, b) => formatHumanPath(a.full_path).localeCompare(formatHumanPath(b.full_path)));
+    for (const sp of subParents) {
+      if (excludeId && (sp.id === excludeId || getLocationAncestors(sp.id).some(a => a.id === excludeId))) continue;
+      const opt = document.createElement('option');
+      opt.value = sp.id;
+      opt.textContent = formatHumanPath(sp.full_path);
       parentSelect.appendChild(opt);
     }
     for (const room of state.namedRooms) {
@@ -410,7 +457,16 @@ export function populateStorageParentDropdown(kind, selectedParentId = null, exc
   if (selectedParentId) {
     const parentNode = state.locationMap.get(selectedParentId);
     if (parentNode && !isUnknownPlaceholder(parentNode)) {
-      parentSelect.value = String(selectedParentId);
+      const value = String(selectedParentId);
+      // Keep the current parent selectable even if the filters above excluded it;
+      // otherwise the select falls back to '' and saving silently detaches the location.
+      if (!Array.from(parentSelect.options).some(o => o.value === value)) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = formatHumanPath(parentNode.full_path);
+        parentSelect.appendChild(opt);
+      }
+      parentSelect.value = value;
     }
   }
 }
@@ -418,12 +474,13 @@ export function populateStorageParentDropdown(kind, selectedParentId = null, exc
 export function updateNavStateAndCounts() {
   const isPlaces = state.activeTab === 'places';
   const isItems = state.activeTab === 'items';
+  const isCapture = state.activeTab === 'touch-capture';
 
   document.getElementById('rail-nav-places')?.classList.toggle('active', isPlaces);
   document.getElementById('rail-nav-items')?.classList.toggle('active', isItems);
 
-  document.getElementById('mobile-nav-places')?.classList.toggle('active', isPlaces);
-  document.getElementById('mobile-nav-items')?.classList.toggle('active', isItems);
+  document.getElementById('mobile-nav-places')?.classList.toggle('active', !isCapture);
+  document.getElementById('mobile-nav-capture')?.classList.toggle('active', isCapture);
 
   let totalDrawers = 0;
   for (const c of state.containers) {
@@ -437,13 +494,84 @@ export function updateNavStateAndCounts() {
   if (drawEl) drawEl.textContent = String(totalDrawers);
 }
 
-export async function loadAllData(useInitialRoute = false) {
+let loadAllDataSeq = 0;
+let hasCompletedInitialLoad = false;
+let initialRetryTimer = null;
+let initialRetryCount = 0;
+const MAX_INITIAL_RETRIES = 20;
+const INITIAL_RETRY_DELAY_MS = 1500;
+
+function renderBootLoadingState(title, subtitle, showRetry = false) {
+  if (typeof document === 'undefined') return;
+  const ws = document.getElementById('app-workspace');
+  if (!ws) return;
+
+  let container = document.getElementById('app-boot-loading');
+  if (!container) {
+    ws.innerHTML = '';
+    container = document.createElement('div');
+    container.id = 'app-boot-loading';
+    container.className = 'app-boot-loading';
+    container.setAttribute('role', 'status');
+    container.setAttribute('aria-live', 'polite');
+
+    const spinner = document.createElement('div');
+    spinner.className = 'app-boot-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'app-boot-title';
+
+    const subEl = document.createElement('div');
+    subEl.id = 'app-boot-sub';
+    subEl.className = 'app-boot-sub';
+
+    container.append(spinner, titleEl, subEl);
+    ws.appendChild(container);
+  }
+
+  const spinnerEl = container.querySelector('.app-boot-spinner');
+  if (spinnerEl) spinnerEl.style.display = showRetry ? 'none' : '';
+  const titleEl = container.querySelector('.app-boot-title');
+  if (titleEl) titleEl.textContent = title;
+  const subEl = container.querySelector('.app-boot-sub');
+  if (subEl) subEl.textContent = subtitle;
+
+  let retryBtn = container.querySelector('.app-boot-retry');
+  if (showRetry) {
+    if (!retryBtn) {
+      retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'btn btn-primary app-boot-retry';
+      retryBtn.textContent = 'Retry now';
+      retryBtn.addEventListener('click', () => {
+        initialRetryCount = 0;
+        renderBootLoadingState('Loading inventory...', 'Connecting to WIMS server', false);
+        loadAllData();
+      });
+      container.appendChild(retryBtn);
+    }
+  } else if (retryBtn) {
+    retryBtn.remove();
+  }
+}
+
+export async function loadAllData() {
+  const reqSeq = ++loadAllDataSeq;
+  if (initialRetryTimer) {
+    clearTimeout(initialRetryTimer);
+    initialRetryTimer = null;
+  }
+
   try {
     const [items, locations] = await Promise.all([
-      apiGet('/api/v1/items?limit=500', 'Could not load items.'),
+      apiGet('/api/v1/items?limit=20000', 'Could not load items.'),
       apiGet('/api/v1/locations/tree', 'Could not load rooms and containers.')
     ]);
+    if (reqSeq !== loadAllDataSeq) return;
 
+    hasCompletedInitialLoad = true;
+    initialRetryCount = 0;
     state.items = items;
     state.locations = locations;
 
@@ -453,10 +581,36 @@ export async function loadAllData(useInitialRoute = false) {
     updateNavStateAndCounts();
 
     if (typeof state.onWorkspaceRefresh === 'function') {
-      state.onWorkspaceRefresh(useInitialRoute);
+      state.onWorkspaceRefresh();
     }
   } catch (err) {
+    if (reqSeq !== loadAllDataSeq) return;
     console.error('Data load error:', err);
-    showToast('Could not load your items: ' + err.message, 'error');
+
+    const msg = (err && err.message) ? err.message : '';
+    const isConnectionError = msg.startsWith('Cannot reach the server') || msg.startsWith('Request timed out');
+
+    if (!hasCompletedInitialLoad && isConnectionError && initialRetryCount < MAX_INITIAL_RETRIES) {
+      initialRetryCount += 1;
+      renderBootLoadingState(
+        'Starting WIMS...',
+        `Waiting for server to come up (attempt ${initialRetryCount}/${MAX_INITIAL_RETRIES})`,
+        false
+      );
+      initialRetryTimer = setTimeout(() => {
+        initialRetryTimer = null;
+        loadAllData();
+      }, INITIAL_RETRY_DELAY_MS);
+      return;
+    }
+
+    if (!hasCompletedInitialLoad) {
+      renderBootLoadingState(
+        'Unable to connect to WIMS server',
+        msg || 'Make sure the server is running and try again.',
+        true
+      );
+    }
+    showToast('Could not load your items: ' + msg, 'error');
   }
 }

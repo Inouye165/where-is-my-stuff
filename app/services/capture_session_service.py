@@ -1,13 +1,15 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from io import BytesIO
 import secrets
 from threading import Lock
 from typing import Dict, List, Optional
-from fastapi import status
-import qrcode
+from fastapi import UploadFile, status
+from sqlalchemy.orm import Session
 from app.core.exceptions import AppError, NotFoundError
-from app.core.network import resolve_effective_base_url
+from app.core.network import build_qr_png, resolve_effective_base_url
+from app.repositories.location_repository import location_repository
+from app.services.location_service import location_service
+from app.services.photo_service import photo_service
 
 
 @dataclass
@@ -19,10 +21,6 @@ class CaptureSession:
     location_id: Optional[int] = None
     status: str = "pending"
     photos: List[dict] = field(default_factory=list)
-
-    @property
-    def photo(self) -> Optional[dict]:
-        return self.photos[-1] if self.photos else None
 
 
 class CaptureSessionService:
@@ -75,6 +73,18 @@ class CaptureSessionService:
             "qr_url": f"/api/v1/photos/capture-sessions/{token}/qr",
         }
 
+    @staticmethod
+    def _snapshot(sess: CaptureSession) -> CaptureSession:
+        return CaptureSession(
+            token=sess.token,
+            label=sess.label,
+            created_at=sess.created_at,
+            expires_at=sess.expires_at,
+            location_id=sess.location_id,
+            status=sess.status,
+            photos=[dict(p) for p in sess.photos],
+        )
+
     def get_session(self, token: str) -> CaptureSession:
         with self._lock:
             sess = self._sessions.get(token)
@@ -82,7 +92,7 @@ class CaptureSessionService:
                 raise NotFoundError("Capture session not found.")
             if datetime.now(timezone.utc) > sess.expires_at and sess.status == "pending":
                 sess.status = "expired"
-            return sess
+            return self._snapshot(sess)
 
     def require_active_session(self, token: str) -> CaptureSession:
         sess = self.get_session(token)
@@ -107,8 +117,38 @@ class CaptureSessionService:
                     error_code="session_expired",
                 )
             sess.status = "uploaded"
-            sess.photos.append(photo_result)
-            return sess
+            sess.photos.append(dict(photo_result))
+            return self._snapshot(sess)
+
+    def process_upload(self, db: Session, token: str, file: UploadFile) -> dict:
+        sess = self.require_active_session(token)
+        result = photo_service.process_and_save(file)
+        photo_service.schedule_rollback_cleanup(db, result["original_path"], result.get("thumbnail_path"))
+
+        attached_photo_id: Optional[int] = None
+        if sess.location_id is not None and location_repository.get_by_id(db, sess.location_id) is not None:
+            attached = location_service.attach_photo(
+                db=db,
+                location_id=sess.location_id,
+                photo_path=result["original_path"],
+                thumbnail_path=result.get("thumbnail_path"),
+                photo_type="container",
+            )
+            attached_photo_id = attached.id
+            db.commit()
+
+        try:
+            self.mark_uploaded(token, result)
+        except Exception:
+            if attached_photo_id is not None and sess.location_id is not None:
+                location_service.delete_photo(db, sess.location_id, attached_photo_id)
+                db.commit()
+            else:
+                photo_service.delete_upload_url(result["original_path"])
+                photo_service.delete_upload_url(result.get("thumbnail_path"))
+            raise
+
+        return result
 
     def generate_qr_png(
         self,
@@ -119,19 +159,7 @@ class CaptureSessionService:
         self.require_active_session(token)
         effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
         capture_url = f"{effective_base}/capture.html?token={token}"
-
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_M,
-            box_size=10,
-            border=2,
-        )
-        qr.add_data(capture_url)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
+        return build_qr_png(capture_url)
 
 
 capture_session_service = CaptureSessionService()

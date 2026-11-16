@@ -14,9 +14,13 @@ export function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+// Output is only safe inside a single-quoted JS string within an HTML attribute
+// (e.g. onclick="fn('${escapeJsStr(x)}')"). The browser HTML-decodes the attribute
+// before running it, so '&' must be entity-escaped or '&#39;' would break out.
 export function escapeJsStr(str) {
   if (str === null || str === undefined || str === '') return '';
   return String(str)
+    .replace(/&/g, '&amp;')
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'")
     .replace(/"/g, '&quot;')

@@ -4,7 +4,18 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.schemas.audit import AuditVerifyRequest
 from app.schemas.common import ItemSortOrder, ItemStatus
-from app.schemas.item import ItemAttachmentRead, ItemBulkCreate, ItemCreate, ItemDetailRead, ItemRead, ItemUpdate
+from app.schemas.item import (
+    ItemAttachmentRead,
+    ItemBulkCreate,
+    ItemCreate,
+    ItemDetailRead,
+    ItemGroupIntoBoxRequest,
+    ItemGroupIntoBoxResponse,
+    ItemRead,
+    ItemUpdate,
+)
+from app.core.exceptions import NotFoundError
+from app.services.image_lookup_service import find_and_import_image
 from app.services.inventory_service import inventory_service
 
 router = APIRouter(prefix="/items", tags=["Items"])
@@ -22,13 +33,18 @@ def create_items_bulk(data: ItemBulkCreate, db: Session = Depends(get_db)) -> Li
     return inventory_service.serialize_many(db, items)
 
 
+@router.post("/group-into-box", response_model=ItemGroupIntoBoxResponse, status_code=status.HTTP_201_CREATED)
+def group_items_into_box(data: ItemGroupIntoBoxRequest, db: Session = Depends(get_db)) -> ItemGroupIntoBoxResponse:
+    return inventory_service.group_items_into_box(db, data)
+
+
 @router.get("", response_model=List[ItemRead])
 def list_items(
     category: Optional[str] = Query(default=None, max_length=80, description="Filter by category"),
     location_id: Optional[int] = Query(default=None, ge=1, description="Filter by direct location ID"),
     item_status: Optional[ItemStatus] = Query(default=None, alias="status", description="Filter by status"),
     sort: ItemSortOrder = Query(default=ItemSortOrder.last_seen_desc, description="Whitelisted sort order"),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=20000),
     db: Session = Depends(get_db),
 ) -> List[ItemRead]:
     status_val = item_status.value if item_status is not None else None
@@ -86,6 +102,30 @@ def upload_item_attachment(
 def delete_item_attachment(item_id: int, attachment_id: int, db: Session = Depends(get_db)) -> None:
     inventory_service.delete_attachment(db=db, item_id=item_id, attachment_id=attachment_id)
     return None
+
+
+@router.post("/{item_id}/find-image")
+async def find_and_import_item_image(item_id: int, db: Session = Depends(get_db)) -> dict:
+    item = inventory_service.get_detail(db, item_id)
+    name = item.name
+    part_number = item.serial_or_part_number
+    category = item.category
+
+    saved_path = await find_and_import_image(
+        name=name,
+        part_number=part_number,
+        category=category,
+    )
+    if not saved_path:
+        raise NotFoundError(f"No photo found online for '{name}'.")
+
+    updated = inventory_service.update(db, item_id, ItemUpdate(item_photo=saved_path))
+    item_read = inventory_service.to_read_schema(updated, db=db)
+    return {
+        "status": "ok",
+        "item_photo": saved_path,
+        "item": item_read.model_dump(mode="json"),
+    }
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

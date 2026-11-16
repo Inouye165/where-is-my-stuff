@@ -1,16 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.core.database import Base
+from app.core.database import Base, utc_now
 
 if TYPE_CHECKING:
     from app.models.audit import AuditLog
     from app.models.location import Location
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 class Item(Base):
@@ -34,10 +30,10 @@ class Item(Base):
     status: Mapped[str] = mapped_column(String(32), default="stored", nullable=False, index=True)
     status_note: Mapped[Optional[str]] = mapped_column(String(250), nullable=True)
 
-    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utc_now, onupdate=_utc_now, nullable=False, index=True
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False, index=True
     )
 
     location: Mapped[Optional["Location"]] = relationship("Location", back_populates="items")
@@ -69,6 +65,6 @@ class ItemAttachment(Base):
     attachment_type: Mapped[str] = mapped_column(String(32), nullable=False, default="document")
     title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utc_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
     item: Mapped["Item"] = relationship("Item", back_populates="attachments")

@@ -1,4 +1,3 @@
-import sys
 import uvicorn
 from app.core.config import settings
 from app.main import get_local_ip

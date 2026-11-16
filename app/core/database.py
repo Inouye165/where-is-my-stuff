@@ -1,9 +1,14 @@
+from datetime import datetime, timezone
 import sqlite3
 from typing import Any, Generator
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from app.core.config import settings
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -20,8 +25,6 @@ def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
         cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
-
-settings.init_directories()
 
 engine = create_engine(
     settings.DATABASE_URL,

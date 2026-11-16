@@ -12,7 +12,6 @@ function runGuarded(fn) {
   guardNavigation(fn);
 }
 import {
-  closeSlideDrawer,
   renderCatalogView,
   renderDrawerView,
   renderHomePlacesView,
@@ -21,6 +20,7 @@ import {
   renderRoomView,
   renderStorageUnitView
 } from './views.js';
+import { navToTouchCapture, renderTouchCaptureView } from './mobile-views.js';
 
 const LAST_ROUTE_KEY = 'wims_last_route';
 const LAST_SCROLL_KEY = 'wims_last_scroll';
@@ -85,6 +85,13 @@ export function handleHashRouting() {
   } else if (hash.startsWith('#/item/')) {
     const id = parseInt(hash.replace('#/item/', ''), 10);
     if (id) navToItem(id, false);
+  } else if (hash === '#/touch-capture' || hash.startsWith('#/touch-capture/')) {
+    const rest = hash.replace('#/touch-capture', '').replace(/^\//, '');
+    const parts = rest ? rest.split('/') : [];
+    const rId = parts[0] === 'needs-home' ? 'needs-home' : (parts[0] ? parseInt(parts[0], 10) : null);
+    const uId = parts[1] ? parseInt(parts[1], 10) : null;
+    const dId = parts[2] ? parseInt(parts[2], 10) : null;
+    navToTouchCapture(rId, uId, dId, false);
   }
 }
 
@@ -118,6 +125,8 @@ export function switchAppTab(tabName, recordHistory = true) {
 export function navToHome() {
   runGuarded(() => {
     state.homeSearchQuery = '';
+    state.homeSearchResults = null;
+    state.homeSearchLoading = false;
     switchAppTab('places', true);
   });
 }
@@ -199,7 +208,6 @@ export function navToDrawer(drawerId, recordHistory = true) {
 
 export function navToItem(itemId, recordHistory = true) {
   runGuarded(() => {
-    closeSlideDrawer();
     state.activeTab = 'items';
     state.currentView = 'item';
     state.currentLocationId = itemId;
@@ -225,7 +233,6 @@ export function locateDrawerInUnit(unitId, drawerId) {
   }
   if (!resolvedUnitId) return;
 
-  closeSlideDrawer();
   navToStorageUnit(resolvedUnitId, true, drawerId);
 
   clearTimeout(state.spotlightTimer);
@@ -251,6 +258,8 @@ export function handleGlobalBack() {
         navToDrawer(prev.id, false);
       } else if (prev.view === 'item' && prev.id) {
         navToItem(prev.id, false);
+      } else if (prev.view === 'touch-capture') {
+        navToTouchCapture(prev.roomId || null, prev.unitId || null, prev.drawerId || null, false);
       } else {
         switchAppTab(prev.tab || 'places', false);
       }
@@ -304,6 +313,8 @@ export function renderCurrentWorkspace() {
     renderDrawerView(state.currentLocationId);
   } else if (state.currentView === 'item' && state.currentLocationId) {
     renderItemView(state.currentLocationId);
+  } else if (state.currentView === 'touch-capture') {
+    renderTouchCaptureView();
   } else if (state.activeTab === 'items') {
     renderCatalogView();
   } else {

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 import re
 from typing import List, Optional
 from fastapi import UploadFile
@@ -7,37 +8,27 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.models.audit import AuditLog
 from app.models.item import Item, ItemAttachment
-from app.models.location import Location
+from app.models.location import Location, LocationPhoto
 from app.repositories.item_repository import item_repository
 from app.repositories.location_repository import location_repository
 from app.schemas.audit import AuditLogRead
 from app.schemas.common import ItemSortOrder
-from app.schemas.item import ItemAttachmentRead, ItemBulkCreate, ItemCreate, ItemDetailRead, ItemRead, ItemUpdate, LocationPhotos
-from app.schemas.location import Breadcrumb
+from app.schemas.item import (
+    ItemAttachmentRead,
+    ItemBulkCreate,
+    ItemCreate,
+    ItemDetailRead,
+    ItemGroupIntoBoxRequest,
+    ItemGroupIntoBoxResponse,
+    ItemRead,
+    ItemUpdate,
+    LocationPhotos,
+)
 from app.services.location_service import LocationHierarchySnapshot, location_service
 from app.services.photo_service import photo_service
 
 
 class InventoryService:
-    @staticmethod
-    def _resolve_location_photos_fallback(loc: Optional[Location]) -> LocationPhotos:
-        if not loc:
-            return LocationPhotos()
-
-        container_photo: Optional[str] = None
-        context_photo: Optional[str] = None
-        curr = loc
-        visited: set[int] = set()
-        while curr and curr.id not in visited:
-            visited.add(curr.id)
-            if not container_photo and curr.container_photo:
-                container_photo = curr.container_photo
-            if not context_photo and curr.context_photo:
-                context_photo = curr.context_photo
-            curr = curr.parent
-
-        return LocationPhotos(container_photo=container_photo, context_photo=context_photo)
-
     @classmethod
     def _serialize_with_snapshot(cls, item: Item, snapshot: LocationHierarchySnapshot) -> ItemRead:
         loc_id = item.location_id
@@ -71,43 +62,16 @@ class InventoryService:
     def serialize_many(cls, db: Session, items: List[Item]) -> List[ItemRead]:
         if not items:
             return []
-        snapshot = location_service.build_snapshot(db, include_counts=False)
+        snapshot = location_service.build_snapshot(db, include_counts=False, include_photos=False)
         return [cls._serialize_with_snapshot(it, snapshot) for it in items]
 
     @classmethod
-    def to_read_schema(cls, item: Item, db: Optional[Session] = None) -> ItemRead:
-        if db is not None:
-            snapshot = location_service.build_snapshot(db, include_counts=False)
-            return cls._serialize_with_snapshot(item, snapshot)
-
-        loc = item.location
-        crumbs = [Breadcrumb(**b) for b in loc.get_breadcrumbs()] if loc else []
-        loc_photos = cls._resolve_location_photos_fallback(loc)
-
-        return ItemRead(
-            id=item.id,
-            name=item.name,
-            description=item.description,
-            category=item.category,
-            tags=item.tags,
-            quantity=item.quantity,
-            unit=item.unit,
-            serial_or_part_number=item.serial_or_part_number,
-            item_photo=item.item_photo,
-            status=getattr(item, "status", "stored") or "stored",
-            status_note=getattr(item, "status_note", None),
-            location_id=item.location_id,
-            last_seen_at=item.last_seen_at,
-            created_at=item.created_at,
-            updated_at=item.updated_at,
-            location_name=loc.name if loc else None,
-            location_full_path=loc.full_path if loc else None,
-            location_breadcrumbs=crumbs,
-            location_photos=loc_photos,
-        )
+    def to_read_schema(cls, item: Item, db: Session) -> ItemRead:
+        snapshot = location_service.build_snapshot(db, include_counts=False, include_photos=False)
+        return cls._serialize_with_snapshot(item, snapshot)
 
     @classmethod
-    def to_detail_schema(cls, item: Item, db: Optional[Session] = None) -> ItemDetailRead:
+    def to_detail_schema(cls, item: Item, db: Session) -> ItemDetailRead:
         base = cls.to_read_schema(item, db=db)
         logs = [
             AuditLogRead(
@@ -233,11 +197,19 @@ class InventoryService:
                         name = line[: m3.start()].strip()
                         name = re.sub(r"[\(\-\–]+$", "", name).strip()
 
-            name = name.strip()
+            description: Optional[str] = None
+            if " — " in name:
+                head, tail = name.split(" — ", 1)
+                if head.strip():
+                    name = head.strip()
+                    description = tail.strip()[:20_000] or None
+
+            name = name.strip()[:160]
             if name:
                 items.append(
                     ItemCreate(
                         name=name,
+                        description=description,
                         quantity=qty,
                         unit=unit,
                         location_id=location_id,
@@ -245,6 +217,31 @@ class InventoryService:
                     )
                 )
         return items
+
+    @staticmethod
+    def _build_assortment_tags(items: List[ItemCreate]) -> Optional[str]:
+        seen: set[str] = set()
+        tokens: List[str] = []
+        for it in items:
+            candidates: List[str] = []
+            if it.serial_or_part_number and it.serial_or_part_number.strip():
+                candidates.append(it.serial_or_part_number.strip())
+            if it.name and it.name.strip():
+                candidates.append(it.name.strip())
+            if it.category and it.category.strip():
+                candidates.append(it.category.strip())
+            for cand in candidates:
+                norm = cand.lower()
+                if norm not in seen:
+                    seen.add(norm)
+                    tokens.append(cand)
+        acc = ""
+        for tok in tokens:
+            nxt = f"{acc}, {tok}" if acc else tok
+            if len(nxt) > 300:
+                break
+            acc = nxt
+        return acc or None
 
     @classmethod
     def bulk_create(cls, db: Session, data: ItemBulkCreate) -> List[Item]:
@@ -271,9 +268,192 @@ class InventoryService:
         if not items_to_create:
             raise BadRequestError("No items provided to create.")
 
+        if data.save_mode == "box":
+            group_name = (data.assortment_name or "").strip()[:120]
+            if not group_name:
+                group_name = (f"Assorted {default_cat}" if default_cat else f"Box in {loc.name}")[:120]
+            group_photo = data.assortment_photo
+            child_box = Location(
+                name=group_name,
+                location_type="box",
+                parent_id=loc.id,
+                container_photo=group_photo,
+            )
+            db.add(child_box)
+            db.flush()
+
+            reassigned_paths: set[str] = set()
+            if data.source_photo_ids:
+                src_ids = [int(pid) for pid in data.source_photo_ids if pid]
+                if src_ids:
+                    src_rows = list(
+                        db.execute(
+                            select(LocationPhoto)
+                            .where(
+                                LocationPhoto.location_id == loc.id,
+                                LocationPhoto.id.in_(src_ids),
+                            )
+                            .order_by(LocationPhoto.id.asc())
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    for row in src_rows:
+                        row.location_id = child_box.id
+                        if row.photo_path:
+                            reassigned_paths.add(row.photo_path)
+                    if src_rows and not child_box.container_photo:
+                        child_box.container_photo = src_rows[0].photo_path
+                    db.flush()
+
+                    if reassigned_paths:
+                        remaining_parent_photos = list(
+                            db.execute(
+                                select(LocationPhoto)
+                                .where(LocationPhoto.location_id == loc.id)
+                                .order_by(LocationPhoto.created_at.desc(), LocationPhoto.id.desc())
+                            )
+                            .scalars()
+                            .all()
+                        )
+                        if loc.container_photo in reassigned_paths:
+                            next_cont = next(
+                                (p.photo_path for p in remaining_parent_photos if p.photo_type != "context"),
+                                None,
+                            )
+                            loc.container_photo = next_cont or (
+                                remaining_parent_photos[0].photo_path if remaining_parent_photos else None
+                            )
+                        if loc.context_photo in reassigned_paths:
+                            loc.context_photo = next(
+                                (p.photo_path for p in remaining_parent_photos if p.photo_type == "context"),
+                                None,
+                            )
+                        db.flush()
+
+            if group_photo and group_photo not in reassigned_paths:
+                thumb = (
+                    f"/uploads/thumbnails/{Path(group_photo).stem}_thumb.webp"
+                    if group_photo.startswith("/uploads/originals/")
+                    else None
+                )
+                location_service.attach_photo(
+                    db=db,
+                    location_id=child_box.id,
+                    photo_path=group_photo,
+                    thumbnail_path=thumb,
+                    photo_type="container",
+                )
+
+            box_items = [
+                cls.create(db, it_data.model_copy(update={"location_id": child_box.id}))
+                for it_data in items_to_create
+            ]
+            db.flush()
+            return box_items
+
+        if data.save_mode == "assortment":
+            part_lines: List[str] = []
+            for it in items_to_create:
+                qty_prefix = f"{it.quantity}x " if (it.quantity is not None and it.quantity > 0) else ""
+                part_suffix = ""
+                if it.serial_or_part_number and it.serial_or_part_number.strip():
+                    pn = it.serial_or_part_number.strip()
+                    if pn.lower() not in it.name.lower():
+                        part_suffix = f" [{pn}]"
+                spec_suffix = ""
+                if it.description and it.description.strip():
+                    spec_suffix = f" — {it.description.strip()}"
+                part_lines.append(f"• {qty_prefix}{it.name.strip()}{part_suffix}{spec_suffix}")
+
+            description_text = ("Parts List:\n" + "\n".join(part_lines))[:20_000]
+            group_name = (data.assortment_name or "").strip()[:160]
+            if not group_name:
+                group_name = (f"Assorted {default_cat}" if default_cat else f"Assorted Parts ({loc.name})")[:160]
+            group_cat = default_cat or next((it.category for it in items_to_create if it.category), None)
+            group_photo = data.assortment_photo or next((it.item_photo for it in items_to_create if it.item_photo), None)
+            tags_str = cls._build_assortment_tags(items_to_create)
+
+            kit_data = ItemCreate(
+                name=group_name,
+                description=description_text,
+                category=group_cat,
+                tags=tags_str,
+                quantity=1,
+                unit="kit",
+                item_photo=group_photo,
+                location_id=data.location_id,
+                status="stored",
+            )
+            created_kit = cls.create(db, kit_data)
+            db.flush()
+            return [created_kit]
+
         created_items = [cls.create(db, it_data) for it_data in items_to_create]
         db.flush()
         return created_items
+
+    @classmethod
+    def group_items_into_box(cls, db: Session, data: ItemGroupIntoBoxRequest) -> ItemGroupIntoBoxResponse:
+        parent = location_repository.get_by_id(db, data.parent_location_id)
+        if not parent:
+            raise NotFoundError(f"Parent location {data.parent_location_id} not found.")
+
+        unique_ids = list(dict.fromkeys(data.item_ids))
+        items = list(db.execute(select(Item).where(Item.id.in_(unique_ids))).scalars().all())
+        if not items:
+            raise BadRequestError("No matching items found to move.")
+
+        if data.target_box_id is not None:
+            box = location_repository.get_by_id(db, data.target_box_id)
+            if not box:
+                raise NotFoundError(f"Target box {data.target_box_id} not found.")
+        else:
+            raw_name = (data.box_name or "").strip()[:120]
+            if not raw_name:
+                raise BadRequestError("Please enter a Box or Kit name.")
+            photo = data.box_photo or next((it.item_photo for it in items if it.item_photo), None)
+            box = Location(
+                name=raw_name,
+                location_type="box",
+                parent_id=parent.id,
+                container_photo=photo,
+            )
+            db.add(box)
+            db.flush()
+            if photo:
+                thumb = (
+                    f"/uploads/thumbnails/{Path(photo).stem}_thumb.webp"
+                    if photo.startswith("/uploads/originals/")
+                    else None
+                )
+                location_service.attach_photo(
+                    db=db,
+                    location_id=box.id,
+                    photo_path=photo,
+                    thumbnail_path=thumb,
+                    photo_type="container",
+                )
+
+        now = datetime.now(timezone.utc)
+        for item in items:
+            if item.location_id != box.id:
+                item.location_id = box.id
+                item.last_seen_at = now
+                item.updated_at = now
+                db.add(
+                    AuditLog(
+                        item_id=item.id,
+                        location_id=box.id,
+                        action="moved",
+                        notes=f"Moved into {box.name}",
+                        recorded_at=now,
+                    )
+                )
+
+        db.flush()
+        box_read = location_service.get_read_by_id(db, box.id)
+        return ItemGroupIntoBoxResponse(box=box_read, moved_count=len(items))
 
     @classmethod
     def update(cls, db: Session, item_id: int, data: ItemUpdate) -> Item:
@@ -347,7 +527,7 @@ class InventoryService:
         db.refresh(item)
 
         if old_photo and old_photo != item.item_photo:
-            photo_service.cleanup_unreferenced_photo(db, old_photo)
+            photo_service.schedule_photo_cleanup(db, old_photo)
 
         return item
 
@@ -397,10 +577,19 @@ class InventoryService:
         if not item:
             raise NotFoundError("Item not found.")
         old_photo = item.item_photo
+        attachment_files = list(
+            db.execute(
+                select(ItemAttachment.file_path, ItemAttachment.thumbnail_path).where(
+                    ItemAttachment.item_id == item_id
+                )
+            ).all()
+        )
         db.delete(item)
         db.flush()
         if old_photo:
-            photo_service.cleanup_unreferenced_photo(db, old_photo)
+            photo_service.schedule_photo_cleanup(db, old_photo)
+        for file_path, thumb_path in attachment_files:
+            photo_service.schedule_attachment_cleanup(db, file_path, thumb_path)
 
     @classmethod
     def list_attachments(cls, db: Session, item_id: int) -> List[ItemAttachment]:
@@ -429,6 +618,7 @@ class InventoryService:
         if not item:
             raise NotFoundError("Item not found.")
         meta = photo_service.process_and_save_attachment(file)
+        photo_service.schedule_rollback_cleanup(db, meta["file_path"], meta.get("thumbnail_path"))
         att = ItemAttachment(
             item_id=item.id,
             file_path=meta["file_path"],
@@ -442,7 +632,7 @@ class InventoryService:
         db.add(att)
         if att.attachment_type == "image" and not item.item_photo:
             item.item_photo = att.file_path
-        db.commit()
+        db.flush()
         db.refresh(att)
         return att
 
@@ -462,11 +652,10 @@ class InventoryService:
         old_path = att.file_path
         old_thumb = att.thumbnail_path
         db.delete(att)
-        db.flush()
         if item.item_photo == old_path:
             item.item_photo = None
-        db.commit()
-        photo_service.delete_attachment_files(db, old_path, old_thumb)
+        db.flush()
+        photo_service.schedule_attachment_cleanup(db, old_path, old_thumb)
 
 
 inventory_service = InventoryService()

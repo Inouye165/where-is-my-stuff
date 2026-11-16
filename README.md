@@ -1,55 +1,71 @@
-# WhereIsMyStuff (WIMS) - Network Inventory System
+# WhereIsMyStuff (WIMS) — Network Inventory System
 
-A self-hosted, modular physical inventory tracker with dual-photo visual verification, hierarchical location modeling (Room, Shed, Public Storage, Bin), and a "Last Seen" presence audit trail.
+A self-hosted, local-network physical inventory tracker built with FastAPI, SQLAlchemy 2.0, SQLite (WAL), and a zero-build modular ES6 web interface. WIMS pairs hierarchical spatial organization and interactive 2D container grids with dual-photo visual verification, QR camera handoff, optional local/cloud AI vision cataloging, and a UTC presence audit trail.
 
 ---
 
 ## Quick Start
 
-### 1. Launch the Server
-```bash
-# Using the virtual environment
-.venv\Scripts\python run.py
+### 1. Set Up the Environment
+```powershell
+python -m venv .venv
+.\.venv\Scripts\pip.exe install -r requirements.txt
+Copy-Item .env.example .env  # Optional: customize port, LAN URL, or AI vision models
 ```
 
-The terminal will display:
-```
-=================================================================
- WhereIsMyStuff (WIMS) Inventory
-=================================================================
- * Localhost access:        http://localhost:8000
- * Local Network (Phone):   http://192.168.x.x:8000
- * Interactive API Docs:    http://192.168.x.x:8000/docs
-=================================================================
+### 2. Start the Server
+
+Using the PowerShell management script (background process with health verification):
+```powershell
+.\inventory.ps1          # Start server (or report status if already running)
+.\inventory.ps1 -Open    # Start server and open http://localhost:8000 in browser
+.\inventory.ps1 status   # Check PID, health, and LAN URL
+.\inventory.ps1 stop     # Stop running server
 ```
 
-### 2. Connect from Any Device on Your Network
-- Open `http://<your-lan-ip>:8000` on your smartphone, tablet, or laptop while connected to your home Wi-Fi.
-- Use your phone's camera directly through the web UI to snap:
-  1. **Container Photo**: What the bin, drawer, or tote looks like on the outside.
-  2. **Spot Photo**: Where the bin or shelf is located in the room or storage area.
-  3. **Item Photo**: Optional close-up of the component or tool itself.
+Or run directly in the foreground:
+```powershell
+.\.venv\Scripts\python.exe run.py
+```
+
+By default, WIMS binds to `0.0.0.0:8000`:
+- **Desktop (Localhost):** `http://localhost:8000`
+- **Phone / Tablet on Wi-Fi:** `http://<your-lan-ip>:8000`
+- **OpenAPI / Swagger Docs:** `http://localhost:8000/docs`
 
 ---
 
 ## Key Capabilities
 
-- **Instant Search**: Type `"esp32"`, `"stepper"`, `"picoscope"`, or `"driver"` to retrieve exact locations and drawers in under 5 milliseconds.
-- **Dual Visual Confirmation**:
-  - **Where it's stored**: Wide-angle photo of the shelf, rack, or room.
-  - **What the bin looks like**: Close-up of the tote, drawer, or organizer exterior.
-- **"Mark Verified" Button**: Single-tap action to record that you physically saw the item in that spot today, preventing ghost inventory.
-- **Audit & Movement History**: Every relocation, audit touch, or modification is recorded with UTC timestamps.
-- **Hierarchical Locations**: Infinite-depth tree (`Site -> Room/Area -> Shelf/Rack -> Bin/Drawer`).
-- **Headless & Modular API**: Standard FastAPI REST API documented via Swagger/OpenAPI at `/docs`.
+- **Hierarchical Spaces & Container Grid Designer**: Organize spaces, shelves, containers, bins, drawers, compartments, and cubbies to arbitrary depth. Model multi-drawer cabinets visually with customizable `rows × columns` grids, merged multi-span drawers, section dividers, and click-to-locate highlighting.
+- **Dual-Photo Context & Perspective Editor**:
+  - **Context Photo (`context_photo`)**: Wide shot showing where a container or shelf sits.
+  - **Container Gallery (`container_photo` + `LocationPhoto`)**: Exterior and interior shots of bins and drawers.
+  - **Item Photo & Attachments**: Close-up item photos (with crop, fine rotation, and 4-corner perspective straighten) plus attached datasheets, charts, and documents (`PDF`, `SVG`, `CSV`, `TXT`, `MD`, `JSON`, Office docs, `ZIP`).
+- **Desktop-to-Phone QR Camera Handoff**: Click any photo upload on desktop to display a temporary QR code; scan with a phone on the same Wi-Fi to snap and stream single or batch photos straight into the active form or drawer.
+- **AI Vision Drawer Scanning & Photo Search**: Detect items, quantities, specs, and bounding-box thumbnails from drawer photos using local **Ollama** (`qwen3-vl:8b` default, offline-capable) or optional **Gemini** / **OpenAI** APIs, with multi-line quick-entry text parsing (`4x M3 Brass Standoffs`, `Needle Nose Pliers`) always available without AI.
+- **Instant Search**: Plain-language keyword and synonym search across item names, part/serial numbers, categories, tags, notes, and recursive location paths (`/api/v1/search`), plus visual photo search (`/api/v1/search/photo`).
+- **"Seen Today" Presence Auditing**: One-tap verification updates `last_seen_at` and records immutable UTC entries in `audit_logs` across creations, moves, status updates, and inspections.
+- **Printable QR Labels & Online Backups**: Generate single or bulk printable QR label sheets (`/api/v1/locations/{id}/qr`) that deep-link directly to a container or drawer, and create verified hot SQLite snapshots via `POST /api/v1/system/backup`.
 
 ---
 
-## Running the Automated Test Suite
+## Configuration
 
-Strict test-driven testing and regression test suite:
-```bash
-.venv\Scripts\pytest -v
+Copy [`.env.example`](file:///d:/inventory/.env.example) to `.env` to configure:
+- Network binding (`HOST`, `PORT`, `PUBLIC_BASE_URL`, `CORS_ALLOWED_ORIGINS`)
+- Upload bounds (`MAX_IMAGE_UPLOAD_SIZE_MB`, `MAX_IMAGE_DIMENSION`, `THUMBNAIL_MAX_DIMENSION`, `MAX_IMAGE_PIXELS`)
+- Vision providers (`VISION_PROVIDER`, `OLLAMA_BASE_URL`, `OLLAMA_VISION_MODEL`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
+- Logging & backup retention (`LOG_LEVEL`, `BACKUP_RETENTION_COUNT`)
+
+See [`ARCHITECTURE.md`](file:///d:/inventory/ARCHITECTURE.md) for full details on layered architecture, database migrations, photo reference counting, and security controls.
+
+---
+
+## Running the Test Suite
+
+```powershell
+.\.venv\Scripts\pytest.exe -v
 ```
-Tests run against an isolated in-memory SQLite database with foreign key enforcement and cleanup.
 
+All tests run against isolated in-memory or temporary SQLite databases with `PRAGMA foreign_keys = ON` and temporary upload directories—never touching `data/inventory.db`.

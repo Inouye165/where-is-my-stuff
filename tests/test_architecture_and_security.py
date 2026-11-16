@@ -254,7 +254,7 @@ def test_empty_state_has_no_fake_starter_rooms():
     root = Path(__file__).resolve().parent.parent / "app" / "static" / "js"
     state_js = (root / "state.js").read_text(encoding="utf-8")
     views_js = (root / "views.js").read_text(encoding="utf-8")
-    assert "No rooms added yet" in views_js
+    assert "No spaces added yet" in views_js
     assert "No items added yet" in views_js
     assert "for (const starter of getStarterSuggestions())" not in views_js
     assert "return [];" in state_js

@@ -4,10 +4,112 @@
  * variable drawer spans (merge/combine, resize, split), and section dividers.
  */
 import { apiPut } from './api.js';
-import { closeModal, escapeHtml, escapeJsStr, showToast, withSubmitLock } from './dom.js';
+import { renderSlotCarouselHtml, scrollSlotCarousel, syncAllSlotCarousels, syncSlotCarousel } from './carousel.js';
+import { escapeHtml, escapeJsStr, sanitizePhotoUrl, showToast, withSubmitLock } from './dom.js';
 import { lucideIcon } from './icons.js';
-import { loadAllData, state } from './state.js';
+import { getSubtreeItems, isUnknownPlaceholder, loadAllData, state } from './state.js';
 import { guardNavigation, registerGridUnsavedHooks } from './unsaved-guard.js';
+
+export { renderSlotCarouselHtml, scrollSlotCarousel, syncAllSlotCarousels, syncSlotCarousel };
+
+function getLocationOwnPhotos(loc) {
+  const list = [];
+  const seen = new Set();
+  const rawPhotos = Array.isArray(loc?.photos) ? loc.photos : [];
+  const primarySafe = sanitizePhotoUrl(loc?.container_photo || '');
+
+  if (primarySafe) {
+    const matched = rawPhotos.find(p => sanitizePhotoUrl(p.photo_path || '') === primarySafe);
+    seen.add(primarySafe);
+    list.push({
+      id: matched ? matched.id : null,
+      url: primarySafe,
+      thumb: matched ? (sanitizePhotoUrl(matched.thumbnail_path || '') || primarySafe) : primarySafe,
+      label: (matched && matched.caption) || loc?.name || 'Photo',
+    });
+  }
+
+  for (const p of rawPhotos) {
+    const url = sanitizePhotoUrl(p.photo_path || '');
+    if (url && !seen.has(url)) {
+      seen.add(url);
+      list.push({
+        id: p.id,
+        url,
+        thumb: sanitizePhotoUrl(p.thumbnail_path || '') || url,
+        label: p.caption || loc?.name || 'Photo',
+      });
+    }
+  }
+
+  const contextSafe = sanitizePhotoUrl(loc?.context_photo || '');
+  if (contextSafe && !seen.has(contextSafe)) {
+    seen.add(contextSafe);
+    list.push({
+      id: null,
+      url: contextSafe,
+      thumb: contextSafe,
+      label: loc?.name || 'Photo',
+    });
+  }
+  return list;
+}
+
+export function getSlotPhotos(drawer) {
+  if (!drawer) return [];
+  const list = [];
+  const seen = new Set();
+  const pushEntry = (entry) => {
+    if (!entry || !entry.url || seen.has(entry.url)) return;
+    seen.add(entry.url);
+    list.push(entry);
+  };
+
+  const collectContainers = (node) => {
+    const children = (node?.children || []).filter(c => !isUnknownPlaceholder(c));
+    for (const child of children) {
+      const childPhotos = getLocationOwnPhotos(child);
+      if (childPhotos.length > 0) {
+        const cover = childPhotos[0];
+        pushEntry({
+          url: cover.url,
+          thumb: cover.thumb,
+          label: child.name || cover.label,
+          navType: 'drawer',
+          navId: Number(child.id),
+        });
+      }
+      collectContainers(child);
+    }
+  };
+  collectContainers(drawer);
+
+  const directItems = (state.items || []).filter(
+    item => Number(item.location_id) === Number(drawer.id)
+  );
+  for (const it of directItems) {
+    const itemImg = sanitizePhotoUrl(it.item_photo || '');
+    if (itemImg && !itemImg.includes('_crop_')) {
+      pushEntry({
+        url: itemImg,
+        thumb: itemImg,
+        label: it.name || drawer.name || 'Item',
+        navType: 'item',
+        navId: Number(it.id),
+      });
+    }
+  }
+
+  for (const own of getLocationOwnPhotos(drawer)) {
+    pushEntry({
+      ...own,
+      navType: 'drawer',
+      navId: Number(drawer.id),
+    });
+  }
+
+  return list;
+}
 
 export function colToLetter(colIndex) {
   if (!colIndex || colIndex < 1 || colIndex > 26) return String(colIndex || '');
@@ -42,7 +144,7 @@ export function parseGridConfig(rawConfig) {
  * Computes CSS grid row start/end accounting for section divider tracks.
  * Header is CSS row 1. Data row `r` is preceded by `breaksBefore(r)` divider tracks.
  */
-function cssRowForDataRow(r, sectionBreaks) {
+export function cssRowForDataRow(r, sectionBreaks) {
   let breaksBefore = 0;
   for (const b of sectionBreaks) {
     if (b < r) breaksBefore += 1;
@@ -61,7 +163,6 @@ export function renderContainerGridHtml(unit, options = {}) {
     highlightDrawerId = null,
     compact = false,
     diagram = false,
-    closeSlideOnNav = false,
   } = options;
 
   const rows = Number(unit?.grid_rows) || 0;
@@ -88,9 +189,12 @@ export function renderContainerGridHtml(unit, options = {}) {
   }
 
   // Build explicit grid-template-rows
+  const isSingleCol = cols === 1 && !compact && !diagram;
   const rowTracks = ['auto']; // header row
   for (let r = 1; r <= rows; r++) {
-    rowTracks.push(diagram ? 'minmax(14px, 1fr)' : compact ? 'minmax(32px, auto)' : 'minmax(64px, auto)');
+    rowTracks.push(
+      diagram ? 'minmax(14px, 1fr)' : compact ? 'minmax(32px, auto)' : isSingleCol ? 'auto' : 'minmax(64px, auto)'
+    );
     if (sectionBreaks.includes(r)) {
       rowTracks.push(diagram ? '4px' : compact ? '8px' : '12px');
     }
@@ -137,13 +241,11 @@ export function renderContainerGridHtml(unit, options = {}) {
 
     const isHighlighted = highlightDrawerId !== null && Number(d.id) === Number(highlightDrawerId);
     const coord = formatSlotCoord(r0, c0, rs, cs);
-    const itemCount = state.items.filter(i => i.location_id === d.id).length;
+    const itemCount = getSubtreeItems(d.id).length || Number(d.total_item_count || 0);
     const safeId = Number(d.id);
     const onClickAttr = diagram
-      ? `${closeSlideOnNav ? 'closeSlideDrawer(); ' : ''}locateDrawerInUnit(${Number(unit.id)}, ${safeId})`
-      : closeSlideOnNav
-        ? `closeSlideDrawer(); navToDrawer(${safeId}, true)`
-        : `navToDrawer(${safeId}, true)`;
+      ? `locateDrawerInUnit(${Number(unit.id)}, ${safeId})`
+      : `navToDrawer(${safeId}, true)`;
 
     if (diagram) {
       return `
@@ -160,25 +262,52 @@ export function renderContainerGridHtml(unit, options = {}) {
       `;
     }
 
+    const slotPhotos = (!compact && !diagram) ? getSlotPhotos(d) : [];
+    const childBoxCount = (d.children || []).filter(c => !isUnknownPlaceholder(c)).length;
+    const isEmptySlot = !compact && !diagram && itemCount === 0 && slotPhotos.length === 0 && childBoxCount === 0;
+    const slotCarouselHtml = renderSlotCarouselHtml(slotPhotos);
+
+    let singleColBadge = '';
+    if (isSingleCol && !isHighlighted) {
+      const parts = [];
+      if (childBoxCount > 0) parts.push(`${childBoxCount} ${childBoxCount === 1 ? 'box' : 'boxes'}`);
+      if (itemCount > 0) parts.push(`${itemCount} ${itemCount === 1 ? 'item' : 'items'}`);
+      singleColBadge = parts.length > 0
+        ? `<span class="cgrid-slot-summary">${escapeHtml(parts.join(' · '))}</span>`
+        : `<span class="cgrid-slot-summary is-empty">Empty</span>`;
+    }
+
     return `
-      <button
-        type="button"
+      <div
+        role="button"
+        tabindex="0"
         id="${compact ? '' : `drawer-card-${safeId}`}"
-        class="cgrid-slot ${isHighlighted ? 'is-highlighted spotlight-highlight' : ''} ${compact ? 'is-compact' : ''}"
+        class="cgrid-slot ${isHighlighted ? 'is-highlighted spotlight-highlight' : ''} ${compact ? 'is-compact' : ''} ${isEmptySlot ? 'is-empty' : ''}"
         style="grid-row: ${startCssR} / ${endCssR}; grid-column: ${startCssC} / ${endCssC};"
         onclick="${onClickAttr}"
+        onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); ${onClickAttr}; }"
         title="${escapeHtml(d.name)} (${escapeHtml(coord)})"
       >
-        <span class="cgrid-slot-coord">${escapeHtml(coord)}</span>
-        <span class="cgrid-slot-name">${escapeHtml(d.name)}</span>
-        ${isHighlighted ? `<span class="cgrid-here-badge">${compact ? 'Here' : 'Inside here'}</span>` : ''}
-        ${!compact && !isHighlighted && itemCount > 0 ? `<span class="cgrid-slot-count">${itemCount}</span>` : ''}
-      </button>
+        <div class="cgrid-slot-body">
+          <div class="cgrid-slot-info">
+            <span class="cgrid-slot-coord">${escapeHtml(coord)}</span>
+            <span class="cgrid-slot-name">${escapeHtml(d.name)}</span>
+            ${isHighlighted ? `<span class="cgrid-here-badge">${compact ? 'Here' : 'Inside here'}</span>` : ''}
+          </div>
+          ${slotCarouselHtml}
+          ${singleColBadge}
+        </div>
+        ${!isSingleCol && !compact && !isHighlighted && itemCount > 0 ? `<span class="cgrid-slot-count">${itemCount}</span>` : ''}
+      </div>
     `;
   }).join('');
 
+  if (!compact && !diagram && typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(syncAllSlotCarousels);
+  }
+
   return `
-    <div class="cgrid-wrap ${compact ? 'is-compact' : ''} ${diagram ? 'is-diagram' : ''}">
+    <div class="cgrid-wrap ${compact ? 'is-compact' : ''} ${diagram ? 'is-diagram' : ''} ${isSingleCol ? 'is-single-col' : ''}">
       <div
         class="cgrid-board"
         style="grid-template-columns: ${diagram ? '16px' : compact ? '24px' : '30px'} repeat(${cols}, ${diagram ? 'minmax(12px, 1fr)' : `minmax(${compact ? '28px' : '54px'}, 1fr)`}); grid-template-rows: ${rowTracks.join(' ')};"
@@ -203,6 +332,7 @@ const designer = {
   isInline: false,
   rows: 3,
   cols: 6,
+  defaultType: 'drawer',
   sectionBreaks: [],
   slots: [], // { tempId, id, name, location_type, grid_row, grid_col, grid_row_span, grid_col_span, merge_from_ids }
   selectedKeys: new Set(), // Set of tempIds (or `empty:r,c` for empty cells)
@@ -211,6 +341,20 @@ const designer = {
   draggedTempId: null,
   initialSnapshot: '',
 };
+
+const SLOT_TYPE_LABELS = {
+  drawer: 'Drawer',
+  bin: 'Bin',
+  shelf: 'Shelf',
+  compartment: 'Compartment',
+  cubby: 'Cubby',
+};
+
+function formatAutoSlotName(type, row, col) {
+  const label = SLOT_TYPE_LABELS[type] || 'Drawer';
+  const index = (Math.max(1, Number(row) || 1) - 1) * Math.max(1, Number(designer.cols) || 1) + Math.max(1, Number(col) || 1);
+  return `${label} ${index}`;
+}
 
 function serializeDesignerState() {
   return JSON.stringify({
@@ -232,9 +376,7 @@ function serializeDesignerState() {
 }
 
 export function isGridDesignerDirty() {
-  if (!designer.unitId) return false;
-  const isModalOpen = Boolean(document.getElementById('grid-designer-modal')?.classList.contains('open'));
-  if (!designer.isInline && !isModalOpen) return false;
+  if (!designer.unitId || !designer.isInline) return false;
   return serializeDesignerState() !== designer.initialSnapshot;
 }
 
@@ -296,10 +438,16 @@ export function renderInlineGridDesignerHtml() {
         </div>
 
         <div class="gd-mode-group">
+          <select id="gd-default-type" class="gd-type-select" onchange="setDesignerDefaultType(this.value)" aria-label="Default slot type" title="Type for new &amp; auto-named slots">
+            ${Object.entries(SLOT_TYPE_LABELS).map(([val, label]) => `
+              <option value="${val}" ${designer.defaultType === val ? 'selected' : ''}>${label}</option>
+            `).join('')}
+          </select>
           <button type="button" id="gd-multi-toggle" class="btn btn-secondary btn-sm ${designer.multiSelectMode ? 'active' : ''}" aria-pressed="${designer.multiSelectMode ? 'true' : 'false'}" onclick="toggleDesignerMultiSelect()">
             Select multiple
           </button>
           <button type="button" class="btn btn-secondary btn-sm" onclick="fillAllEmptyDesignerCells()">Fill empty</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="autoNameAllDesignerSlots()">Auto-name</button>
         </div>
       </div>
 
@@ -378,18 +526,6 @@ function initDesignerState(unitId, initialRows = null, initialCols = null) {
   return true;
 }
 
-export function openGridDesignerModal(unitId, initialRows = null, initialCols = null) {
-  if (!initDesignerState(unitId, initialRows, initialCols)) return;
-  designer.isInline = false;
-  const unit = state.locationMap.get(Number(unitId));
-  const titleEl = document.getElementById('grid-designer-title');
-  if (titleEl && unit) titleEl.textContent = `Design Grid — ${unit.name}`;
-
-  syncDesignerControls();
-  renderDesignerCanvas();
-  document.getElementById('grid-designer-modal')?.classList.add('open');
-}
-
 function fillEmptyCellsInDesigner() {
   const occ = buildDesignerOccupancy();
   for (let r = 1; r <= designer.rows; r++) {
@@ -398,8 +534,8 @@ function fillEmptyCellsInDesigner() {
         designer.slots.push({
           tempId: makeTempId(),
           id: null,
-          name: formatSlotCoord(r, c, 1, 1),
-          location_type: 'drawer',
+          name: formatAutoSlotName(designer.defaultType, r, c),
+          location_type: designer.defaultType,
           grid_row: r,
           grid_col: c,
           grid_row_span: 1,
@@ -592,6 +728,20 @@ export function handleDesignerCellClick(event, key) {
   renderDesignerCanvas();
 }
 
+export function setDesignerDefaultType(nextType) {
+  designer.defaultType = SLOT_TYPE_LABELS[nextType] ? nextType : 'drawer';
+}
+
+export function autoNameAllDesignerSlots() {
+  const label = SLOT_TYPE_LABELS[designer.defaultType] || 'Drawer';
+  const sorted = [...designer.slots].sort((a, b) => (a.grid_row - b.grid_row) || (a.grid_col - b.grid_col));
+  sorted.forEach((slot, idx) => {
+    slot.location_type = designer.defaultType;
+    slot.name = `${label} ${idx + 1}`;
+  });
+  renderDesignerCanvas();
+}
+
 export function fillAllEmptyDesignerCells() {
   fillEmptyCellsInDesigner();
   designer.selectedKeys.clear();
@@ -602,8 +752,8 @@ export function addDrawerAtEmptyCell(r, c) {
   const newSlot = {
     tempId: makeTempId(),
     id: null,
-    name: formatSlotCoord(r, c, 1, 1),
-    location_type: 'drawer',
+    name: formatAutoSlotName(designer.defaultType, r, c),
+    location_type: designer.defaultType,
     grid_row: r,
     grid_col: c,
     grid_row_span: 1,
@@ -935,6 +1085,8 @@ function renderDesignerCanvas() {
               <option value="drawer" ${slot.location_type === 'drawer' ? 'selected' : ''}>Drawer</option>
               <option value="bin" ${slot.location_type === 'bin' ? 'selected' : ''}>Bin</option>
               <option value="shelf" ${slot.location_type === 'shelf' ? 'selected' : ''}>Shelf</option>
+              <option value="compartment" ${slot.location_type === 'compartment' ? 'selected' : ''}>Compartment</option>
+              <option value="cubby" ${slot.location_type === 'cubby' ? 'selected' : ''}>Cubby</option>
               <option value="container" ${slot.location_type === 'container' ? 'selected' : ''}>Cabinet</option>
             </select>
           </div>
@@ -1119,7 +1271,6 @@ export async function saveGridDesigner() {
 
       await apiPut(`/api/v1/locations/${designer.unitId}/grid`, payload, 'Could not save grid layout.');
       discardGridDesigner();
-      closeModal('grid-designer-modal', true);
       await loadAllData();
       showToast('Container grid saved!');
       return true;

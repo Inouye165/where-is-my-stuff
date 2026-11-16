@@ -1,10 +1,12 @@
 import io
 import os
 from pathlib import Path
+import threading
 from typing import Any, Optional
 import uuid
 from fastapi import UploadFile
 from PIL import Image, ImageOps
+from sqlalchemy import event
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.exceptions import BadRequestError, PayloadTooLargeError
@@ -21,6 +23,8 @@ READ_CHUNK_SIZE = 64 * 1024
 
 class PhotoService:
     def __init__(self) -> None:
+        self._cleanup_lock = threading.Lock()
+        Image.MAX_IMAGE_PIXELS = settings.MAX_IMAGE_PIXELS
         settings.init_directories()
 
     def _read_upload_bounded(self, file: UploadFile) -> bytes:
@@ -56,7 +60,8 @@ class PhotoService:
         return candidate
 
     def process_and_save(self, file: UploadFile) -> dict[str, Any]:
-        settings.init_directories()
+        settings.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
+        settings.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
         filename = file.filename or ""
         ext = Path(filename).suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
@@ -65,16 +70,15 @@ class PhotoService:
             )
 
         raw_bytes = self._read_upload_bounded(file)
-        Image.MAX_IMAGE_PIXELS = settings.MAX_IMAGE_PIXELS
 
         try:
             with Image.open(io.BytesIO(raw_bytes)) as verify_img:
                 fmt = (verify_img.format or "").upper()
                 if fmt not in ALLOWED_PIL_FORMATS:
                     raise BadRequestError(f"Unsupported or disguised image content format '{fmt or 'unknown'}'.")
+                if verify_img.width * verify_img.height > settings.MAX_IMAGE_PIXELS:
+                    raise BadRequestError("Image dimensions exceed maximum allowed pixel count.")
                 verify_img.verify()
-        except AppImageReject:
-            raise
         except BadRequestError:
             raise
         except Exception as exc:
@@ -142,33 +146,141 @@ class PhotoService:
             "filename": orig_filename,
         }
 
+    def crop_and_save(self, source_path: Path, bbox: list[float], coord_mode: str = "auto") -> Optional[str]:
+        """Crop a [x1, y1, x2, y2] region (0-1, 0-1000, or pixels) from source_path and save it."""
+        if not source_path or not source_path.exists() or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            return None
+        try:
+            coords = [float(c) for c in bbox]
+        except (TypeError, ValueError):
+            return None
+
+        try:
+            with Image.open(source_path) as opened:
+                img = ImageOps.exif_transpose(opened)
+                w, h = img.size
+                if w < 16 or h < 16:
+                    return None
+
+                x1, y1, x2, y2 = coords
+                if coord_mode == "pixels":
+                    pass
+                elif coord_mode == "norm_1" or (coord_mode == "auto" and max(coords) <= 1.0):
+                    x1, y1, x2, y2 = x1 * w, y1 * h, x2 * w, y2 * h
+                elif coord_mode == "norm_1000" or (coord_mode == "auto" and max(coords) <= 1000.0):
+                    x1, y1, x2, y2 = (x1 / 1000.0) * w, (y1 / 1000.0) * h, (x2 / 1000.0) * w, (y2 / 1000.0) * h
+
+                left, right = min(x1, x2), max(x1, x2)
+                top, bottom = min(y1, y2), max(y1, y2)
+                if (right - left) < 12 or (bottom - top) < 12:
+                    return None
+
+                pad_x = max(8.0, (right - left) * 0.06)
+                pad_y = max(8.0, (bottom - top) * 0.06)
+                box = (
+                    max(0, int(round(left - pad_x))),
+                    max(0, int(round(top - pad_y))),
+                    min(w, int(round(right + pad_x))),
+                    min(h, int(round(bottom + pad_y))),
+                )
+                if box[2] - box[0] < 12 or box[3] - box[1] < 12:
+                    return None
+
+                cropped = img.crop(box)
+                if cropped.mode in ("RGBA", "P", "LA"):
+                    cropped = cropped.convert("RGB")
+
+                settings.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
+                settings.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+                unique_id = uuid.uuid4().hex
+                # "_crop_" marks AI crops so they can later be replaced by a real product photo.
+                orig_filename = f"ai_crop_{unique_id}.jpg"
+                thumb_filename = f"ai_crop_{unique_id}_thumb.webp"
+                orig_path = settings.ORIGINALS_DIR / orig_filename
+                thumb_path = settings.THUMBNAILS_DIR / thumb_filename
+                tmp_orig = settings.ORIGINALS_DIR / f".{orig_filename}.tmp"
+                tmp_thumb = settings.THUMBNAILS_DIR / f".{thumb_filename}.tmp"
+
+                try:
+                    cropped.save(tmp_orig, format="JPEG", quality=85, optimize=True)
+                    thumb_img = cropped.copy()
+                    thumb_img.thumbnail(
+                        (settings.THUMBNAIL_MAX_DIMENSION, settings.THUMBNAIL_MAX_DIMENSION),
+                        Image.Resampling.LANCZOS,
+                    )
+                    thumb_img.save(tmp_thumb, format="WEBP", quality=82)
+                    os.replace(tmp_orig, orig_path)
+                    os.replace(tmp_thumb, thumb_path)
+                except Exception:
+                    tmp_orig.unlink(missing_ok=True)
+                    tmp_thumb.unlink(missing_ok=True)
+                    orig_path.unlink(missing_ok=True)
+                    thumb_path.unlink(missing_ok=True)
+                    return None
+
+                return f"/uploads/originals/{orig_filename}"
+        except Exception as exc:
+            logger.warning("Failed to crop bounding box from %s: %s", source_path, exc)
+            return None
+
+    def delete_upload_url(self, file_url: Optional[str]) -> bool:
+        if not file_url or not file_url.startswith("/uploads/"):
+            return False
+        try:
+            resolved = self.resolve_safe_upload_path(file_url)
+        except BadRequestError:
+            return False
+
+        removed = False
+        if resolved.exists() and resolved.is_file():
+            resolved.unlink(missing_ok=True)
+            removed = True
+
+        if file_url.startswith("/uploads/originals/"):
+            thumb_candidate = (settings.THUMBNAILS_DIR / f"{resolved.stem}_thumb.webp").resolve()
+            if thumb_candidate.is_relative_to(settings.UPLOAD_DIR.resolve()) and thumb_candidate.exists():
+                thumb_candidate.unlink(missing_ok=True)
+                removed = True
+        return removed
+
     def cleanup_unreferenced_photo(self, db: Session, photo_url: Optional[str]) -> bool:
         if not photo_url or not photo_url.startswith("/uploads/"):
             return False
 
-        if item_repository.count_photo_references(db, photo_url) > 0:
-            return False
-
-        try:
-            orig_file = self.resolve_safe_upload_path(photo_url)
-        except BadRequestError:
-            return False
-
-        stem = orig_file.stem
-        thumb_candidate = (settings.THUMBNAILS_DIR / f"{stem}_thumb.webp").resolve()
-        removed = False
-
-        if orig_file.exists() and orig_file.is_file():
-            orig_file.unlink(missing_ok=True)
-            removed = True
-
-        if thumb_candidate.is_relative_to(settings.UPLOAD_DIR.resolve()) and thumb_candidate.exists():
-            thumb_candidate.unlink(missing_ok=True)
-            removed = True
+        with self._cleanup_lock:
+            if item_repository.count_photo_references(db, photo_url) > 0:
+                return False
+            removed = self.delete_upload_url(photo_url)
 
         if removed:
-            logger.info("Cleaned up unreferenced photo asset: %s", orig_file.name)
+            logger.info("Cleaned up unreferenced photo asset: %s", Path(photo_url).name)
         return removed
+
+    def schedule_photo_cleanup(self, db: Session, photo_url: Optional[str]) -> None:
+        if photo_url and photo_url.startswith("/uploads/"):
+            db.info.setdefault("pending_photo_cleanups", set()).add(photo_url)
+
+    def schedule_attachment_cleanup(
+        self,
+        db: Session,
+        file_path: Optional[str],
+        thumbnail_path: Optional[str] = None,
+    ) -> None:
+        if not file_path or not file_path.startswith("/uploads/"):
+            return
+        if file_path.startswith("/uploads/originals/"):
+            self.schedule_photo_cleanup(db, file_path)
+            return
+        pending_files = db.info.setdefault("pending_file_deletes", set())
+        pending_files.add(file_path)
+        if thumbnail_path and thumbnail_path.startswith("/uploads/"):
+            pending_files.add(thumbnail_path)
+
+    def schedule_rollback_cleanup(self, db: Session, *file_urls: Optional[str]) -> None:
+        rollback_files = db.info.setdefault("rollback_file_deletes", set())
+        for url in file_urls:
+            if url and url.startswith("/uploads/"):
+                rollback_files.add(url)
 
     def process_and_save_attachment(self, file: UploadFile) -> dict[str, Any]:
         if not file or not file.filename:
@@ -178,13 +290,15 @@ class PhotoService:
         ext = Path(original_name).suffix.lower()
         if ext in ALLOWED_EXTENSIONS:
             saved = self.process_and_save(file)
+            saved_disk_path = settings.ORIGINALS_DIR / saved["filename"]
+            size_bytes = saved_disk_path.stat().st_size if saved_disk_path.exists() else 0
             return {
                 "file_path": saved["original_path"],
                 "thumbnail_path": saved["thumbnail_path"],
-                "filename": original_name,
+                "filename": original_name[:255],
                 "content_type": file.content_type or "image/jpeg",
                 "attachment_type": "image",
-                "size_bytes": 0,
+                "size_bytes": size_bytes,
             }
 
         if ext not in ALLOWED_DOC_EXTENSIONS:
@@ -196,14 +310,21 @@ class PhotoService:
         if not raw:
             raise BadRequestError("Uploaded file is empty.")
 
-        settings.init_directories()
+        settings.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
         file_id = uuid.uuid4().hex
         stored_name = f"{file_id}{ext}"
         target_path = (settings.ATTACHMENTS_DIR / stored_name).resolve()
+        tmp_path = (settings.ATTACHMENTS_DIR / f".{stored_name}.tmp").resolve()
         if not target_path.is_relative_to(settings.ATTACHMENTS_DIR.resolve()):
             raise BadRequestError("Invalid attachment filename.")
 
-        target_path.write_bytes(raw)
+        try:
+            tmp_path.write_bytes(raw)
+            os.replace(tmp_path, target_path)
+        except Exception as exc:
+            tmp_path.unlink(missing_ok=True)
+            target_path.unlink(missing_ok=True)
+            raise BadRequestError(f"Failed to save attachment: {exc}") from exc
         attachment_type = "pdf" if ext == ".pdf" else ("chart" if ext in {".svg", ".csv"} else "document")
         return {
             "file_path": f"/uploads/attachments/{stored_name}",
@@ -220,23 +341,34 @@ class PhotoService:
         if file_path.startswith("/uploads/originals/"):
             self.cleanup_unreferenced_photo(db, file_path)
             return
-        try:
-            resolved = self.resolve_safe_upload_path(file_path)
-            if resolved.exists() and resolved.is_file():
-                resolved.unlink(missing_ok=True)
-        except BadRequestError:
-            pass
+        self.delete_upload_url(file_path)
         if thumbnail_path:
-            try:
-                thumb = self.resolve_safe_upload_path(thumbnail_path)
-                if thumb.exists() and thumb.is_file():
-                    thumb.unlink(missing_ok=True)
-            except BadRequestError:
-                pass
-
-
-class AppImageReject(Exception):
-    pass
+            self.delete_upload_url(thumbnail_path)
 
 
 photo_service = PhotoService()
+
+
+@event.listens_for(Session, "after_commit")
+def _run_deferred_session_file_cleanups(session: Session) -> None:
+    session.info.pop("rollback_file_deletes", None)
+    direct_files = list(session.info.pop("pending_file_deletes", ()))
+    photo_urls = list(session.info.pop("pending_photo_cleanups", ()))
+
+    for file_url in direct_files:
+        photo_service.delete_upload_url(file_url)
+
+    if photo_urls:
+        bind = session.get_bind()
+        with Session(bind=bind) as check_db:
+            for photo_url in photo_urls:
+                photo_service.cleanup_unreferenced_photo(check_db, photo_url)
+
+
+@event.listens_for(Session, "after_rollback")
+def _run_rollback_session_file_cleanups(session: Session) -> None:
+    session.info.pop("pending_file_deletes", None)
+    session.info.pop("pending_photo_cleanups", None)
+    rollback_files = list(session.info.pop("rollback_file_deletes", ()))
+    for file_url in rollback_files:
+        photo_service.delete_upload_url(file_url)

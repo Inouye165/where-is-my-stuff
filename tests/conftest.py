@@ -41,10 +41,20 @@ def setup_test_directories():
     settings.UPLOAD_DIR = root / "uploads"
     settings.ORIGINALS_DIR = settings.UPLOAD_DIR / "originals"
     settings.THUMBNAILS_DIR = settings.UPLOAD_DIR / "thumbnails"
+    settings.ATTACHMENTS_DIR = settings.UPLOAD_DIR / "attachments"
     settings.BACKUP_DIR = root / "backups"
     settings.LOG_DIR = root / "logs"
     settings.init_directories()
+    from app.core.logging_config import configure_logging
+    configure_logging()
     yield
+    import logging
+    from logging.handlers import RotatingFileHandler
+    wims_logger = logging.getLogger("wims")
+    for handler in list(wims_logger.handlers):
+        if isinstance(handler, RotatingFileHandler):
+            wims_logger.removeHandler(handler)
+            handler.close()
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 

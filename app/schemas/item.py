@@ -1,14 +1,13 @@
-from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.audit import AuditLogRead
-from app.schemas.common import ItemStatus, validate_safe_photo_ref
-from app.schemas.location import Breadcrumb
+from app.schemas.common import ItemStatus, UTCDateTime, validate_safe_photo_ref
+from app.schemas.location import Breadcrumb, LocationRead
 
 
 class ItemBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=160)
-    description: Optional[str] = Field(default=None, max_length=4000)
+    description: Optional[str] = Field(default=None, max_length=20_000)
     category: Optional[str] = Field(default=None, max_length=80)
     tags: Optional[str] = Field(default=None, max_length=300)
     quantity: Optional[int] = Field(default=None, ge=0, le=1_000_000)
@@ -31,15 +30,42 @@ class ItemCreate(ItemBase):
 
 class ItemBulkCreate(BaseModel):
     location_id: int = Field(..., ge=1)
+    save_mode: Literal["separate", "box", "assortment"] = "separate"
+    assortment_name: Optional[str] = Field(default=None, max_length=160)
+    assortment_photo: Optional[str] = Field(default=None, max_length=300)
+    source_photo_ids: Optional[List[int]] = None
     category: Optional[str] = Field(default=None, max_length=80)
     items: Optional[List[ItemCreate]] = None
     raw_lines: Optional[str] = Field(default=None, max_length=50_000)
     raw_text: Optional[str] = Field(default=None, max_length=50_000)
 
+    @field_validator("assortment_photo")
+    @classmethod
+    def check_assortment_photo(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_photo_ref(v)
+
+
+class ItemGroupIntoBoxRequest(BaseModel):
+    parent_location_id: int = Field(..., ge=1)
+    box_name: Optional[str] = Field(default=None, max_length=120)
+    target_box_id: Optional[int] = Field(default=None, ge=1)
+    item_ids: List[int] = Field(..., min_length=1, max_length=1000)
+    box_photo: Optional[str] = Field(default=None, max_length=300)
+
+    @field_validator("box_photo")
+    @classmethod
+    def check_box_photo(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_photo_ref(v)
+
+
+class ItemGroupIntoBoxResponse(BaseModel):
+    box: LocationRead
+    moved_count: int
+
 
 class ItemUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=160)
-    description: Optional[str] = Field(default=None, max_length=4000)
+    description: Optional[str] = Field(default=None, max_length=20_000)
     category: Optional[str] = Field(default=None, max_length=80)
     tags: Optional[str] = Field(default=None, max_length=300)
     quantity: Optional[int] = Field(default=None, ge=0, le=1_000_000)
@@ -74,9 +100,9 @@ class ItemRead(BaseModel):
     location_id: Optional[int] = None
     status: str = "stored"
     status_note: Optional[str] = None
-    last_seen_at: datetime
-    created_at: datetime
-    updated_at: datetime
+    last_seen_at: UTCDateTime
+    created_at: UTCDateTime
+    updated_at: UTCDateTime
     location_name: Optional[str] = None
     location_full_path: Optional[str] = None
     location_breadcrumbs: List[Breadcrumb] = Field(default_factory=list)
@@ -95,7 +121,7 @@ class ItemAttachmentRead(BaseModel):
     attachment_type: str
     title: Optional[str] = None
     size_bytes: int = 0
-    created_at: datetime
+    created_at: UTCDateTime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -107,14 +133,19 @@ class ItemDetailRead(ItemRead):
 
 class DetectedItem(BaseModel):
     name: str
+    part_number: Optional[str] = None
     category: Optional[str] = None
     estimated_qty: Optional[int] = 1
     brief_specs: Optional[str] = None
+    bbox: Optional[List[float]] = None
+    crop_photo_path: Optional[str] = None
 
 
 class VisionAnalysisResponse(BaseModel):
     status: str = "fallback"
     items: List[DetectedItem] = Field(default_factory=list)
+    suggested_group_name: Optional[str] = None
+    suggested_category: Optional[str] = None
     has_vision_api: bool = False
     provider_used: Optional[str] = None
     model_used: Optional[str] = None

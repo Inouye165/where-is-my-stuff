@@ -1,7 +1,7 @@
 from typing import List, Optional, Set
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
-from app.models.item import Item
+from app.models.item import Item, ItemAttachment
 from app.models.location import Location, LocationPhoto
 from app.schemas.common import ItemSortOrder
 
@@ -100,7 +100,10 @@ class ItemRepository:
         loc_photo_refs = db.execute(
             select(func.count(LocationPhoto.id)).where(LocationPhoto.photo_path == photo_url)
         ).scalar() or 0
-        return int(item_refs) + int(loc_refs) + int(loc_photo_refs)
+        att_refs = db.execute(
+            select(func.count(ItemAttachment.id)).where(ItemAttachment.file_path == photo_url)
+        ).scalar() or 0
+        return int(item_refs) + int(loc_refs) + int(loc_photo_refs) + int(att_refs)
 
 
 item_repository = ItemRepository()

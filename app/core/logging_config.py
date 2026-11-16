@@ -1,6 +1,7 @@
 from contextvars import ContextVar
 import logging
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import sys
 from app.core.config import settings
 
@@ -15,10 +16,28 @@ class RequestIdFilter(logging.Filter):
 
 def configure_logging() -> logging.Logger:
     logger = logging.getLogger("wims")
-    if getattr(logger, "_wims_configured", False):
-        return logger
-
     settings.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    target_log_file = (settings.LOG_DIR / "wims.log").resolve()
+
+    if getattr(logger, "_wims_configured", False):
+        for handler in list(logger.handlers):
+            if isinstance(handler, RotatingFileHandler):
+                if Path(handler.baseFilename).resolve() != target_log_file:
+                    logger.removeHandler(handler)
+                    handler.close()
+                    new_fh = RotatingFileHandler(
+                        filename=target_log_file,
+                        maxBytes=5 * 1024 * 1024,
+                        backupCount=5,
+                        encoding="utf-8",
+                    )
+                    new_fh.setLevel(handler.level)
+                    if handler.formatter:
+                        new_fh.setFormatter(handler.formatter)
+                    for flt in handler.filters:
+                        new_fh.addFilter(flt)
+                    logger.addHandler(new_fh)
+        return logger
     level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
     logger.setLevel(level)
     logger.propagate = False

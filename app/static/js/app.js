@@ -1,8 +1,9 @@
 /**
  * WhereIsMyStuff — Modular ES Entrypoint
- * Zero-Scroll 100dvh Home ('Places') • Native Rail & Thumb Bar • 'Needs a home' Spatial Flow
+ * Zero-Scroll 100dvh Home ('Places') • 'What are you looking for?' Search • 'Needs a home' Spatial Flow
  */
 import { onCrossTabSync } from './api.js';
+import { scrollSlotCarousel, syncSlotCarousel } from './carousel.js';
 import { closeAllModals, closeLightbox, closeModal, closeOnScrim, openLightbox } from './dom.js';
 import { initUnsavedGuard, resolveUnsavedPrompt } from './unsaved-guard.js';
 import {
@@ -28,6 +29,25 @@ import {
   onVisionProviderChange,
   applyDetectedItemsToText,
   saveDetectedItemsDirect,
+  setRapidSaveMode,
+  toggleRapidLocationPicker,
+  handleRapidLocationChange,
+  openRapidManualMode,
+  scanExistingLocationPhotos,
+  toggleRapidAdvancedOptions,
+  openRapidLlmMode,
+  closeRapidLlmMode,
+  refreshLlmPromptPreview,
+  copyLlmInventoryPrompt,
+  importLlmJsonToRapidList,
+  handleRapidAddPartKeydown,
+  handleRapidAddPartPaste,
+  addPartToRapidList,
+  toggleRapidDetectedItem,
+  toggleAllRapidDetectedItems,
+  toggleRapidItemDetails,
+  updateRapidDetectedItemField,
+  removeRapidDetectedItem,
   runRapidAiScan,
   startRapidPhoneCapture,
   resetPrintQrBaseUrl,
@@ -39,11 +59,21 @@ import {
   toggleUseGridUi,
   triggerBrowserPrint,
   triggerRapidPhotoInput,
-  updateDrawerBatchPreview
+  triggerRapidPhotoAndScan,
+  updateDrawerBatchPreview,
+  openGroupIntoBoxModal,
+  startBoxPhoneScanFromModal,
+  startBoxUploadScanFromModal,
+  handleGroupBoxTargetChange,
+  handleGroupBoxNameKeydown,
+  toggleGroupBoxItem,
+  toggleAllGroupBoxItems,
+  submitGroupIntoBox
 } from './modals.js';
 import {
   addDrawerAtEmptyCell,
   applyGridPreset,
+  autoNameAllDesignerSlots,
   cancelInlineGridDesigner,
   combineSelectedDesignerCells,
   designerClearSelection,
@@ -55,11 +85,11 @@ import {
   handleDesignerDragStart,
   handleDesignerDropOnEmpty,
   handleDesignerDropOnSlot,
-  openGridDesignerModal,
   openInlineGridDesigner,
   removeSelectedDesignerSlot,
   resizeSelectedDesignerSlot,
   saveGridDesigner,
+  setDesignerDefaultType,
   splitSelectedDesignerSlot,
   toggleDesignerMultiSelect,
   toggleRowSectionBreak,
@@ -72,14 +102,21 @@ import {
   closePhonePhotoModal,
   closePhonePhotoOnScrim,
   finishLocationPhoneCapture,
+  setPhoneCaptureSaveMode,
   refreshPhonePhotoQr
 } from './phone-capture.js';
 import {
   applyPhotoEditor,
   closePhotoEditorModal,
   closePhotoEditorOnScrim,
+  flattenPhotoEditorQuad,
+  nudgePhotoEditorFineRotation,
   resetPhotoEditorCrop,
-  rotatePhotoEditor
+  rotatePhotoEditor,
+  setPhotoEditorFineRotation,
+  setPhotoEditorMode,
+  setPhotoEditorScale,
+  startPhotoEditorCornerPick
 } from './photo-editor.js';
 import { compressImageFile } from './photo-compress.js';
 import {
@@ -98,7 +135,26 @@ import {
   saveLastScroll,
   switchAppTab
 } from './router.js';
-import { loadAllData, state, UNASSIGNED_ROOM_LABEL } from './state.js';
+import { loadAllData, state } from './state.js';
+import {
+  cancelLimitedItemRename,
+  clearMobileFind,
+  deleteTouchDrawerPhoto,
+  handleMobileFindInput,
+  handleTouchPhotoPicked,
+  isMobileOrTabletViewport,
+  isPhoneViewport,
+  navToTouchCapture,
+  removePendingTouchPhoto,
+  saveLimitedItemRename,
+  saveTouchDrawerPhotos,
+  selectTouchDrawer,
+  selectTouchRoom,
+  selectTouchUnit,
+  startLimitedItemRename,
+  stepTouchDrawer,
+  toggleMobileTheme
+} from './mobile-views.js';
 import {
   adjustDrawerItemQty,
   adjustItemQty,
@@ -108,13 +164,9 @@ import {
   deleteContainerFromMenu,
   deleteDrawerPhoto,
   deleteItemAttachment,
-  deleteItemFromDrawer,
   deleteItemFromView,
-  dismissStarterRoom,
   editExistingPhoto,
-  editItemFromDrawer,
   editItemFromView,
-  focusDrawerFromViewer,
   handleDrawerDirectPhotoUpload,
   handleHomePhotoSearch,
   handleHomeSearchInput,
@@ -125,37 +177,57 @@ import {
   HOME_SEARCH_HINTS,
   openAddItemWithPrefill,
   openHomeCameraSnap,
-  openItemDrawer,
   openMoveContainerModal,
-  openStarterRoom,
+  openOverallPhotoViewer,
   openUnitPhotoViewer,
+  overallViewerAddPhoto,
+  overallViewerCropPhoto,
+  overallViewerRemovePhoto,
+  overallViewerSetCover,
+  cancelInlineItemRename,
+  deleteDrawerFromMenu,
+  dismissQuickAddFeedback,
   quickAddDrawerItems,
+  saveInlineItemRename,
+  setDrawerItemsViewMode,
+  startInlineItemRename,
+  toggleDrawerPhotosStrip,
+  toggleGenericReviewMode,
+  toggleQuickAddMoreMenu,
   quickMoveContainerToRoom,
   removeDrawerItem,
   saveDrawerLabel,
+  saveItemRename,
   scanPhoneForLocation,
   selectCategory,
-  selectDrawerCarouselIndex,
   setHomePage,
+  stepOverallPhotoViewer,
+  toggleOverallPhotoEditMode,
   skipNeedsHomeContainer,
-  stepDrawerCarousel,
   submitMoveContainer,
   toggleDrawerLabelEdit,
-  toggleDrawerPhotosExpanded,
+  toggleItemPartsEditor,
+  toggleItemRenameEdit,
   toggleUnitMoreMenu,
   triggerDrawerDirectPhotoUpload,
   triggerItemAttachmentUpload,
   unitViewerCropPhoto,
   unitViewerRemovePhoto,
   unitViewerReplacePhoto,
-  verifyItemFromDrawer,
+  updateItemPartField,
+  addItemPartToEditor,
+  removeItemPartFromEditor,
+  saveItemPartsList,
+  expandSubBox,
+  toggleExpandSubBox,
+  toggleDrawerMoreMenu,
+  toggleItemRowMenu,
+  toggleBoxRowMenu,
   verifyItemFromView,
-  closeSlideDrawer
+  findAndImportItemPhoto,
+  openBoxCoverPhotoPicker,
+  setLocationCoverPhoto
 } from './views.js';
-
-// Keep explicit label & placeholder exports for Home Places view
-export const HOME_UNASSIGNED_TILE_TITLE = UNASSIGNED_ROOM_LABEL || 'Needs a home';
-export const HOME_SEARCH_PROMPT = 'What are you looking for?';
 
 function resolveEffectiveTheme(pref) {
   if (pref === 'light' || pref === 'dark') return pref;
@@ -206,13 +278,34 @@ function isInputFocused() {
 function initKeyboardAndRouter() {
   window.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-      const openScrims = document.querySelectorAll('.modal-scrim.open, .lightbox-overlay.open');
-      if (openScrims.length > 0) {
-        closeAllModals();
+      const lightbox = document.getElementById('lightbox-modal');
+      if (lightbox && lightbox.classList.contains('open')) {
+        closeLightbox();
         return;
       }
-      if (state.activeDrawerItem) {
-        closeSlideDrawer();
+      const unsavedModal = document.getElementById('unsaved-confirm-modal');
+      if (unsavedModal && unsavedModal.classList.contains('open')) {
+        resolveUnsavedPrompt('cancel');
+        return;
+      }
+      const editorModal = document.getElementById('photo-editor-modal');
+      if (editorModal && editorModal.classList.contains('open')) {
+        closePhotoEditorModal();
+        return;
+      }
+      const phoneModal = document.getElementById('phone-photo-modal');
+      if (phoneModal && phoneModal.classList.contains('open')) {
+        closePhonePhotoModal();
+        return;
+      }
+      const openScrims = Array.from(document.querySelectorAll('.modal-scrim.open'));
+      if (openScrims.length > 0) {
+        const topScrim = openScrims[openScrims.length - 1];
+        if (topScrim && topScrim.id) {
+          closeModal(topScrim.id);
+        } else {
+          closeAllModals();
+        }
         return;
       }
       if (state.activeTab === 'places' && state.currentView === 'home' && state.homeSearchQuery) {
@@ -238,8 +331,31 @@ function initKeyboardAndRouter() {
     }
   });
 
-  window.addEventListener('hashchange', handleHashRouting);
-  window.addEventListener('popstate', handleHashRouting);
+  let routeSyncTimer = null;
+  const scheduleHashRouting = () => {
+    if (routeSyncTimer !== null) return;
+    routeSyncTimer = setTimeout(() => {
+      routeSyncTimer = null;
+      handleHashRouting();
+    }, 0);
+  };
+  window.addEventListener('hashchange', scheduleHashRouting);
+  window.addEventListener('popstate', scheduleHashRouting);
+
+  let lastBucket = `${isMobileOrTabletViewport()}:${isPhoneViewport()}`;
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      const nextBucket = `${isMobileOrTabletViewport()}:${isPhoneViewport()}`;
+      if (nextBucket !== lastBucket) {
+        lastBucket = nextBucket;
+        if (!isInputFocused()) {
+          renderCurrentWorkspace();
+        }
+      }
+    }, 120);
+  });
 }
 
 let deferredInstallPrompt = null;
@@ -247,11 +363,8 @@ let initialRouteRestored = false;
 
 export function openMobileSearch() {
   switchAppTab('places');
-  const searchBtn = document.getElementById('mobile-nav-search');
-  document.querySelectorAll('.mobile-nav-btn').forEach(b => b.classList.remove('active'));
-  if (searchBtn) searchBtn.classList.add('active');
   setTimeout(() => {
-    const input = document.getElementById('home-search-input');
+    const input = document.getElementById('mobile-find-input') || document.getElementById('home-search-input');
     if (input) {
       input.focus();
       input.select();
@@ -312,7 +425,7 @@ function initPwaAndWindowModes() {
 
   const isStandalone =
     (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
-    window.navigator.standalone === true;
+    window.navigator?.standalone === true;
 
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
@@ -386,10 +499,10 @@ function bootstrapApp() {
   bindDesktopPhotoIntercepts();
   initUnsavedGuard();
   onCrossTabSync(() => {
-    loadAllData(false);
+    loadAllData();
   });
   startHintRotation();
-  loadAllData(true);
+  loadAllData();
 }
 
 if (typeof document !== 'undefined') {
@@ -410,12 +523,6 @@ if (typeof window !== 'undefined') {
     chooseAddAction: chooseAddAction,
     switchAppTab: switchAppTab,
     openMoreModal: openMoreModal,
-    openSettingsModal: openMoreModal,
-    closeSlideDrawer: closeSlideDrawer,
-    openItemDrawer: openItemDrawer,
-    editItemFromDrawer: editItemFromDrawer,
-    deleteItemFromDrawer: deleteItemFromDrawer,
-    verifyItemFromDrawer: verifyItemFromDrawer,
     navToItem: navToItem,
     editItemFromView: editItemFromView,
     deleteItemFromView: deleteItemFromView,
@@ -435,7 +542,6 @@ if (typeof window !== 'undefined') {
     handleStorageParentChange: handleStorageParentChange,
     toggleAutoDrawersUi: toggleAutoDrawersUi,
     toggleUseGridUi: toggleUseGridUi,
-    openGridDesignerModal: openGridDesignerModal,
     openInlineGridDesigner: openInlineGridDesigner,
     cancelInlineGridDesigner: cancelInlineGridDesigner,
     renderCurrentWorkspace: renderCurrentWorkspace,
@@ -451,6 +557,8 @@ if (typeof window !== 'undefined') {
     handleDesignerDropOnSlot: handleDesignerDropOnSlot,
     handleDesignerDropOnEmpty: handleDesignerDropOnEmpty,
     fillAllEmptyDesignerCells: fillAllEmptyDesignerCells,
+    autoNameAllDesignerSlots: autoNameAllDesignerSlots,
+    setDesignerDefaultType: setDesignerDefaultType,
     addDrawerAtEmptyCell: addDrawerAtEmptyCell,
     combineSelectedDesignerCells: combineSelectedDesignerCells,
     resizeSelectedDesignerSlot: resizeSelectedDesignerSlot,
@@ -466,16 +574,34 @@ if (typeof window !== 'undefined') {
     onVisionProviderChange: onVisionProviderChange,
     applyDetectedItemsToText: applyDetectedItemsToText,
     saveDetectedItemsDirect: saveDetectedItemsDirect,
+    setRapidSaveMode: setRapidSaveMode,
+    toggleRapidLocationPicker: toggleRapidLocationPicker,
+    handleRapidLocationChange: handleRapidLocationChange,
+    openRapidManualMode: openRapidManualMode,
+    scanExistingLocationPhotos: scanExistingLocationPhotos,
+    toggleRapidAdvancedOptions: toggleRapidAdvancedOptions,
+    openRapidLlmMode: openRapidLlmMode,
+    closeRapidLlmMode: closeRapidLlmMode,
+    refreshLlmPromptPreview: refreshLlmPromptPreview,
+    copyLlmInventoryPrompt: copyLlmInventoryPrompt,
+    importLlmJsonToRapidList: importLlmJsonToRapidList,
+    handleRapidAddPartKeydown: handleRapidAddPartKeydown,
+    handleRapidAddPartPaste: handleRapidAddPartPaste,
+    addPartToRapidList: addPartToRapidList,
+    toggleRapidDetectedItem: toggleRapidDetectedItem,
+    toggleAllRapidDetectedItems: toggleAllRapidDetectedItems,
+    toggleRapidItemDetails: toggleRapidItemDetails,
+    updateRapidDetectedItemField: updateRapidDetectedItemField,
+    removeRapidDetectedItem: removeRapidDetectedItem,
     runRapidAiScan: runRapidAiScan,
     startRapidPhoneCapture: startRapidPhoneCapture,
     triggerRapidPhotoInput: triggerRapidPhotoInput,
+    triggerRapidPhotoAndScan: triggerRapidPhotoAndScan,
     handleRapidPhotoSelected: handleRapidPhotoSelected,
     submitRapidEntry: submitRapidEntry,
     finishLocationPhoneCapture: finishLocationPhoneCapture,
-    stepDrawerCarousel: stepDrawerCarousel,
-    selectDrawerCarouselIndex: selectDrawerCarouselIndex,
+    setPhoneCaptureSaveMode: setPhoneCaptureSaveMode,
     toggleDrawerLabelEdit: toggleDrawerLabelEdit,
-    toggleDrawerPhotosExpanded: toggleDrawerPhotosExpanded,
     saveDrawerLabel: saveDrawerLabel,
     scanPhoneForLocation: scanPhoneForLocation,
     triggerDrawerDirectPhotoUpload: triggerDrawerDirectPhotoUpload,
@@ -484,7 +610,16 @@ if (typeof window !== 'undefined') {
     triggerItemAttachmentUpload: triggerItemAttachmentUpload,
     handleItemAttachmentUpload: handleItemAttachmentUpload,
     deleteItemAttachment: deleteItemAttachment,
+    cancelInlineItemRename: cancelInlineItemRename,
+    deleteDrawerFromMenu: deleteDrawerFromMenu,
+    dismissQuickAddFeedback: dismissQuickAddFeedback,
     quickAddDrawerItems: quickAddDrawerItems,
+    saveInlineItemRename: saveInlineItemRename,
+    setDrawerItemsViewMode: setDrawerItemsViewMode,
+    startInlineItemRename: startInlineItemRename,
+    toggleDrawerPhotosStrip: toggleDrawerPhotosStrip,
+    toggleGenericReviewMode: toggleGenericReviewMode,
+    toggleQuickAddMoreMenu: toggleQuickAddMoreMenu,
     adjustDrawerItemQty: adjustDrawerItemQty,
     removeDrawerItem: removeDrawerItem,
     openQuickPhotoModal: openQuickPhotoModal,
@@ -505,12 +640,12 @@ if (typeof window !== 'undefined') {
     openHomeCameraSnap: openHomeCameraSnap,
     setHomePage: setHomePage,
     skipNeedsHomeContainer: skipNeedsHomeContainer,
-    openStarterRoom: openStarterRoom,
-    dismissStarterRoom: dismissStarterRoom,
     navToNeedsHome: navToNeedsHome,
     navToRoom: navToRoom,
     navToStorageUnit: navToStorageUnit,
     navToDrawer: navToDrawer,
+    scrollSlotCarousel: scrollSlotCarousel,
+    syncSlotCarousel: syncSlotCarousel,
     locateDrawerInUnit: locateDrawerInUnit,
     quickMoveContainerToRoom: quickMoveContainerToRoom,
     handleItemsSearchInput: handleItemsSearchInput,
@@ -525,6 +660,12 @@ if (typeof window !== 'undefined') {
     refreshPhonePhotoQr: refreshPhonePhotoQr,
     editExistingPhoto: editExistingPhoto,
     rotatePhotoEditor: rotatePhotoEditor,
+    setPhotoEditorMode: setPhotoEditorMode,
+    startPhotoEditorCornerPick: startPhotoEditorCornerPick,
+    flattenPhotoEditorQuad: flattenPhotoEditorQuad,
+    setPhotoEditorFineRotation: setPhotoEditorFineRotation,
+    nudgePhotoEditorFineRotation: nudgePhotoEditorFineRotation,
+    setPhotoEditorScale: setPhotoEditorScale,
     resetPhotoEditorCrop: resetPhotoEditorCrop,
     closePhotoEditorModal: closePhotoEditorModal,
     closePhotoEditorOnScrim: closePhotoEditorOnScrim,
@@ -533,16 +674,60 @@ if (typeof window !== 'undefined') {
     closeUnitMoreMenu: closeUnitMoreMenu,
     handleUnitMoreKeydown: handleUnitMoreKeydown,
     openUnitPhotoViewer: openUnitPhotoViewer,
+    openOverallPhotoViewer: openOverallPhotoViewer,
+    stepOverallPhotoViewer: stepOverallPhotoViewer,
+    toggleOverallPhotoEditMode: toggleOverallPhotoEditMode,
+    overallViewerAddPhoto: overallViewerAddPhoto,
+    overallViewerCropPhoto: overallViewerCropPhoto,
+    overallViewerSetCover: overallViewerSetCover,
+    overallViewerRemovePhoto: overallViewerRemovePhoto,
     unitViewerReplacePhoto: unitViewerReplacePhoto,
     unitViewerCropPhoto: unitViewerCropPhoto,
     unitViewerRemovePhoto: unitViewerRemovePhoto,
-    focusDrawerFromViewer: focusDrawerFromViewer,
     openMoveContainerModal: openMoveContainerModal,
     submitMoveContainer: submitMoveContainer,
     deleteContainerFromMenu: deleteContainerFromMenu,
     openMobileSearch: openMobileSearch,
     triggerPwaInstall: triggerPwaInstall,
     toggleFullScreenMode: toggleFullScreenMode,
-    openAppPopupWindow: openAppPopupWindow
+    openAppPopupWindow: openAppPopupWindow,
+    navToTouchCapture: navToTouchCapture,
+    selectTouchRoom: selectTouchRoom,
+    selectTouchUnit: selectTouchUnit,
+    selectTouchDrawer: selectTouchDrawer,
+    stepTouchDrawer: stepTouchDrawer,
+    handleTouchPhotoPicked: handleTouchPhotoPicked,
+    removePendingTouchPhoto: removePendingTouchPhoto,
+    saveTouchDrawerPhotos: saveTouchDrawerPhotos,
+    deleteTouchDrawerPhoto: deleteTouchDrawerPhoto,
+    startLimitedItemRename: startLimitedItemRename,
+    cancelLimitedItemRename: cancelLimitedItemRename,
+    saveLimitedItemRename: saveLimitedItemRename,
+    handleMobileFindInput: handleMobileFindInput,
+    clearMobileFind: clearMobileFind,
+    toggleMobileTheme: toggleMobileTheme,
+    toggleItemRenameEdit: toggleItemRenameEdit,
+    saveItemRename: saveItemRename,
+    toggleItemPartsEditor: toggleItemPartsEditor,
+    updateItemPartField: updateItemPartField,
+    addItemPartToEditor: addItemPartToEditor,
+    removeItemPartFromEditor: removeItemPartFromEditor,
+    saveItemPartsList: saveItemPartsList,
+    openGroupIntoBoxModal: openGroupIntoBoxModal,
+    startBoxPhoneScanFromModal: startBoxPhoneScanFromModal,
+    startBoxUploadScanFromModal: startBoxUploadScanFromModal,
+    handleGroupBoxTargetChange: handleGroupBoxTargetChange,
+    handleGroupBoxNameKeydown: handleGroupBoxNameKeydown,
+    toggleGroupBoxItem: toggleGroupBoxItem,
+    toggleAllGroupBoxItems: toggleAllGroupBoxItems,
+    submitGroupIntoBox: submitGroupIntoBox,
+    expandSubBox: expandSubBox,
+    toggleExpandSubBox: toggleExpandSubBox,
+    toggleDrawerMoreMenu: toggleDrawerMoreMenu,
+    toggleItemRowMenu: toggleItemRowMenu,
+    toggleBoxRowMenu: toggleBoxRowMenu,
+    findAndImportItemPhoto: findAndImportItemPhoto,
+    openBoxCoverPhotoPicker: openBoxCoverPhotoPicker,
+    setLocationCoverPhoto: setLocationCoverPhoto
   });
 }

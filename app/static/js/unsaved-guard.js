@@ -28,9 +28,6 @@ export function markModalClean(modalId) {
 }
 
 export function isModalDirty(modalId) {
-  if (modalId === 'grid-designer-modal') {
-    return isGridDirty();
-  }
   const el = document.getElementById(modalId);
   return Boolean(el && el.classList.contains('open') && el.dataset.dirty === 'true');
 }
@@ -56,6 +53,11 @@ export function showUnsavedPrompt(message = 'You have unsaved changes. Would you
   if (!modal) {
     return Promise.resolve(window.confirm(message) ? 'discard' : 'cancel');
   }
+  if (activePromptResolve) {
+    const superseded = activePromptResolve;
+    activePromptResolve = null;
+    superseded('cancel');
+  }
   if (msgEl) msgEl.textContent = message;
   modal.classList.add('open');
 
@@ -74,23 +76,24 @@ export async function guardModalClose(modalId, forceCloseFn) {
   if (choice === 'cancel') return false;
 
   if (choice === 'discard') {
-    if (modalId === 'grid-designer-modal' && typeof gridDiscardFn === 'function') {
-      gridDiscardFn();
-    } else {
-      markModalClean(modalId);
-    }
+    markModalClean(modalId);
     forceCloseFn(modalId);
     return true;
   }
 
   if (choice === 'save') {
-    if (modalId === 'grid-designer-modal' && typeof gridSaveFn === 'function') {
-      await gridSaveFn();
+    const modalEl = document.getElementById(modalId);
+    const form = (modalEl && typeof modalEl.querySelector === 'function' ? modalEl.querySelector('form') : null)
+      || document.querySelector(`#${modalId} form`);
+    if (form && typeof form.requestSubmit === 'function') {
+      form.requestSubmit();
       return true;
     }
-    const form = document.querySelector(`#${modalId} form`);
-    if (form) {
-      form.requestSubmit();
+    const submitBtn = (modalEl && typeof modalEl.querySelector === 'function'
+      ? modalEl.querySelector('[data-modal-save], #rapid-submit-btn, .modal-footer .btn-primary')
+      : null) || (modalId === 'drawer-rapid-entry-modal' ? document.getElementById('rapid-submit-btn') : null);
+    if (submitBtn && typeof submitBtn.click === 'function') {
+      submitBtn.click();
       return true;
     }
   }

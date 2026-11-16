@@ -1,4 +1,5 @@
-const CACHE_NAME = 'wims-shell-v1';
+const CACHE_NAME = 'wims-shell-v30';
+const NEVER_CACHE_PATHS = new Set(['/docs', '/redoc', '/openapi.json', '/docs/oauth2-redirect']);
 const APP_SHELL_URLS = [
   '/',
   '/index.html',
@@ -6,14 +7,18 @@ const APP_SHELL_URLS = [
   '/css/app.css',
   '/js/app.js',
   '/js/api.js',
+  '/js/carousel.js',
   '/js/dom.js',
+  '/js/grid-designer.js',
   '/js/icons.js',
+  '/js/mobile-views.js',
   '/js/modals.js',
   '/js/phone-capture.js',
   '/js/photo-compress.js',
   '/js/photo-editor.js',
   '/js/router.js',
   '/js/state.js',
+  '/js/unsaved-guard.js',
   '/js/views.js',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -46,7 +51,10 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(req)
       .then((res) => {
-        if (res && res.status === 200 && res.type === 'basic') {
+        // Only keep clean static paths; tokenized URLs (capture.html?token=...) and API docs
+        // would otherwise pile up as one cache entry per request.
+        const cacheable = !url.search && !NEVER_CACHE_PATHS.has(url.pathname);
+        if (cacheable && res && res.status === 200 && res.type === 'basic') {
           const copy = res.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
         }

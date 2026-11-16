@@ -1,13 +1,11 @@
-from io import BytesIO
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+import anyio
 from fastapi import UploadFile
-import qrcode
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.core.config import settings
 from app.core.exceptions import BadRequestError, NotFoundError
-from app.core.logging_config import logger
-from app.core.network import resolve_effective_base_url
+from app.core.network import build_qr_png, resolve_effective_base_url
 from app.models.location import Location, LocationPhoto
 from app.repositories.location_repository import location_repository
 from app.schemas.item import LocationPhotos, VisionAnalysisResponse
@@ -128,24 +126,25 @@ class LocationHierarchySnapshot:
 
 class LocationService:
     @staticmethod
-    def build_snapshot(db: Session, include_counts: bool = True) -> LocationHierarchySnapshot:
+    def build_snapshot(
+        db: Session,
+        include_counts: bool = True,
+        include_photos: bool = True,
+    ) -> LocationHierarchySnapshot:
         locations = location_repository.list_all_ordered(db)
         counts = location_repository.get_direct_item_counts(db) if include_counts else {}
-        photo_rows = (
-            db.execute(
-                select(LocationPhoto).order_by(LocationPhoto.created_at.desc(), LocationPhoto.id.desc())
-            )
-            .scalars()
-            .all()
-        )
         photos_by_location: Dict[int, List[LocationPhoto]] = {}
-        for p in photo_rows:
-            photos_by_location.setdefault(p.location_id, []).append(p)
+        if include_photos:
+            photo_rows = (
+                db.execute(
+                    select(LocationPhoto).order_by(LocationPhoto.created_at.desc(), LocationPhoto.id.desc())
+                )
+                .scalars()
+                .all()
+            )
+            for p in photo_rows:
+                photos_by_location.setdefault(p.location_id, []).append(p)
         return LocationHierarchySnapshot(locations, counts, photos_by_location)
-
-    @staticmethod
-    def get_by_id(db: Session, location_id: int) -> Optional[Location]:
-        return location_repository.get_by_id(db, location_id)
 
     @staticmethod
     def get_or_404(db: Session, location_id: int) -> Location:
@@ -161,7 +160,6 @@ class LocationService:
         if location_id == new_parent_id:
             raise BadRequestError("A location cannot be its own parent.")
 
-        snapshot = cls.build_snapshot(db, include_counts=False)
         curr_id: Optional[int] = new_parent_id
         visited: Set[int] = set()
         while curr_id is not None:
@@ -170,8 +168,9 @@ class LocationService:
             visited.add(curr_id)
             if curr_id == location_id:
                 raise BadRequestError("Cannot set a descendant as the parent location (circular reference).")
-            node = snapshot.loc_by_id.get(curr_id)
-            curr_id = node.parent_id if node else None
+            curr_id = db.execute(
+                select(Location.parent_id).where(Location.id == curr_id)
+            ).scalar_one_or_none()
 
     @classmethod
     def create(cls, db: Session, data: LocationCreate) -> Location:
@@ -242,12 +241,53 @@ class LocationService:
             else:
                 setattr(loc, key, value)
 
+        photo_cleanup_candidates: Set[str] = set()
+        for field_name, ptype in (("container_photo", "container"), ("context_photo", "context")):
+            if field_name not in update_dict:
+                continue
+            new_val = update_dict[field_name]
+            if new_val is None:
+                matching_rows = list(
+                    db.execute(
+                        select(LocationPhoto).where(
+                            LocationPhoto.location_id == loc.id,
+                            LocationPhoto.photo_type == ptype,
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                for row in matching_rows:
+                    if row.photo_path:
+                        photo_cleanup_candidates.add(row.photo_path)
+                    db.delete(row)
+            else:
+                existing_row = db.execute(
+                    select(LocationPhoto).where(
+                        LocationPhoto.location_id == loc.id,
+                        LocationPhoto.photo_path == new_val,
+                    )
+                ).scalar_one_or_none()
+                if not existing_row:
+                    stem = Path(new_val).stem
+                    thumb_rel = f"/uploads/thumbnails/{stem}_thumb.webp"
+                    db.add(
+                        LocationPhoto(
+                            location_id=loc.id,
+                            photo_path=new_val,
+                            thumbnail_path=thumb_rel if new_val.startswith("/uploads/originals/") else None,
+                            photo_type=ptype,
+                        )
+                    )
+
         db.flush()
         db.refresh(loc)
 
         for old_photo in old_photos:
             if old_photo and old_photo not in (loc.container_photo, loc.context_photo):
-                photo_service.cleanup_unreferenced_photo(db, old_photo)
+                photo_cleanup_candidates.add(old_photo)
+        for photo_url in photo_cleanup_candidates:
+            photo_service.schedule_photo_cleanup(db, photo_url)
 
         return loc
 
@@ -278,6 +318,13 @@ class LocationService:
                 candidate_photos.add(dnode.container_photo)
             if dnode.context_photo:
                 candidate_photos.add(dnode.context_photo)
+        if deleted_node_ids:
+            gallery_paths = db.execute(
+                select(LocationPhoto.photo_path).where(LocationPhoto.location_id.in_(deleted_node_ids))
+            ).scalars()
+            for gpath in gallery_paths:
+                if gpath:
+                    candidate_photos.add(gpath)
 
         from sqlalchemy import update
         from app.models.item import Item
@@ -306,7 +353,7 @@ class LocationService:
             db.flush()
 
         for photo_url in candidate_photos:
-            photo_service.cleanup_unreferenced_photo(db, photo_url)
+            photo_service.schedule_photo_cleanup(db, photo_url)
 
     @classmethod
     def get_read_by_id(cls, db: Session, location_id: int) -> LocationRead:
@@ -317,58 +364,12 @@ class LocationService:
         return snapshot.to_read(loc)
 
     @classmethod
-    def to_read_schema(cls, loc: Location, db: Optional[Session] = None) -> LocationRead:
-        if db is not None:
-            return cls.get_read_by_id(db, loc.id)
-
-        crumbs = [Breadcrumb(**b) for b in loc.get_breadcrumbs()]
-        direct_items = len(loc.items) if loc.items else 0
-        children_count = len(loc.children) if loc.children else 0
-        total_items = cls._count_total_items_fallback(loc)
-        return LocationRead(
-            id=loc.id,
-            name=loc.name,
-            description=loc.description,
-            location_type=loc.location_type,
-            parent_id=loc.parent_id,
-            container_photo=loc.container_photo,
-            context_photo=loc.context_photo,
-            grid_rows=loc.grid_rows,
-            grid_cols=loc.grid_cols,
-            grid_config=loc.grid_config,
-            grid_row=loc.grid_row,
-            grid_col=loc.grid_col,
-            grid_row_span=loc.grid_row_span,
-            grid_col_span=loc.grid_col_span,
-            full_path=loc.full_path,
-            breadcrumbs=crumbs,
-            item_count=direct_items,
-            total_item_count=total_items,
-            child_count=children_count,
-            created_at=loc.created_at,
-            updated_at=loc.updated_at,
-        )
-
-    @classmethod
-    def _count_total_items_fallback(cls, loc: Location, visited: Optional[Set[int]] = None) -> int:
-        if visited is None:
-            visited = set()
-        if loc.id in visited:
-            return 0
-        visited.add(loc.id)
-        total = len(loc.items) if loc.items else 0
-        for child in loc.children or []:
-            total += cls._count_total_items_fallback(child, visited)
-        return total
-
-    @classmethod
     def get_all(cls, db: Session) -> List[LocationRead]:
         snapshot = cls.build_snapshot(db, include_counts=True)
         return [snapshot.to_read(loc) for loc in snapshot.loc_by_id.values()]
 
-    @classmethod
-    def get_tree(cls, db: Session) -> List[LocationTree]:
-        snapshot = cls.build_snapshot(db, include_counts=True)
+    @staticmethod
+    def _assemble_tree_map(snapshot: LocationHierarchySnapshot) -> Tuple[Dict[int, LocationTree], List[LocationTree]]:
         node_map: Dict[int, LocationTree] = {}
         for loc in snapshot.loc_by_id.values():
             read_model = snapshot.to_read(loc)
@@ -381,6 +382,12 @@ class LocationService:
                 node_map[loc.parent_id].children.append(tree_node)
             else:
                 roots.append(tree_node)
+        return node_map, roots
+
+    @classmethod
+    def get_tree(cls, db: Session) -> List[LocationTree]:
+        snapshot = cls.build_snapshot(db, include_counts=True)
+        _, roots = cls._assemble_tree_map(snapshot)
         return roots
 
     @classmethod
@@ -388,13 +395,7 @@ class LocationService:
         snapshot = cls.build_snapshot(db, include_counts=True)
         if location_id not in snapshot.loc_by_id:
             raise NotFoundError("Location not found.")
-        node_map: Dict[int, LocationTree] = {}
-        for loc in snapshot.loc_by_id.values():
-            read_model = snapshot.to_read(loc)
-            node_map[loc.id] = LocationTree(**read_model.model_dump(), children=[])
-        for loc in snapshot.loc_by_id.values():
-            if loc.parent_id and loc.parent_id in node_map:
-                node_map[loc.parent_id].children.append(node_map[loc.id])
+        node_map, _ = cls._assemble_tree_map(snapshot)
         return node_map[location_id]
 
     @staticmethod
@@ -487,10 +488,27 @@ class LocationService:
                 update(Location).where(Location.parent_id.in_(unmerged_remove_ids)).values(parent_id=container.id)
             )
 
+        removed_photo_urls: Set[str] = set()
+        if to_remove_ids:
+            for cid in to_remove_ids:
+                child_node = existing_children[cid]
+                if child_node.container_photo:
+                    removed_photo_urls.add(child_node.container_photo)
+                if child_node.context_photo:
+                    removed_photo_urls.add(child_node.context_photo)
+            gallery_paths = db.execute(
+                select(LocationPhoto.photo_path).where(LocationPhoto.location_id.in_(to_remove_ids))
+            ).scalars()
+            for gpath in gallery_paths:
+                if gpath:
+                    removed_photo_urls.add(gpath)
+
         for cid in to_remove_ids:
             db.delete(existing_children[cid])
 
         db.flush()
+        for photo_url in removed_photo_urls:
+            photo_service.schedule_photo_cleanup(db, photo_url)
         db.expire_all()
         return cls.get_tree_by_id(db, container.id)
 
@@ -515,18 +533,7 @@ class LocationService:
                 path = f"/#/drawer/{location_id}"
             resolved_target = f"{effective_base}{path}"
 
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_M,
-            box_size=10,
-            border=2,
-        )
-        qr.add_data(resolved_target)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
+        return build_qr_png(resolved_target)
 
     @classmethod
     def list_photos(cls, db: Session, location_id: int) -> List[LocationPhoto]:
@@ -566,7 +573,7 @@ class LocationService:
         else:
             if not loc.container_photo:
                 loc.container_photo = photo_path
-        db.commit()
+        db.flush()
         db.refresh(photo)
         return photo
 
@@ -579,7 +586,13 @@ class LocationService:
         caption: Optional[str] = None,
         photo_type: str = "container",
     ) -> LocationPhoto:
+        cls.get_or_404(db, location_id)
         photo_info = photo_service.process_and_save(file)
+        photo_service.schedule_rollback_cleanup(
+            db,
+            photo_info["original_path"],
+            photo_info.get("thumbnail_path"),
+        )
         return cls.attach_photo(
             db=db,
             location_id=location_id,
@@ -620,8 +633,36 @@ class LocationService:
         if loc.context_photo == old_path:
             loc.context_photo = next((p.photo_path for p in remaining if p.photo_type == "context"), None)
 
-        db.commit()
-        photo_service.cleanup_unreferenced_photo(db, old_path)
+        db.flush()
+        photo_service.schedule_photo_cleanup(db, old_path)
+
+    @classmethod
+    def _prepare_drawer_photo_for_analysis(
+        cls,
+        db: Session,
+        location_id: int,
+        file: Optional[UploadFile] = None,
+        photo_id: Optional[int] = None,
+    ) -> Optional[Path]:
+        loc = cls.get_or_404(db, location_id)
+        if file and file.filename:
+            photo_record = cls.add_photo(db=db, location_id=location_id, file=file, photo_type="container")
+            photo_path = photo_record.photo_path
+            db.commit()
+            return photo_service.resolve_safe_upload_path(photo_path)
+        if photo_id is not None:
+            photo_record = db.execute(
+                select(LocationPhoto).where(
+                    LocationPhoto.id == photo_id,
+                    LocationPhoto.location_id == location_id,
+                )
+            ).scalar_one_or_none()
+            if not photo_record:
+                raise NotFoundError("Photo not found.")
+            return photo_service.resolve_safe_upload_path(photo_record.photo_path)
+        if loc.container_photo:
+            return photo_service.resolve_safe_upload_path(loc.container_photo)
+        return None
 
     @classmethod
     async def analyze_drawer_photo(
@@ -632,27 +673,19 @@ class LocationService:
         photo_id: Optional[int] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
+        expected_count: Optional[int] = None,
     ) -> VisionAnalysisResponse:
-        loc = cls.get_or_404(db, location_id)
-
-        saved_photo_file = None
-        if file and file.filename:
-            photo_record = cls.add_photo(db=db, location_id=location_id, file=file, photo_type="container")
-            saved_photo_file = photo_service.resolve_safe_upload_path(photo_record.photo_path)
-        elif photo_id is not None:
-            photo_record = db.execute(
-                select(LocationPhoto).where(
-                    LocationPhoto.id == photo_id,
-                    LocationPhoto.location_id == location_id,
-                )
-            ).scalar_one_or_none()
-            if not photo_record:
-                raise NotFoundError("Photo not found.")
-            saved_photo_file = photo_service.resolve_safe_upload_path(photo_record.photo_path)
-        elif loc.container_photo:
-            saved_photo_file = photo_service.resolve_safe_upload_path(loc.container_photo)
-
-        return await vision_service.analyze_image(saved_photo_file, provider=provider, model=model)
+        saved_photo_file = await anyio.to_thread.run_sync(
+            cls._prepare_drawer_photo_for_analysis,
+            db,
+            location_id,
+            file,
+            photo_id,
+        )
+        kwargs = {"provider": provider, "model": model}
+        if expected_count is not None:
+            kwargs["expected_count"] = expected_count
+        return await vision_service.analyze_image(saved_photo_file, **kwargs)
 
 
 location_service = LocationService()

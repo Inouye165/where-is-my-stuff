@@ -18,5 +18,6 @@ logs/
 data/backups/
 data/uploads/originals/*
 data/uploads/thumbnails/*
+data/uploads/attachments/*
 !data/uploads/originals/.gitkeep
 !data/uploads/thumbnails/.gitkeep

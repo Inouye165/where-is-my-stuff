@@ -3,10 +3,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from app.models.item import Item
 from app.models.location import Location
-
-
-def _escape_like(term: str) -> str:
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+from app.repositories.item_repository import escape_like
 
 
 class LocationRepository:
@@ -51,27 +48,13 @@ class LocationRepository:
             return set()
         clauses = []
         for tok in tokens:
-            pat = f"%{_escape_like(tok)}%"
+            pat = f"%{escape_like(tok)}%"
             clauses.append(Location.name.ilike(pat, escape="\\"))
 
         matched = db.execute(select(Location.id).where(or_(*clauses))).scalars().all()
         if not matched:
             return set()
         return cls.get_descendant_ids(db, matched)
-
-    @classmethod
-    def collect_subtree_photos(cls, db: Session, root_location_id: int) -> Set[str]:
-        subtree_ids = cls.get_descendant_ids(db, [root_location_id])
-        if not subtree_ids:
-            return set()
-        stmt = select(Location.container_photo, Location.context_photo).where(Location.id.in_(subtree_ids))
-        photos: Set[str] = set()
-        for c_photo, ctx_photo in db.execute(stmt).all():
-            if c_photo:
-                photos.add(c_photo)
-            if ctx_photo:
-                photos.add(ctx_photo)
-        return photos
 
 
 location_repository = LocationRepository()

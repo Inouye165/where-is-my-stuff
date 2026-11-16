@@ -4,17 +4,19 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.network import get_lan_ip, resolve_effective_base_url
-from app.schemas.item import ItemRead, VisionAnalysisResponse
+from app.schemas.item import ItemRead, ItemUpdate, VisionAnalysisResponse
 from app.schemas.location import (
     LocationCreate,
     LocationGridSave,
     LocationPhotoAttach,
     LocationPhotoRead,
+    LocationPhotoType,
     LocationRead,
     LocationTree,
     LocationUpdate,
 )
 from app.schemas.system import NetworkInfoResponse
+from app.services.image_lookup_service import find_and_import_images_batch, is_crop_or_missing_photo
 from app.services.inventory_service import inventory_service
 from app.services.location_service import location_service
 
@@ -81,7 +83,7 @@ def upload_location_photo(
     location_id: int,
     file: UploadFile = File(...),
     caption: Optional[str] = Form(default=None),
-    photo_type: str = Form(default="container"),
+    photo_type: LocationPhotoType = Form(default="container"),
     db: Session = Depends(get_db),
 ) -> LocationPhotoRead:
     photo = location_service.add_photo(
@@ -124,6 +126,7 @@ async def analyze_drawer_photo(
     photo_id: Optional[int] = Form(default=None),
     provider: Optional[str] = Form(default=None),
     model: Optional[str] = Form(default=None),
+    expected_count: Optional[int] = Form(default=None, ge=1, le=500),
     db: Session = Depends(get_db),
 ) -> VisionAnalysisResponse:
     return await location_service.analyze_drawer_photo(
@@ -133,7 +136,42 @@ async def analyze_drawer_photo(
         photo_id=photo_id,
         provider=provider,
         model=model,
+        expected_count=expected_count,
     )
+
+
+@router.post("/{location_id}/find-item-images")
+async def find_location_item_images(
+    location_id: int,
+    force: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict:
+    location_service.get_read_by_id(db, location_id)
+    loc_items = inventory_service.list_items_for_location(db, location_id)
+    candidates = [
+        {
+            "id": it.id,
+            "name": it.name,
+            "serial_or_part_number": it.serial_or_part_number,
+            "category": it.category,
+        }
+        for it in loc_items
+        if force or is_crop_or_missing_photo(it.item_photo)
+    ]
+    if not candidates:
+        return {"status": "ok", "checked_count": 0, "updated_count": 0}
+
+    resolved = await find_and_import_images_batch(candidates)
+    updated_count = 0
+    for item_id, saved_path in resolved.items():
+        inventory_service.update(db, item_id, ItemUpdate(item_photo=saved_path))
+        updated_count += 1
+
+    return {
+        "status": "ok",
+        "checked_count": len(candidates),
+        "updated_count": updated_count,
+    }
 
 
 @router.get("/{location_id}", response_model=LocationRead)

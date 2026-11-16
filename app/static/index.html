@@ -11,7 +11,7 @@
   <script>
     (function () {
       try {
-        var pref = localStorage.getItem('wims_theme_pref') || 'system';
+        var pref = localStorage.getItem('wims_theme_pref') || 'dark';
         var resolved = pref === 'system'
           ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
           : pref;
@@ -33,7 +33,7 @@
 
     <!-- DESKTOP / TABLET LEFT NAVIGATION RAIL (>= 768px) -->
     <aside class="desktop-nav-rail no-print" aria-label="Primary Navigation">
-      <button class="rail-brand-btn" onclick="navToHome()" title="Go to Places">
+      <button class="rail-brand-btn" onclick="navToHome()" title="Go to Spaces">
         <span class="rail-brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path>
@@ -58,7 +58,7 @@
             <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path>
             <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
           </svg>
-          <span class="rail-link-text">Places</span>
+          <span class="rail-link-text">Spaces</span>
         </button>
 
         <button id="rail-nav-items" class="rail-link" onclick="switchAppTab('items')">
@@ -87,78 +87,30 @@
     <!-- MAIN STAGE (Workspace + Docked / Bottom-Sheet Item Detail) -->
     <div class="app-stage-container">
       <main id="app-workspace" class="app-workspace is-home-canvas">
-        <!-- Rendered dynamically by app.js -->
+        <div class="app-boot-loading" id="app-boot-loading" role="status" aria-live="polite">
+          <div class="app-boot-spinner" aria-hidden="true"></div>
+          <div class="app-boot-title">Loading inventory...</div>
+          <div class="app-boot-sub" id="app-boot-sub">Connecting to WIMS server</div>
+        </div>
       </main>
-
-      <!-- ITEM DETAIL SHEET (Docked Side-Panel on Desktop, Bottom Sheet on Mobile) -->
-      <aside id="item-slide-drawer" class="slide-drawer no-print" aria-label="Item Details">
-        <div class="slide-drawer-handle-bar" onclick="closeSlideDrawer()" aria-hidden="true">
-          <span class="sheet-grabber"></span>
-        </div>
-        <div class="slide-drawer-top">
-          <div class="slide-drawer-title-area">
-            <span class="slide-drawer-sub" id="drawer-item-cat">Item</span>
-            <h3 id="drawer-item-name" class="slide-drawer-heading">Item Name</h3>
-          </div>
-          <button class="slide-drawer-close" onclick="closeSlideDrawer()" title="Close">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <line x1="18" y1="6" x2="6" y2="18"></line>
-              <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-          </button>
-        </div>
-
-        <div class="slide-drawer-body" id="slide-drawer-content">
-          <!-- Rendered dynamically -->
-        </div>
-
-        <div class="slide-drawer-bottom">
-          <button class="btn btn-secondary btn-sm" onclick="editItemFromDrawer()">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteItemFromDrawer()">Delete</button>
-          <div style="flex: 1;"></div>
-          <button class="btn btn-verify btn-sm" id="drawer-verify-btn" onclick="verifyItemFromDrawer()">✓ Seen today</button>
-        </div>
-      </aside>
     </div>
 
-    <!-- Mobile Item Sheet Backdrop -->
-    <div id="slide-drawer-scrim" class="slide-drawer-scrim no-print" onclick="closeSlideDrawer()"></div>
-
-    <!-- MOBILE FIXED BOTTOM THUMB BAR (< 768px) — 4 Clean Slots -->
+    <!-- PHONE & TABLET BOTTOM BAR — 2 Clear, Large-Text Buttons -->
     <nav class="mobile-bottom-nav no-print" id="mobile-bottom-nav" aria-label="Bottom Navigation">
-      <button class="mobile-nav-btn active" id="mobile-nav-places" onclick="switchAppTab('places')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path>
-          <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-        </svg>
-        <span>Places</span>
-      </button>
-
-      <button class="mobile-nav-btn" id="mobile-nav-items" onclick="switchAppTab('items')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path>
-          <path d="M12 22V12"></path>
-          <path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path>
-          <path d="m7.5 4.27 9 5.15"></path>
-        </svg>
-        <span>Items</span>
-      </button>
-
-      <button class="mobile-nav-btn" id="mobile-nav-search" onclick="openMobileSearch()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <button class="mobile-nav-btn active" id="mobile-nav-places" onclick="navToHome()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="11" cy="11" r="8"></circle>
           <path d="m21 21-4.3-4.3"></path>
         </svg>
-        <span>Search</span>
+        <span>Find Item</span>
       </button>
 
-      <button class="mobile-nav-btn" id="mobile-nav-more" onclick="openMoreModal()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="1"></circle>
-          <circle cx="19" cy="12" r="1"></circle>
-          <circle cx="5" cy="12" r="1"></circle>
+      <button class="mobile-nav-btn" id="mobile-nav-capture" onclick="navToTouchCapture()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path>
+          <circle cx="12" cy="13" r="3"></circle>
         </svg>
-        <span>More</span>
+        <span>Add Photos</span>
       </button>
     </nav>
 
@@ -196,7 +148,7 @@
           </span>
           <span class="action-choice-body">
             <strong>Scan with Camera</strong>
-            <span>Scan a single item or auto-catalog an entire open drawer at once.</span>
+            <span>Scan a container, assortment box, or open drawer — AI extracts an editable parts list.</span>
           </span>
           <span class="action-choice-arrow" aria-hidden="true">→</span>
         </button>
@@ -218,7 +170,18 @@
           </span>
           <span class="action-choice-body">
             <strong>Add Location or Container</strong>
-            <span>Set up a room, storage bin, or multi-drawer organizer.</span>
+            <span>Set up a space, storage bin, or multi-drawer organizer.</span>
+          </span>
+          <span class="action-choice-arrow" aria-hidden="true">→</span>
+        </button>
+
+        <button type="button" class="action-choice-card" onclick="chooseAddAction('space')">
+          <span class="action-choice-icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+          </span>
+          <span class="action-choice-body">
+            <strong>New Space</strong>
+            <span>Create a room, garage, shed, or storage area.</span>
           </span>
           <span class="action-choice-arrow" aria-hidden="true">→</span>
         </button>
@@ -246,7 +209,7 @@
           <div class="form-field">
             <label for="item-location-select">Where is it kept? *</label>
             <select id="item-location-select" required>
-              <option value="">Choose a drawer, container, or room</option>
+              <option value="">Choose a drawer, container, or space</option>
             </select>
           </div>
 
@@ -308,7 +271,7 @@
   <div id="add-storage-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'add-storage-modal')">
     <div class="modal-card">
       <div class="modal-top">
-        <h3 id="storage-modal-title" class="modal-title">Add a room or container</h3>
+        <h3 id="storage-modal-title" class="modal-title">Add a space or container</h3>
         <button class="modal-close-btn" onclick="closeModal('add-storage-modal')" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
@@ -321,7 +284,7 @@
           <div id="storage-type-segmented" class="segmented-picker">
             <button type="button" id="seg-room" class="seg-choice" onclick="setStorageTypeChoice('room')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
-              Room
+              Space
             </button>
             <button type="button" id="seg-unit" class="seg-choice active" onclick="setStorageTypeChoice('unit')">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>
@@ -353,7 +316,7 @@
 
           <!-- Parent Room / Container Selection -->
           <div class="form-field" id="storage-parent-field">
-            <label for="storage-parent-select" id="storage-parent-label">Which room is it in?</label>
+            <label for="storage-parent-select" id="storage-parent-label">Which space is it in?</label>
             <select id="storage-parent-select" onchange="handleStorageParentChange()">
               <option value="">Decide later (Needs a home)</option>
             </select>
@@ -361,7 +324,7 @@
 
           <!-- Inline New Room Creation Input -->
           <div class="form-field" id="storage-inline-room-field" style="display: none;">
-            <label for="inline-room-name">New room name *</label>
+            <label for="inline-room-name">New space name *</label>
             <input type="text" id="inline-room-name" placeholder="e.g. Garage, Office, Bedroom, Closet">
           </div>
 
@@ -457,78 +420,198 @@
     </div>
   </div>
 
-  <!-- Modal 4: Scan with Camera (Batch Entry + Camera) -->
+  <!-- Modal 4: Scan with Camera (2-Step Progressive Disclosure: Capture -> Review & Save) -->
   <div id="drawer-rapid-entry-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'drawer-rapid-entry-modal')">
-    <div class="modal-card" style="max-width: 560px;">
+    <div class="modal-card" style="max-width: 600px;">
       <div class="modal-top">
         <div>
-          <h3 class="modal-title">Scan with Camera</h3>
-          <p id="rapid-modal-subtitle" class="modal-subtitle">Add a photo and list items one per line</p>
+          <h3 id="rapid-modal-title" class="modal-title">Scan with Camera</h3>
+          <p id="rapid-modal-subtitle" class="modal-subtitle">Snap or upload a photo — AI lists the parts for you</p>
         </div>
         <button class="modal-close-btn" onclick="closeModal('drawer-rapid-entry-modal')" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
       <div class="modal-body-scroll">
+        <input type="file" id="rapid-photo-input" accept="image/*" multiple style="display: none;" onchange="handleRapidPhotoSelected(event)">
+
+        <div id="rapid-location-pill-bar" class="rapid-location-pill-bar" style="display: none;">
+          <span class="rapid-location-pill-text">
+            Saving to: <strong id="rapid-location-pill-name"></strong>
+          </span>
+          <button type="button" class="btn-link-subtle" onclick="toggleRapidLocationPicker()">Change</button>
+        </div>
+
         <div class="form-field" id="rapid-location-field">
           <label for="rapid-location-select">Where are these items?</label>
-          <select id="rapid-location-select"></select>
+          <select id="rapid-location-select" onchange="handleRapidLocationChange()"></select>
         </div>
 
-        <div class="form-field">
-          <label>Photo(s) (Optional)</label>
-          <div class="rapid-photo-upload-row" style="flex-wrap: wrap; gap: 0.5rem;">
-            <input type="file" id="rapid-photo-input" accept="image/*" multiple style="display: none;" onchange="handleRapidPhotoSelected(event)">
-            <button type="button" class="btn btn-secondary btn-sm" onclick="triggerRapidPhotoInput()">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
-              Upload photo(s)
-            </button>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="startRapidPhoneCapture()">
-              QR: Add from Phone
-            </button>
-            <span id="rapid-photo-filename" class="file-hint-label">No photo selected</span>
+        <!-- Stage 1: Clean Capture Choice -->
+        <div id="rapid-stage-capture" class="rapid-stage-capture">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.25rem;">
+            <label for="rapid-expected-count" style="font-size: 0.82rem; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 0.45rem; margin: 0;">
+              Expected types (optional)
+              <input type="number" id="rapid-expected-count" class="rapid-dark-input" min="1" max="500" placeholder="e.g. 24" oninput="refreshLlmPromptPreview()">
+            </label>
           </div>
-          <div id="rapid-photo-preview-wrap" class="rapid-preview-box" style="display: none;">
-            <img id="rapid-photo-preview" src="" alt="Preview">
+          <div class="rapid-capture-cards">
+            <button type="button" class="rapid-capture-card" onclick="startRapidPhoneCapture()">
+              <span class="rapid-capture-icon" aria-hidden="true">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+              </span>
+              <span class="rapid-capture-card-title">Use Phone Camera</span>
+              <span class="rapid-capture-card-desc">Scan a QR code to snap with your phone</span>
+            </button>
+
+            <button type="button" class="rapid-capture-card" onclick="triggerRapidPhotoAndScan()">
+              <span class="rapid-capture-icon" aria-hidden="true">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
+              </span>
+              <span class="rapid-capture-card-title">Upload Photo</span>
+              <span class="rapid-capture-card-desc">Pick a photo of a part, kit, or open drawer</span>
+            </button>
+          </div>
+
+          <button type="button" id="rapid-existing-photos-btn" class="btn btn-secondary btn-sm rapid-existing-photos-btn" style="display: none;" onclick="scanExistingLocationPhotos()">
+            Or scan existing photo
+          </button>
+
+          <div class="rapid-capture-links">
+            <button type="button" class="btn-link-subtle" onclick="openRapidLlmMode()">Import JSON from Gemini / ChatGPT</button>
+            <span class="rapid-dot-sep" aria-hidden="true">·</span>
+            <button type="button" class="btn-link-subtle" onclick="openRapidManualMode()">Type or paste a list</button>
+            <span class="rapid-dot-sep" aria-hidden="true">·</span>
+            <button type="button" class="btn-link-subtle" id="rapid-quiet-ai-btn" onclick="toggleRapidAdvancedOptions()">AI: Auto</button>
           </div>
         </div>
 
-        <div class="form-field ai-scan-panel">
-          <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.45rem;">
-            <label for="rapid-vision-provider" style="margin: 0;">AI Item Identification</label>
-            <span id="rapid-vision-status" class="ai-provider-pill">Checking models...</span>
+        <!-- Stage 1b: Simple Gemini / ChatGPT JSON Import -->
+        <div id="rapid-stage-llm" class="rapid-stage-llm" style="display: none;">
+          <div class="rapid-llm-step">
+            <div class="rapid-llm-step-head">
+              <span><strong>Step 1.</strong> Copy this prompt and send it with your photo in Gemini / ChatGPT:</span>
+              <button type="button" class="btn btn-secondary btn-xs" onclick="copyLlmInventoryPrompt()">Copy Prompt</button>
+            </div>
+            <textarea id="rapid-llm-prompt-preview" class="rapid-dark-textarea" rows="5" readonly></textarea>
           </div>
-          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
-            <select id="rapid-vision-provider" style="flex: 1; min-width: 170px;" onchange="onVisionProviderChange()">
-              <option value="local">Local Model (Ollama)</option>
-              <option value="gemini">Paid: Google Gemini</option>
-              <option value="openai">Paid: OpenAI Vision</option>
-            </select>
-            <input type="text" id="rapid-vision-model" placeholder="Model name (optional)" style="flex: 1; min-width: 140px;">
-            <button type="button" class="btn btn-primary btn-sm" id="rapid-ai-scan-btn" onclick="runRapidAiScan()">
-              Scan with AI
-            </button>
+          <div class="rapid-llm-step">
+            <div class="rapid-llm-step-head">
+              <span><strong>Step 2.</strong> Paste the JSON reply from Gemini / ChatGPT below:</span>
+            </div>
+            <textarea
+              id="rapid-llm-json-input"
+              class="rapid-dark-textarea"
+              rows="4"
+              placeholder='Paste JSON reply here (e.g. {"items": [...]})...'
+            ></textarea>
           </div>
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;">
+            <button type="button" class="btn-link-subtle" onclick="closeRapidLlmMode()">← Back to Camera / Photo</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="importLlmJsonToRapidList()">Load JSON List →</button>
+          </div>
+        </div>
+
+        <!-- Stage 2: Review & Save -->
+        <div id="rapid-stage-review" class="rapid-stage-review" style="display: none;">
+          <div id="rapid-photo-strip" class="rapid-photo-strip">
+            <div class="rapid-photo-strip-bar">
+              <span id="rapid-photo-filename" class="file-hint-label">No photo selected</span>
+              <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                <button type="button" class="btn btn-secondary btn-xs" onclick="triggerRapidPhotoAndScan()">+ Add photo</button>
+                <button type="button" class="btn btn-secondary btn-xs" onclick="startRapidPhoneCapture()">+ Phone</button>
+              </div>
+            </div>
+            <div id="rapid-photo-preview-wrap" class="rapid-preview-box" style="display: none;">
+              <img id="rapid-photo-preview" src="" alt="Preview">
+            </div>
+          </div>
+
+          <div id="rapid-scanning-banner" class="rapid-scanning-banner" style="display: none;">
+            <span class="rapid-spinner" aria-hidden="true"></span>
+            <span id="rapid-scanning-text">Scanning photo for items...</span>
+          </div>
+
           <div id="rapid-ai-results" class="ai-results-box" style="display: none;"></div>
-        </div>
 
-        <div class="form-field">
-          <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <label for="rapid-items-text">Items (one per line)</label>
-            <span style="font-size: 0.74rem; color: var(--text-muted);">Understands "2x Tape" or "4 batteries"</span>
+          <div class="rapid-add-part-row">
+            <input
+              type="text"
+              id="rapid-add-part-input"
+              placeholder="Add or paste item(s) or LLM JSON (e.g. 20x 2N2222)..."
+              onkeydown="handleRapidAddPartKeydown(event)"
+              onpaste="handleRapidAddPartPaste(event)"
+            >
+            <button type="button" class="btn btn-secondary btn-sm" onclick="addPartToRapidList()">+ Add</button>
           </div>
-          <textarea
-            id="rapid-items-text"
-            rows="5"
-            placeholder="Example:&#10;Phillips screwdriver&#10;2 rolls masking tape&#10;4x AA batteries&#10;ESP32 dev board"
-          ></textarea>
+
+          <div class="form-field rapid-save-mode-box" id="rapid-save-mode-box" style="display: none;">
+            <label>How should these be saved?</label>
+            <div class="segmented-picker">
+              <button type="button" id="rapid-mode-separate" class="seg-choice active" onclick="setRapidSaveMode('separate')">
+                Individual items
+              </button>
+              <button type="button" id="rapid-mode-box" class="seg-choice" onclick="setRapidSaveMode('box')">
+                1 Box / Kit
+              </button>
+              <button type="button" id="rapid-mode-assortment" class="seg-choice" onclick="setRapidSaveMode('assortment')">
+                1 Checklist item
+              </button>
+            </div>
+            <p id="rapid-save-mode-hint" class="rapid-save-mode-hint">
+              Saves each checked item individually in this location.
+            </p>
+            <div id="rapid-assortment-fields" class="rapid-assortment-fields" style="display: none;">
+              <label for="rapid-assortment-name" id="rapid-assortment-name-label">Box / kit name</label>
+              <input
+                type="text"
+                id="rapid-assortment-name"
+                placeholder="e.g. Voltage Regulator Assortment, Resistor Kit, Assorted Screwdrivers"
+              >
+            </div>
+          </div>
         </div>
 
-        <div class="form-field">
-          <label for="rapid-category-input">Category (Optional)</label>
-          <input type="text" id="rapid-category-input" list="rapid-category-datalist" placeholder="e.g. Tools, Office Supplies, Electronics">
-          <datalist id="rapid-category-datalist"></datalist>
-        </div>
+        <details id="rapid-advanced-details" class="rapid-advanced-details">
+          <summary class="rapid-advanced-summary">Advanced options</summary>
+          <div class="rapid-advanced-body">
+            <div class="form-field">
+              <label for="rapid-category-input">Category (optional)</label>
+              <input type="text" id="rapid-category-input" list="rapid-category-datalist" placeholder="e.g. Electronic Components, Resistors, Hand Tools">
+              <datalist id="rapid-category-datalist"></datalist>
+            </div>
+
+            <div class="form-field ai-scan-panel">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.45rem;">
+                <label for="rapid-vision-provider" style="margin: 0;">AI Vision Model</label>
+                <span id="rapid-vision-status" class="ai-provider-pill">Checking models...</span>
+              </div>
+              <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                <select id="rapid-vision-provider" style="flex: 1; min-width: 160px;" onchange="onVisionProviderChange()">
+                  <option value="local">Local Model (Ollama)</option>
+                  <option value="gemini">Paid: Google Gemini</option>
+                  <option value="openai">Paid: OpenAI Vision</option>
+                </select>
+                <input type="text" id="rapid-vision-model" placeholder="Model name (optional)" style="flex: 1; min-width: 130px;">
+                <button type="button" class="btn btn-secondary btn-sm" id="rapid-ai-scan-btn" onclick="runRapidAiScan()">
+                  Re-scan with AI
+                </button>
+              </div>
+            </div>
+
+            <div class="form-field">
+              <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 0.35rem;">
+                <label for="rapid-items-text">Bulk multi-line paste (optional)</label>
+                <button type="button" class="btn-link-subtle" onclick="triggerRapidPhotoInput()">Attach photo without scanning</button>
+              </div>
+              <textarea
+                id="rapid-items-text"
+                rows="2"
+                placeholder="Optional extra lines (e.g. 2x Tape, 20x 2N2222 — TO-92)..."
+              ></textarea>
+            </div>
+          </div>
+        </details>
       </div>
       <div class="modal-bottom">
         <button type="button" class="btn btn-secondary" onclick="closeModal('drawer-rapid-entry-modal')">Cancel</button>
@@ -549,16 +632,40 @@
         </button>
       </div>
       <div class="modal-body-scroll">
-        <p id="quick-photo-desc" style="font-size: 0.88rem; color: var(--text-secondary);">Take a photo with your camera or choose an image.</p>
-        <label for="quick-photo-input" class="upload-dropzone">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-          <span id="quick-photo-input-label">Tap to take or choose photo</span>
+        <p id="quick-photo-desc" style="font-size: 0.88rem; color: var(--text-secondary);">Take a photo, choose a file, or paste an image (Ctrl+V).</p>
+        <label for="quick-photo-input" id="quick-photo-dropzone" class="upload-dropzone" tabindex="0">
+          <img id="quick-photo-preview" alt="Selected photo preview" style="display: none; max-height: 180px; max-width: 100%; border-radius: 10px; object-fit: contain; margin-bottom: 8px;" />
+          <svg id="quick-photo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+          <span id="quick-photo-input-label">Tap, choose, or paste photo (Ctrl+V)</span>
           <input type="file" id="quick-photo-input" accept="image/*" capture="environment" style="display: none;" onchange="handleQuickPhotoSelected(event)">
         </label>
+        <div id="quick-photo-existing-wrap" style="display: none; margin-top: 0.9rem;">
+          <p class="detail-section-title" style="margin-bottom: 0.45rem;">Or use an imported photo</p>
+          <div id="quick-photo-existing-grid" class="cover-picker-grid"></div>
+        </div>
       </div>
       <div class="modal-bottom">
         <button type="button" class="btn btn-secondary" onclick="closeModal('quick-photo-modal')">Cancel</button>
         <button type="button" class="btn btn-primary" id="quick-photo-save-btn" onclick="submitQuickPhoto()">Save photo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 5b: Choose Cover Photo -->
+  <div id="cover-photo-picker-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'cover-photo-picker-modal')">
+    <div class="modal-card" style="max-width: 520px;">
+      <div class="modal-top">
+        <h3 id="cover-photo-picker-title" class="modal-title">Choose cover photo</h3>
+        <button class="modal-close-btn" onclick="closeModal('cover-photo-picker-modal')" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body-scroll">
+        <p style="font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Pick which photo represents this container.</p>
+        <div id="cover-photo-picker-grid" class="cover-picker-grid"></div>
+      </div>
+      <div class="modal-bottom">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('cover-photo-picker-modal')">Close</button>
       </div>
     </div>
   </div>
@@ -714,10 +821,45 @@
       <div class="modal-bottom unit-viewer-actions">
         <div class="unit-viewer-actions-left">
           <button type="button" class="btn btn-secondary btn-sm" id="unit-viewer-replace-btn" onclick="unitViewerReplacePhoto()">Replace photo</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="unit-viewer-crop-btn" onclick="unitViewerCropPhoto()">Crop</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="unit-viewer-crop-btn" onclick="unitViewerCropPhoto()">Crop / Straighten</button>
           <button type="button" class="btn btn-danger btn-sm" id="unit-viewer-remove-btn" onclick="unitViewerRemovePhoto()">Remove photo</button>
         </div>
         <button type="button" class="btn btn-primary btn-sm" onclick="closeModal('unit-photo-viewer-modal')">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 8B-2: Overall Photo Carousel Viewer (View -> Edit mode -> Add / Crop / Cover / Remove) -->
+  <div id="overall-photo-viewer-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'overall-photo-viewer-modal')">
+    <div class="modal-card overall-viewer-card" style="max-width: 780px;">
+      <div class="modal-top">
+        <div style="display: flex; align-items: center; gap: 0.65rem; min-width: 0; flex: 1;">
+          <h3 id="overall-viewer-title" class="modal-title" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Overall photo</h3>
+          <span id="overall-viewer-counter" class="overall-viewer-counter"></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.45rem;">
+          <button type="button" id="overall-viewer-edit-btn" class="btn btn-secondary btn-sm" onclick="toggleOverallPhotoEditMode()">Edit</button>
+          <button class="modal-close-btn" onclick="closeModal('overall-photo-viewer-modal')" aria-label="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+      </div>
+      <div class="modal-body-scroll overall-viewer-body">
+        <div class="overall-viewer-stage">
+          <button type="button" id="overall-viewer-prev-btn" class="overall-viewer-nav prev" aria-label="Previous photo" onclick="stepOverallPhotoViewer(-1)">‹</button>
+          <img id="overall-viewer-img" src="" alt="Overall photo">
+          <button type="button" id="overall-viewer-next-btn" class="overall-viewer-nav next" aria-label="Next photo" onclick="stepOverallPhotoViewer(1)">›</button>
+        </div>
+        <div id="overall-viewer-thumbs" class="overall-viewer-thumbs"></div>
+      </div>
+      <div id="overall-viewer-edit-bar" class="modal-bottom overall-viewer-edit-bar" hidden>
+        <div class="unit-viewer-actions-left">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="overallViewerAddPhoto()">+ Add photo</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="overall-viewer-crop-btn" onclick="overallViewerCropPhoto()">Crop / Rotate</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="overall-viewer-cover-btn" onclick="overallViewerSetCover()">Set as cover</button>
+          <button type="button" class="btn btn-danger btn-sm" id="overall-viewer-remove-btn" onclick="overallViewerRemovePhoto()">Remove photo</button>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" onclick="toggleOverallPhotoEditMode(false)">Done</button>
       </div>
     </div>
   </div>
@@ -726,7 +868,7 @@
   <div id="move-container-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'move-container-modal')">
     <div class="modal-card" style="max-width: 420px;">
       <div class="modal-top">
-        <h3 class="modal-title">Move to another room</h3>
+        <h3 class="modal-title">Move to another space</h3>
         <button class="modal-close-btn" onclick="closeModal('move-container-modal')" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
@@ -734,7 +876,7 @@
       <div class="modal-body-scroll">
         <input type="hidden" id="move-container-id">
         <div class="form-field">
-          <label for="move-container-room-select">Destination room</label>
+          <label for="move-container-room-select">Destination space</label>
           <select id="move-container-room-select" class="form-select"></select>
         </div>
       </div>
@@ -767,6 +909,14 @@
         <div id="phone-photo-received-wrap" class="phone-received-wrap" style="display: none;">
           <div id="phone-photo-received-count" class="phone-received-count"></div>
           <div id="phone-photo-received-thumbs" class="phone-received-thumbs"></div>
+          <div id="phone-photo-mode-wrap" class="phone-mode-wrap" style="display: none;">
+            <div class="phone-mode-label">Add to <strong id="phone-photo-loc-name">this location</strong> as:</div>
+            <div class="segmented-picker">
+              <button type="button" id="phone-mode-box" class="seg-choice active" onclick="setPhoneCaptureSaveMode('box')">1 Box / Kit</button>
+              <button type="button" id="phone-mode-separate" class="seg-choice" onclick="setPhoneCaptureSaveMode('separate')">Individual items</button>
+            </div>
+            <p id="phone-photo-mode-hint" class="phone-mode-hint"></p>
+          </div>
         </div>
         <button type="button" id="phone-photo-retry-btn" class="btn btn-secondary btn-sm" style="display: none; margin-top: 0.5rem;" onclick="refreshPhonePhotoQr()">
           Generate new QR
@@ -779,18 +929,18 @@
         </button>
         <div style="display: flex; gap: 0.5rem;">
           <button type="button" id="phone-photo-cancel-btn" class="btn btn-secondary" onclick="closePhonePhotoModal()">Cancel</button>
-          <button type="button" id="phone-photo-done-btn" class="btn btn-secondary" style="display: none;" onclick="finishLocationPhoneCapture(false)">Done</button>
-          <button type="button" id="phone-photo-scan-btn" class="btn btn-primary" style="display: none;" onclick="finishLocationPhoneCapture(true)">Done &amp; Scan AI</button>
+          <button type="button" id="phone-photo-done-btn" class="btn btn-secondary" style="display: none;" onclick="finishLocationPhoneCapture(false)">Save Photo Only</button>
+          <button type="button" id="phone-photo-scan-btn" class="btn btn-primary" style="display: none;" onclick="finishLocationPhoneCapture(true)">Scan Contents with AI</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Modal 10: Crop & Rotate Photo Editor -->
+  <!-- Modal 10: Crop, Straighten & Rotate Photo Editor -->
   <div id="photo-editor-modal" class="modal-scrim no-print photo-editor-scrim" onclick="closePhotoEditorOnScrim(event)">
-    <div class="modal-card" style="max-width: 580px;">
+    <div class="modal-card" style="max-width: 640px;">
       <div class="modal-top">
-        <h3 id="photo-editor-title" class="modal-title">Crop &amp; Rotate</h3>
+        <h3 id="photo-editor-title" class="modal-title">Crop &amp; Straighten</h3>
         <button class="modal-close-btn" onclick="closePhotoEditorModal()" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
@@ -800,12 +950,42 @@
         <div class="photo-editor-stage">
           <canvas id="photo-editor-canvas"></canvas>
         </div>
+
         <div class="photo-editor-toolbar">
-          <button type="button" class="btn btn-secondary btn-sm" onclick="rotatePhotoEditor(-90)">↺ Rotate Left</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="rotatePhotoEditor(90)">↻ Rotate Right</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="resetPhotoEditorCrop()">Reset Crop</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="photo-editor-mode-crop" onclick="setPhotoEditorMode('crop')">Crop &amp; Fine-Tune</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="photo-editor-mode-quad" onclick="setPhotoEditorMode('quad')">4-Corner Straighten</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="rotatePhotoEditor(-90)">↺ -90°</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="rotatePhotoEditor(90)">↻ +90°</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="resetPhotoEditorCrop()">Reset</button>
         </div>
-        <div class="photo-editor-hint">Drag corners to crop, or drag anywhere to select an area</div>
+
+        <div id="photo-editor-quad-controls" class="photo-editor-fine-panel" style="display: none;">
+          <div class="photo-editor-quad-row">
+            <button type="button" class="btn btn-primary btn-sm" id="photo-editor-pick-corners-btn" onclick="startPhotoEditorCornerPick()">Click 4 Corners</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="flattenPhotoEditorQuad()">Flatten &amp; Preview</button>
+            <span id="photo-editor-quad-status" class="photo-editor-quad-status">Drag the 4 corners to match the cabinet edges, or click "Click 4 Corners".</span>
+          </div>
+        </div>
+
+        <div id="photo-editor-fine-controls" class="photo-editor-fine-panel">
+          <div class="photo-editor-slider-row">
+            <label for="photo-editor-fine-rot">Tilt</label>
+            <button type="button" class="btn btn-secondary btn-xs" onclick="nudgePhotoEditorFineRotation(-0.1)">−0.1°</button>
+            <input type="range" id="photo-editor-fine-rot" min="-15" max="15" step="0.1" value="0" oninput="setPhotoEditorFineRotation(this.value)">
+            <button type="button" class="btn btn-secondary btn-xs" onclick="nudgePhotoEditorFineRotation(0.1)">+0.1°</button>
+            <span id="photo-editor-fine-rot-val" class="photo-editor-slider-val">0.0°</span>
+          </div>
+          <div class="photo-editor-slider-row">
+            <label for="photo-editor-scale-x">Width</label>
+            <input type="range" id="photo-editor-scale-x" min="70" max="130" step="1" value="100" oninput="setPhotoEditorScale('x', this.value)">
+            <span id="photo-editor-scale-x-val" class="photo-editor-slider-val">100%</span>
+            <label for="photo-editor-scale-y" style="margin-left: 0.5rem;">Height</label>
+            <input type="range" id="photo-editor-scale-y" min="70" max="130" step="1" value="100" oninput="setPhotoEditorScale('y', this.value)">
+            <span id="photo-editor-scale-y-val" class="photo-editor-slider-val">100%</span>
+          </div>
+        </div>
+
+        <div id="photo-editor-hint" class="photo-editor-hint">Drag corners to crop, use Tilt/Width/Height to align, or switch to 4-Corner Straighten.</div>
       </div>
 
       <div class="modal-bottom">
@@ -815,54 +995,76 @@
     </div>
   </div>
 
-  <!-- Modal 11: Container Grid Designer -->
-  <div id="grid-designer-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'grid-designer-modal')">
-    <div class="modal-card gd-modal-card">
+  <!-- Modal 11B: Add / Group Items into a Sub-Container Box / Kit -->
+  <div id="group-into-box-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'group-into-box-modal')">
+    <div class="modal-card" style="max-width: 500px;">
       <div class="modal-top">
         <div>
-          <h3 id="grid-designer-title" class="modal-title">Design Container Grid</h3>
-          <p class="modal-subtitle">Rows are numbered (1, 2, 3…), columns are lettered (A, B, C…)</p>
+          <h3 id="group-box-modal-title" class="modal-title">Combine items into a Box / Kit</h3>
+          <p class="modal-subtitle">Inside <strong id="group-box-parent-name">Drawer</strong></p>
         </div>
-        <button class="modal-close-btn" onclick="closeModal('grid-designer-modal')" aria-label="Close">
+        <button class="modal-close-btn" onclick="closeModal('group-into-box-modal')" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
-
-      <div class="modal-body-scroll gd-body">
-        <div class="gd-toolbar">
-          <div class="gd-dims-group">
-            <label class="gd-dim-field">
-              <span>Rows</span>
-              <input type="number" id="gd-rows-input" min="1" max="26" value="3" onchange="updateGridDesignerDimensions()">
-            </label>
-            <label class="gd-dim-field">
-              <span>Cols</span>
-              <input type="number" id="gd-cols-input" min="1" max="26" value="6" onchange="updateGridDesignerDimensions()">
-            </label>
-          </div>
-
-          <div class="gd-presets-group">
-            <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('3x3')">3×3</button>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('4x4')">4×4</button>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('dresser_3_2')">Dresser (3 + 2×2)</button>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('organizer_split')">Parts Organizer</button>
-          </div>
-
-          <div class="gd-mode-group">
-            <button type="button" id="gd-multi-toggle" class="btn btn-secondary btn-sm" aria-pressed="false" onclick="toggleDesignerMultiSelect()">
-              Select multiple
+      <div class="modal-body-scroll">
+        <div id="group-box-scan-section" class="group-box-scan-section">
+          <div class="rapid-capture-cards">
+            <button type="button" class="rapid-capture-card" onclick="startBoxPhoneScanFromModal()">
+              <span class="rapid-capture-icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+              </span>
+              <span class="rapid-capture-card-title">Scan Box with Phone</span>
+              <span class="rapid-capture-card-desc">Snap box via QR — saves box photo(s) &amp; crops each item</span>
             </button>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="fillAllEmptyDesignerCells()">Fill empty</button>
+
+            <button type="button" class="rapid-capture-card" onclick="startBoxUploadScanFromModal()">
+              <span class="rapid-capture-icon" aria-hidden="true">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
+              </span>
+              <span class="rapid-capture-card-title">Upload Box Photo</span>
+              <span class="rapid-capture-card-desc">Pick a photo — saves box photo &amp; scans items inside</span>
+            </button>
           </div>
+          <div class="group-box-divider"><span>or create / group manually</span></div>
         </div>
 
-        <div id="gd-inspector" class="gd-inspector"></div>
-        <div id="gd-canvas-wrap" class="gd-canvas-wrap"></div>
-      </div>
+        <div class="form-field" id="group-box-target-field" style="display: none;">
+          <label for="group-box-target-select">Destination box / kit</label>
+          <select id="group-box-target-select" onchange="handleGroupBoxTargetChange()"></select>
+        </div>
 
+        <div class="form-field" id="group-box-name-field">
+          <label for="group-box-name-input">Box / container / kit name *</label>
+          <input
+            type="text"
+            id="group-box-name-input"
+            placeholder="e.g. Assorted Voltage Regulators, M3 Fasteners Box"
+            onkeydown="handleGroupBoxNameKeydown(event)"
+          >
+        </div>
+
+        <div class="form-field" id="group-box-photo-row" style="display: none;">
+          <label class="group-box-check-label">
+            <input type="checkbox" id="group-box-use-photo" checked>
+            <span>Use current photo as box cover</span>
+          </label>
+        </div>
+
+        <div class="form-field" id="group-box-items-section" style="display: none;">
+          <div class="group-box-items-header">
+            <label style="margin: 0;">Select items to combine</label>
+            <div style="display: flex; gap: 0.35rem;">
+              <button type="button" class="btn btn-secondary btn-xs" onclick="toggleAllGroupBoxItems(true)">Select all</button>
+              <button type="button" class="btn btn-secondary btn-xs" onclick="toggleAllGroupBoxItems(false)">Clear</button>
+            </div>
+          </div>
+          <div id="group-box-items-list" class="group-box-items-list"></div>
+        </div>
+      </div>
       <div class="modal-bottom">
-        <button type="button" class="btn btn-secondary" onclick="closeModal('grid-designer-modal')">Cancel</button>
-        <button type="button" class="btn btn-primary" id="gd-save-btn" onclick="saveGridDesigner()">Save Grid</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal('group-into-box-modal')">Cancel</button>
+        <button type="button" class="btn btn-primary" id="group-box-submit-btn" onclick="submitGroupIntoBox()">Create Box</button>
       </div>
     </div>
   </div>

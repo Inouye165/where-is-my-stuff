@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import mimetypes
 from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,8 @@ from app.db.migrations import run_migrations
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     settings.init_directories()
+    uploads_static.directory = str(settings.UPLOAD_DIR)
+    uploads_static.all_directories = [str(settings.UPLOAD_DIR)]
     version = run_migrations(engine)
     logger.info("WIMS startup complete (schema_version=%d, host=%s, port=%d)", version, settings.HOST, settings.PORT)
     yield
@@ -43,13 +46,15 @@ if settings.CORS_ALLOWED_ORIGINS:
 
 app.include_router(system.router, prefix="/api/v1")
 app.include_router(locations.router, prefix="/api/v1")
-app.include_router(locations.router, prefix="/api/v1/containers", tags=["Containers"])
 app.include_router(items.router, prefix="/api/v1")
 app.include_router(photos.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
 
+mimetypes.add_type("image/webp", ".webp")
+
 settings.init_directories()
-app.mount("/uploads", StaticFiles(directory=str(settings.UPLOAD_DIR)), name="uploads")
+uploads_static = StaticFiles(directory=str(settings.UPLOAD_DIR))
+app.mount("/uploads", uploads_static, name="uploads")
 
 static_dir = settings.BASE_DIR / "app" / "static"
 static_dir.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
-from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.common import UTCDateTime
 
 
 class AuditLogRead(BaseModel):
@@ -9,7 +9,7 @@ class AuditLogRead(BaseModel):
     location_id: Optional[int] = None
     action: str
     notes: Optional[str] = None
-    recorded_at: datetime
+    recorded_at: UTCDateTime
 
     model_config = ConfigDict(from_attributes=True)
 

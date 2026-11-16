@@ -13,6 +13,8 @@ let activeCallback = null;
 let activeLocationId = null;
 let activeLocationDoneCb = null;
 let activeMultiPhotos = [];
+let activeCaptureSaveMode = 'box';
+let userPickedPhoneMode = false;
 let bypassInputId = null;
 const registeredHandlers = new Map();
 
@@ -34,12 +36,98 @@ function stopPolling() {
   }
 }
 
+// Incremented on every open/close so a session request that resolves after the
+// modal was closed or reopened doesn't start a stray poller.
+let openSeq = 0;
+
+function showSessionExpired() {
+  stopPolling();
+  const statusEl = document.getElementById('phone-photo-status');
+  const retryBtn = document.getElementById('phone-photo-retry-btn');
+  if (statusEl) {
+    statusEl.textContent = 'QR code expired. Generate a new one to continue.';
+    statusEl.className = 'phone-qr-status expired';
+  }
+  if (retryBtn) retryBtn.style.display = 'inline-flex';
+}
+
+function startSessionPolling(tokenForPoll, handleStatus) {
+  stopPolling();
+  let pollInFlight = false;
+  const timer = setInterval(async () => {
+    if (activeToken !== tokenForPoll) {
+      clearInterval(timer);
+      if (pollTimer === timer) pollTimer = null;
+      return;
+    }
+    if (pollInFlight) return;
+    pollInFlight = true;
+    try {
+      const res = await apiGet(`/api/v1/photos/capture-sessions/${encodeURIComponent(tokenForPoll)}`);
+      if (activeToken !== tokenForPoll) return;
+      if (res.status === 'expired' && !(Array.isArray(res.photos) && res.photos.length) && !res.photo) {
+        showSessionExpired();
+        return;
+      }
+      handleStatus(res);
+    } catch (err) {
+      // Sessions live in server memory: 404 after a restart/prune, 410 once expired.
+      if (activeToken === tokenForPoll && (err.status === 404 || err.status === 410)) {
+        showSessionExpired();
+      }
+      // Anything else is treated as a transient network hiccup; keep polling.
+    } finally {
+      pollInFlight = false;
+    }
+  }, 800);
+  pollTimer = timer;
+}
+
+function syncPhoneCaptureSaveModeUI() {
+  const modeWrap = document.getElementById('phone-photo-mode-wrap');
+  const locEl = document.getElementById('phone-photo-loc-name');
+  const boxBtn = document.getElementById('phone-mode-box');
+  const sepBtn = document.getElementById('phone-mode-separate');
+  const hintEl = document.getElementById('phone-photo-mode-hint');
+
+  if (!modeWrap) return;
+  if (!activeLocationId || !activeMultiPhotos || activeMultiPhotos.length === 0) {
+    modeWrap.style.display = 'none';
+    return;
+  }
+
+  modeWrap.style.display = 'flex';
+  if (locEl) locEl.textContent = activeLabel || 'this location';
+  if (boxBtn) boxBtn.classList.toggle('active', activeCaptureSaveMode === 'box');
+  if (sepBtn) sepBtn.classList.toggle('active', activeCaptureSaveMode === 'separate');
+
+  if (hintEl) {
+    const count = activeMultiPhotos.length;
+    if (activeCaptureSaveMode === 'box') {
+      hintEl.textContent = count > 1
+        ? `All ${count} photos will be saved together on 1 Box / Kit inside ${activeLabel}.`
+        : `Photo will be saved on 1 Box / Kit inside ${activeLabel}.`;
+    } else {
+      hintEl.textContent = `Detected items will be added individually to ${activeLabel}.`;
+    }
+  }
+}
+
+export function setPhoneCaptureSaveMode(mode) {
+  activeCaptureSaveMode = mode === 'separate' ? 'separate' : 'box';
+  userPickedPhoneMode = true;
+  syncPhoneCaptureSaveModeUI();
+}
+
 export function closePhonePhotoModal() {
+  openSeq += 1;
   stopPolling();
   activeToken = null;
   activeLocationId = null;
   activeLocationDoneCb = null;
   activeMultiPhotos = [];
+  activeCaptureSaveMode = 'box';
+  userPickedPhoneMode = false;
   document.getElementById('phone-photo-modal')?.classList.remove('open');
 }
 
@@ -47,9 +135,11 @@ export async function finishLocationPhoneCapture(shouldScan = false) {
   const cb = activeLocationDoneCb;
   const photos = [...activeMultiPhotos];
   const locId = activeLocationId;
+  const saveMode = activeCaptureSaveMode;
+  const userPickedMode = userPickedPhoneMode;
   closePhonePhotoModal();
   if (typeof cb === 'function') {
-    await cb({ locationId: locId, photos, shouldScan });
+    await cb({ locationId: locId, photos, shouldScan, saveMode, userPickedMode });
   }
 }
 
@@ -63,6 +153,10 @@ export function chooseDesktopFileFallback() {
   const inputId = activeInputId;
   closePhonePhotoModal();
   if (!inputId) return;
+  openDesktopFilePickerDirect(inputId);
+}
+
+export function openDesktopFilePickerDirect(inputId) {
   const inputEl = document.getElementById(inputId);
   if (!inputEl) return;
   bypassInputId = inputId;
@@ -95,6 +189,7 @@ function renderReceivedPhoneThumbs(photos) {
   if (!photos || photos.length === 0) {
     wrap.style.display = 'none';
     thumbsEl.innerHTML = '';
+    syncPhoneCaptureSaveModeUI();
     return;
   }
   wrap.style.display = 'block';
@@ -108,9 +203,10 @@ function renderReceivedPhoneThumbs(photos) {
     img.alt = 'Phone photo';
     thumbsEl.appendChild(img);
   }
+  syncPhoneCaptureSaveModeUI();
 }
 
-export async function openLocationPhoneCaptureModal({ locationId, locationName = 'Drawer', onDone }) {
+export async function openLocationPhoneCaptureModal({ locationId, locationName = 'Drawer', defaultMode = 'box', onDone }) {
   stopPolling();
   activeInputId = null;
   activeLabel = locationName;
@@ -118,6 +214,8 @@ export async function openLocationPhoneCaptureModal({ locationId, locationName =
   activeLocationId = locationId;
   activeLocationDoneCb = onDone;
   activeMultiPhotos = [];
+  activeCaptureSaveMode = defaultMode === 'separate' ? 'separate' : 'box';
+  userPickedPhoneMode = false;
 
   const modal = document.getElementById('phone-photo-modal');
   const titleEl = document.getElementById('phone-photo-title');
@@ -149,6 +247,7 @@ export async function openLocationPhoneCaptureModal({ locationId, locationName =
   if (urlHintEl) urlHintEl.textContent = '';
 
   modal?.classList.add('open');
+  const seq = ++openSeq;
 
   try {
     const session = await apiPost(
@@ -156,6 +255,7 @@ export async function openLocationPhoneCaptureModal({ locationId, locationName =
       { label: locationName, location_id: locationId },
       'Could not start phone camera session.'
     );
+    if (seq !== openSeq) return;
     activeToken = session.token;
     if (qrImg) {
       qrImg.style.display = 'block';
@@ -168,41 +268,22 @@ export async function openLocationPhoneCaptureModal({ locationId, locationName =
       statusEl.textContent = 'Scan with your phone to add 1 or more photos...';
     }
 
-    const tokenForPoll = session.token;
-    pollTimer = setInterval(async () => {
-      if (activeToken !== tokenForPoll) {
-        stopPolling();
-        return;
+    startSessionPolling(session.token, (res) => {
+      const list = Array.isArray(res.photos) && res.photos.length
+        ? res.photos
+        : (res.photo ? [res.photo] : []);
+      if (list.length === 0) return;
+      activeMultiPhotos = list;
+      renderReceivedPhoneThumbs(list);
+      if (statusEl) {
+        statusEl.textContent = `Receiving photos (${list.length} saved). Keep snapping or click Done.`;
       }
-      try {
-        const res = await apiGet(`/api/v1/photos/capture-sessions/${encodeURIComponent(tokenForPoll)}`);
-        if (activeToken !== tokenForPoll) return;
-
-        const list = Array.isArray(res.photos) && res.photos.length
-          ? res.photos
-          : (res.photo ? [res.photo] : []);
-        if (list.length > 0) {
-          activeMultiPhotos = list;
-          renderReceivedPhoneThumbs(list);
-          if (statusEl) {
-            statusEl.textContent = `Receiving photos (${list.length} saved). Keep snapping or click Done.`;
-          }
-          if (cancelBtn) cancelBtn.style.display = 'none';
-          if (doneBtn) doneBtn.style.display = 'inline-flex';
-          if (scanBtn) scanBtn.style.display = 'inline-flex';
-        } else if (res.status === 'expired') {
-          stopPolling();
-          if (statusEl) {
-            statusEl.textContent = 'QR code expired. Generate a new one to continue.';
-            statusEl.className = 'phone-qr-status expired';
-          }
-          if (retryBtn) retryBtn.style.display = 'inline-flex';
-        }
-      } catch {
-        // Transient network hiccup; keep polling
-      }
-    }, 800);
+      if (cancelBtn) cancelBtn.style.display = 'none';
+      if (doneBtn) doneBtn.style.display = 'inline-flex';
+      if (scanBtn) scanBtn.style.display = 'inline-flex';
+    });
   } catch (err) {
+    if (seq !== openSeq) return;
     if (statusEl) {
       statusEl.textContent = err.message || 'Could not start phone camera session.';
       statusEl.className = 'phone-qr-status expired';
@@ -251,9 +332,11 @@ export async function openPhonePhotoModal({ inputId, label = 'Take a photo', onP
   if (urlHintEl) urlHintEl.textContent = '';
 
   modal?.classList.add('open');
+  const seq = ++openSeq;
 
   try {
     const session = await apiPost('/api/v1/photos/capture-sessions', { label }, 'Could not start phone camera session.');
+    if (seq !== openSeq) return;
     activeToken = session.token;
     if (qrImg) {
       qrImg.style.display = 'block';
@@ -266,43 +349,24 @@ export async function openPhonePhotoModal({ inputId, label = 'Take a photo', onP
       statusEl.textContent = 'Scan with your phone camera — waiting for photo...';
     }
 
-    const tokenForPoll = session.token;
-    pollTimer = setInterval(async () => {
-      if (activeToken !== tokenForPoll) {
-        stopPolling();
-        return;
-      }
-      try {
-        const res = await apiGet(`/api/v1/photos/capture-sessions/${encodeURIComponent(tokenForPoll)}`);
-        if (activeToken !== tokenForPoll) return;
-
-        if (res.status === 'uploaded' && res.photo) {
-          const cb = activeCallback;
-          const labelForEditor = activeLabel;
-          closePhonePhotoModal();
-          openPhotoEditorModal({
-            imageUrl: res.photo.original_path,
-            sourcePhoto: res.photo,
-            title: `Adjust ${labelForEditor}`,
-            onApply: async (finalPhoto) => {
-              if (typeof cb === 'function') {
-                await cb(finalPhoto);
-              }
-            },
-          });
-        } else if (res.status === 'expired') {
-          stopPolling();
-          if (statusEl) {
-            statusEl.textContent = 'QR code expired. Generate a new one to continue.';
-            statusEl.className = 'phone-qr-status expired';
+    startSessionPolling(session.token, (res) => {
+      if (res.status !== 'uploaded' || !res.photo) return;
+      const cb = activeCallback;
+      const labelForEditor = activeLabel;
+      closePhonePhotoModal();
+      openPhotoEditorModal({
+        imageUrl: res.photo.original_path,
+        sourcePhoto: res.photo,
+        title: `Adjust ${labelForEditor}`,
+        onApply: async (finalPhoto) => {
+          if (typeof cb === 'function') {
+            await cb(finalPhoto);
           }
-          if (retryBtn) retryBtn.style.display = 'inline-flex';
-        }
-      } catch {
-        // Transient network hiccup; keep polling while modal is open
-      }
-    }, 800);
+        },
+      });
+    });
   } catch (err) {
+    if (seq !== openSeq) return;
     if (statusEl) {
       statusEl.textContent = err.message || 'Could not start phone camera session.';
       statusEl.className = 'phone-qr-status expired';
