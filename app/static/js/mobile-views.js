@@ -795,6 +795,7 @@ export function handleTouchPhotoPicked(e) {
 
 export function removePendingTouchPhoto(index) {
   const idx = Number(index);
+  if (touchCaptureState.saving) return;
   if (idx < 0 || idx >= touchCaptureState.pendingFiles.length) return;
   const [removed] = touchCaptureState.pendingFiles.splice(idx, 1);
   if (removed?.previewUrl) {
@@ -822,7 +823,8 @@ export async function saveTouchDrawerPhotos(advance = true) {
       const fd = new FormData();
       fd.append('file', compressed);
       await apiUpload(`/api/v1/locations/${drawer.id}/photos`, fd, 'Photo upload failed.');
-      touchCaptureState.pendingFiles.shift();
+      const pos = touchCaptureState.pendingFiles.indexOf(pending);
+      if (pos !== -1) touchCaptureState.pendingFiles.splice(pos, 1);
       if (pending.previewUrl) {
         try { URL.revokeObjectURL(pending.previewUrl); } catch {}
       }
@@ -830,6 +832,12 @@ export async function saveTouchDrawerPhotos(advance = true) {
 
     clearTouchPendingFiles();
     showToast(`Saved ${pluralize(totalToUpload, 'photo')} to ${drawer.name}`);
+
+    if (touchCaptureState.drawerId !== drawerId) {
+      touchCaptureState.saving = false;
+      await loadAllData();
+      return;
+    }
 
     if (advance && unit) {
       const drawers = getOrderedUnitDrawers(unit);
@@ -922,10 +930,14 @@ function renderTouchRoomsStep() {
 
 function renderTouchUnitsStep(room, units) {
   const roomTitle = room ? toSentenceCase(room.name) : UNASSIGNED_ROOM_LABEL;
+  const roomIdArg = room ? Number(room.id) : 'null';
   return `
     <div class="m-topbar">
       <button type="button" class="m-back-btn" onclick="navToTouchCapture(null, null, null)">
         ${lucideIcon('arrowLeft', '', 20)} Rooms
+      </button>
+      <button type="button" class="btn btn-primary btn-sm" onclick="launchMobileUnitSetup(${roomIdArg})">
+        ${lucideIcon('plus', '', 16)} Add Storage Unit
       </button>
     </div>
 
@@ -937,6 +949,9 @@ function renderTouchUnitsStep(room, units) {
     ${units.length === 0 ? `
       <div class="m-card" style="text-align: center; padding: 2rem 1.25rem;">
         <p class="m-page-sub">No cabinets or organizers in ${escapeHtml(roomTitle)} yet.</p>
+        <button type="button" class="btn btn-primary m-big-btn" style="margin-top: 0.75rem;" onclick="launchMobileUnitSetup(${roomIdArg})">
+          ${lucideIcon('plus', '', 18)} Add Storage Unit
+        </button>
       </div>
     ` : `
       <div class="m-choice-grid">

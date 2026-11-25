@@ -2,7 +2,8 @@ from io import BytesIO
 import ipaddress
 import logging
 import re
-from typing import Dict, List, Optional
+import socket
+from typing import Dict, List, Mapping, Optional
 from urllib.parse import urljoin, urlparse
 
 from fastapi import UploadFile
@@ -47,6 +48,44 @@ def _is_safe_public_https_url(url: str) -> bool:
     except ValueError:
         pass
     return True
+
+
+async def _reject_oversized_response(response: httpx.Response) -> None:
+    """Abort before the body is read when the server declares a body larger than the cap."""
+    declared = response.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > _MAX_IMAGE_BYTES:
+        raise httpx.TransportError(f"Declared image size {declared} exceeds {_MAX_IMAGE_BYTES} bytes.")
+
+
+def _new_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=10.0,
+        headers={"User-Agent": _USER_AGENT},
+        event_hooks={"response": [_reject_oversized_response]},
+    )
+
+
+def _host_resolves_publicly(host: str) -> bool:
+    """False if the hostname resolves to a private/loopback/link-local address; fails open if DNS is unavailable."""
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, OSError):
+        return True
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            continue
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return False
+    return True
+
+
+async def _is_fetchable_url(url: str) -> bool:
+    if not _is_safe_public_https_url(url):
+        return False
+    host = (urlparse(url).hostname or "").lower()
+    return await anyio.to_thread.run_sync(_host_resolves_publicly, host)
 
 
 def build_search_queries(
@@ -178,30 +217,50 @@ async def find_image_url(
 
 
 async def download_and_save_image(client: httpx.AsyncClient, url: str) -> Optional[str]:
-    if not _is_safe_public_https_url(url):
+    if not await _is_fetchable_url(url):
         return None
     # Follow redirects manually so every hop gets the same public-host check.
-    resp: Optional[httpx.Response] = None
+    # The body is streamed and abandoned as soon as it exceeds the size cap.
+    status_code = 0
+    headers: Optional[Mapping[str, str]] = None
+    body = b""
     current = url
     for _ in range(_MAX_REDIRECTS + 1):
         try:
-            resp = await client.get(current, follow_redirects=False)
+            async with client.stream("GET", current, follow_redirects=False) as resp:
+                status_code = resp.status_code
+                headers = resp.headers
+                if status_code in _REDIRECT_STATUSES:
+                    location = str(resp.headers.get("location") or "")
+                    next_url = urljoin(current, location)
+                    if not location or not await _is_fetchable_url(next_url):
+                        logger.debug("Refusing image redirect from %s to %r", url, location)
+                        return None
+                    current = next_url
+                    continue
+                if status_code != 200:
+                    return None
+                declared = str(resp.headers.get("content-length") or "")
+                if declared.isdigit() and int(declared) > _MAX_IMAGE_BYTES:
+                    return None
+                chunks: List[bytes] = []
+                total = 0
+                async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_IMAGE_BYTES:
+                        return None
+                    chunks.append(chunk)
+                body = b"".join(chunks)
+                break
         except httpx.HTTPError as exc:
             logger.debug("Image download failed for %s: %s", current, exc)
             return None
-        if resp.status_code not in _REDIRECT_STATUSES:
-            break
-        location = str(resp.headers.get("location") or "")
-        current = urljoin(current, location)
-        if not location or not _is_safe_public_https_url(current):
-            logger.debug("Refusing image redirect from %s to %r", url, location)
-            return None
     else:
         return None
-    if resp is None or resp.status_code != 200 or not resp.content or len(resp.content) > _MAX_IMAGE_BYTES:
+    if headers is None or status_code != 200 or not body:
         return None
 
-    content_type = str(resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+    content_type = str(headers.get("content-type") or "").split(";")[0].strip().lower()
     final_path = urlparse(current).path.lower()
     ext = ".jpg"
     if content_type == "image/png" or final_path.endswith(".png"):
@@ -209,7 +268,7 @@ async def download_and_save_image(client: httpx.AsyncClient, url: str) -> Option
     elif content_type == "image/webp" or final_path.endswith(".webp"):
         ext = ".webp"
 
-    upload = UploadFile(filename=f"auto_import{ext}", file=BytesIO(resp.content))
+    upload = UploadFile(filename=f"auto_import{ext}", file=BytesIO(body))
     try:
         saved = await anyio.to_thread.run_sync(photo_service.process_and_save, upload)
     except AppError as exc:
@@ -223,7 +282,7 @@ async def find_and_import_image(
     part_number: Optional[str] = None,
     category: Optional[str] = None,
 ) -> Optional[str]:
-    async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": _USER_AGENT}) as client:
+    async with _new_client() as client:
         url = await find_image_url(client, name=name, part_number=part_number, category=category)
         if not url:
             return None
@@ -236,7 +295,7 @@ async def find_and_import_images_batch(
     """Resolve and save photos for multiple items, caching identical search URLs in-memory."""
     results: Dict[int, str] = {}
     url_to_saved: Dict[str, str] = {}
-    async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": _USER_AGENT}) as client:
+    async with _new_client() as client:
         for item in items:
             item_id = int(item["id"])
             url = await find_image_url(

@@ -11,6 +11,7 @@ let gridSaveFn = null;
 let gridDiscardFn = null;
 
 let activePromptResolve = null;
+let activeScanAbortResolve = null;
 
 export function registerGridUnsavedHooks({ isDirty, save, discard }) {
   gridDirtyCheckFn = isDirty;
@@ -66,10 +67,62 @@ export function showUnsavedPrompt(message = 'You have unsaved changes. Would you
   });
 }
 
+export function closeScanAbortOnScrim(e) {
+  if (e && e.target && e.target.id === 'scan-abort-confirm-modal') {
+    resolveScanAbortPrompt('continue');
+  }
+}
+
+export function resolveScanAbortPrompt(choice = 'continue') {
+  const modal = document.getElementById('scan-abort-confirm-modal');
+  if (modal) modal.classList.remove('open');
+  if (activeScanAbortResolve) {
+    const fn = activeScanAbortResolve;
+    activeScanAbortResolve = null;
+    fn(choice);
+  }
+}
+
+export function showScanAbortPrompt(
+  message = 'The AI scan is still running. Do you want to abort the scan and save now without waiting for the remaining results?'
+) {
+  const modal = document.getElementById('scan-abort-confirm-modal');
+  const msgEl = document.getElementById('scan-abort-confirm-msg');
+  if (!modal) {
+    return Promise.resolve(window.confirm(message) ? 'abort' : 'continue');
+  }
+  if (activeScanAbortResolve) {
+    const superseded = activeScanAbortResolve;
+    activeScanAbortResolve = null;
+    superseded('continue');
+  }
+  if (msgEl) msgEl.textContent = message;
+  modal.classList.add('open');
+
+  return new Promise(resolve => {
+    activeScanAbortResolve = resolve;
+  });
+}
+
 export async function guardModalClose(modalId, forceCloseFn) {
-  if (!isModalDirty(modalId)) {
+  const modalEl = document.getElementById(modalId);
+  const isScanning = Boolean(modalEl && modalEl.classList.contains('open') && modalEl.dataset?.scanning === 'true');
+  const dirty = isModalDirty(modalId);
+
+  if (!dirty && !isScanning) {
     forceCloseFn(modalId);
     return true;
+  }
+
+  if (isScanning && !dirty) {
+    const choice = await showUnsavedPrompt('AI scan is still running. Discard and stop scanning?');
+    if (choice === 'discard') {
+      markModalClean(modalId);
+      forceCloseFn(modalId);
+      return true;
+    }
+    if (choice !== 'save') return false;
+    return submitModalSave(modalId);
   }
 
   const choice = await showUnsavedPrompt('You have unsaved changes. Save before closing?');
@@ -81,21 +134,24 @@ export async function guardModalClose(modalId, forceCloseFn) {
     return true;
   }
 
-  if (choice === 'save') {
-    const modalEl = document.getElementById(modalId);
-    const form = (modalEl && typeof modalEl.querySelector === 'function' ? modalEl.querySelector('form') : null)
-      || document.querySelector(`#${modalId} form`);
-    if (form && typeof form.requestSubmit === 'function') {
-      form.requestSubmit();
-      return true;
-    }
-    const submitBtn = (modalEl && typeof modalEl.querySelector === 'function'
-      ? modalEl.querySelector('[data-modal-save], #rapid-submit-btn, .modal-footer .btn-primary')
-      : null) || (modalId === 'drawer-rapid-entry-modal' ? document.getElementById('rapid-submit-btn') : null);
-    if (submitBtn && typeof submitBtn.click === 'function') {
-      submitBtn.click();
-      return true;
-    }
+  if (choice === 'save') return submitModalSave(modalId);
+  return false;
+}
+
+function submitModalSave(modalId) {
+  const modalEl = document.getElementById(modalId);
+  const form = (modalEl && typeof modalEl.querySelector === 'function' ? modalEl.querySelector('form') : null)
+    || document.querySelector(`#${modalId} form`);
+  if (form && typeof form.requestSubmit === 'function') {
+    form.requestSubmit();
+    return true;
+  }
+  const submitBtn = (modalEl && typeof modalEl.querySelector === 'function'
+    ? modalEl.querySelector('[data-modal-save], #rapid-submit-btn, .modal-footer .btn-primary')
+    : null) || (modalId === 'drawer-rapid-entry-modal' ? document.getElementById('rapid-submit-btn') : null);
+  if (submitBtn && typeof submitBtn.click === 'function') {
+    submitBtn.click();
+    return true;
   }
   return false;
 }

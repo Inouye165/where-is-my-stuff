@@ -45,6 +45,15 @@ class ItemSortOrder(str, Enum):
     updated_desc = "updated_desc"
 
 
+def validate_name(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        raise ValueError("Name cannot be blank.")
+    return cleaned
+
+
 def validate_safe_photo_ref(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None

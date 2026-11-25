@@ -4,8 +4,9 @@ export function syncSlotCarousel(track) {
   if (!track) return;
   const wrap = track.closest('.cgrid-slot-carousel-wrap');
   if (!wrap) return;
+  const itemCount = track.children ? track.children.length : 0;
   const maxScroll = Math.max(0, track.scrollWidth - track.clientWidth);
-  const overflowing = maxScroll > 2;
+  const overflowing = itemCount > 1 && maxScroll > 2;
   wrap.classList.toggle('is-overflowing', overflowing);
   wrap.classList.toggle('can-prev', overflowing && track.scrollLeft > 2);
   wrap.classList.toggle('can-next', overflowing && track.scrollLeft < maxScroll - 2);

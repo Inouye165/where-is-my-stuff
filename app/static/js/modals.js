@@ -2,7 +2,9 @@
  * Modals, Unified '+' Sheet, Photo Flows & Printable QR Labels
  */
 import { apiDelete, apiGet, apiPatch, apiPost, apiUpload } from './api.js';
-import { closeModal, escapeHtml, pluralize, sanitizePhotoUrl, showToast, withSubmitLock } from './dom.js';
+import { createSubBoxFromDetectedRow } from './box-actions.js';
+import { findFirstOpenGridCoord, inferUnitChildSlotType } from './compartment-actions.js';
+import { closeModal, escapeHtml, pluralize, registerModalForceCloseHook, sanitizePhotoUrl, showToast, withSubmitLock } from './dom.js';
 import { openInlineGridDesigner } from './grid-designer.js';
 import { openDesktopFilePickerDirect, openLocationPhoneCaptureModal, requestPhotoForInput, registerDesktopPhotoHandler } from './phone-capture.js';
 import { compressImageFile, uploadPhotoAndGetPath } from './photo-compress.js';
@@ -19,7 +21,9 @@ import {
   state,
   updateNavStateAndCounts
 } from './state.js';
-import { markModalClean } from './unsaved-guard.js';
+import { markModalClean, showScanAbortPrompt } from './unsaved-guard.js';
+import { openUnitSetupWizard } from './unit-setup-wizard.js';
+import { ensureVisionModelReady } from './vision-guard.js';
 import { ensureRoomExists, expandSubBox } from './views.js';
 
 const AI_SCAN_TIMEOUT_MS = 130000;
@@ -43,12 +47,12 @@ export function chooseAddAction(choice) {
     openAddItemModal(ctxLocId, null);
   } else if (choice === 'container' || choice === 'location') {
     const parentId = state.currentView === 'room' && ctxLocId ? ctxLocId : null;
-    openAddStorageModal(parentId, 'unit');
+    openUnitSetupWizard(parentId);
   } else if (choice === 'space') {
     openAddStorageModal(null, 'room');
   } else if (choice === 'place') {
     if (state.currentView === 'room' && ctxLocId) {
-      openAddStorageModal(ctxLocId, 'unit');
+      openUnitSetupWizard(ctxLocId);
     } else if (state.currentView === 'unit' && ctxLocId) {
       openAddStorageModal(ctxLocId, 'drawer');
     } else {
@@ -160,6 +164,8 @@ export function openAddStorageModal(parentLocationId = null, kind = 'unit') {
   const modal = document.getElementById('add-storage-modal');
   document.getElementById('edit-storage-id').value = '';
   document.getElementById('storage-name').value = '';
+  const labelInput = document.getElementById('storage-label');
+  if (labelInput) labelInput.value = '';
   document.getElementById('storage-desc').value = '';
   document.getElementById('auto-drawers-toggle').checked = false;
   toggleAutoDrawersUi();
@@ -200,11 +206,22 @@ export function openEditStorageModal(locationId) {
   const kind = ltype === 'room' || ltype === 'site' ? 'room' : ltype === 'container' ? 'unit' : 'drawer';
 
   document.getElementById('edit-storage-id').value = String(loc.id);
+  for (const [inputId, labelId] of [['storage-bin-photo', 'storage-bin-photo-label'], ['storage-spot-photo', 'storage-spot-photo-label']]) {
+    const photoEl = document.getElementById(inputId);
+    if (photoEl) {
+      photoEl.value = '';
+      photoEl.dataset.remotePhotoPath = '';
+    }
+    const photoLabelEl = document.getElementById(labelId);
+    if (photoLabelEl) photoLabelEl.textContent = 'Add photo';
+  }
   document.getElementById('storage-type-segmented').style.display = 'none';
   setStorageTypeChoice(kind, loc.parent_id, loc.id);
 
   document.getElementById('storage-modal-title').textContent = `Edit ${loc.name}`;
   document.getElementById('storage-name').value = loc.name;
+  const labelInput = document.getElementById('storage-label');
+  if (labelInput) labelInput.value = loc.label || '';
   document.getElementById('storage-desc').value = loc.description || '';
   document.getElementById('multi-drawer-box').style.display = 'none';
   document.getElementById('storage-delete-btn').style.display = 'inline-flex';
@@ -234,6 +251,7 @@ export function setStorageTypeChoice(kind, selectedParentId = null, excludeId = 
   const binPhotoField = document.getElementById('storage-bin-photo-field');
   const spotPhotoTitle = document.getElementById('storage-spot-photo-title');
 
+  const labelField = document.getElementById('storage-label-field');
   if (kind === 'room') {
     if (!isEditing) title.textContent = 'Add a space';
     emojiField.style.display = 'flex';
@@ -242,6 +260,7 @@ export function setStorageTypeChoice(kind, selectedParentId = null, excludeId = 
     document.getElementById('storage-inline-room-field').style.display = 'none';
     nameLabel.textContent = 'Space name *';
     nameInput.placeholder = 'e.g. Garage, Office, Bedroom, Closet';
+    if (labelField) labelField.style.display = 'none';
     multiBox.style.display = 'none';
     binPhotoField.style.display = 'none';
     spotPhotoTitle.textContent = 'Space photo (Optional)';
@@ -253,6 +272,7 @@ export function setStorageTypeChoice(kind, selectedParentId = null, excludeId = 
     parentLabel.textContent = 'Which space is it in?';
     nameLabel.textContent = 'Container name *';
     nameInput.placeholder = 'e.g. Yellow Organizer, Clear Tote, Tool Chest';
+    if (labelField) labelField.style.display = 'flex';
     multiBox.style.display = isEditing ? 'none' : 'block';
     binPhotoField.style.display = 'flex';
     spotPhotoTitle.textContent = 'Where it sits';
@@ -264,6 +284,7 @@ export function setStorageTypeChoice(kind, selectedParentId = null, excludeId = 
     parentLabel.textContent = 'Inside which container?';
     nameLabel.textContent = 'Drawer or bin label *';
     nameInput.placeholder = 'e.g. Drawer 1, Top Bin, Batteries';
+    if (labelField) labelField.style.display = 'flex';
     multiBox.style.display = 'none';
     binPhotoField.style.display = 'flex';
     spotPhotoTitle.textContent = 'Where it sits';
@@ -375,12 +396,27 @@ export async function handleStorageFormSubmit(e) {
       } else if (parentLoc && !['room', 'site', 'container'].includes(parentType)) {
         locationType = 'box';
       }
+      const parentHasGrid = Boolean(parentLoc && Number(parentLoc.grid_rows) > 0 && Number(parentLoc.grid_cols) > 0);
+      if (!editId && kind === 'drawer' && parentHasGrid) {
+        locationType = inferUnitChildSlotType(parentLoc);
+      }
+      const storageLabel = (document.getElementById('storage-label')?.value || '').trim() || null;
       const payload = {
         name,
+        label: kind === 'room' ? null : storageLabel,
         description,
         location_type: locationType,
         parent_id: parentId
       };
+      if (!editId && kind === 'drawer' && parentHasGrid) {
+        const openCell = findFirstOpenGridCoord(parentLoc);
+        if (openCell) {
+          payload.grid_row = openCell.grid_row;
+          payload.grid_col = openCell.grid_col;
+          payload.grid_row_span = 1;
+          payload.grid_col_span = 1;
+        }
+      }
       if (containerPhotoPath) payload.container_photo = containerPhotoPath;
       if (contextPhotoPath) payload.context_photo = contextPhotoPath;
 
@@ -475,6 +511,22 @@ let rapidManualMode = false;
 let rapidLlmMode = false;
 let rapidLocationPickerExpanded = false;
 let rapidIsScanning = false;
+let rapidOpenSeq = 0;
+let rapidScanController = null;
+
+function abortRapidAiScan() {
+  if (rapidScanController) {
+    try { rapidScanController.abort(); } catch {}
+    rapidScanController = null;
+  }
+  rapidIsScanning = false;
+  const rapidModal = document.getElementById('drawer-rapid-entry-modal');
+  if (rapidModal && rapidModal.dataset) {
+    rapidModal.dataset.scanning = 'false';
+  }
+}
+
+registerModalForceCloseHook('drawer-rapid-entry-modal', abortRapidAiScan);
 
 function renderRapidPhotoPreviews(urls, activeIndex = -1) {
   const wrap = document.getElementById('rapid-photo-preview-wrap');
@@ -677,6 +729,11 @@ function syncRapidStageUI() {
   const scanBanner = document.getElementById('rapid-scanning-banner');
   if (scanBanner) scanBanner.style.display = rapidIsScanning ? 'flex' : 'none';
 
+  const rapidModal = document.getElementById('drawer-rapid-entry-modal');
+  if (rapidModal && rapidModal.dataset) {
+    rapidModal.dataset.scanning = rapidIsScanning ? 'true' : 'false';
+  }
+
   const submitBtn = document.getElementById('rapid-submit-btn');
   if (submitBtn) submitBtn.style.display = isReview ? '' : 'none';
 
@@ -823,6 +880,8 @@ export function setRapidSaveMode(mode, explicit = true) {
   if (boxBtn) boxBtn.classList.toggle('active', rapidSaveMode === 'box');
   if (kitBtn) kitBtn.classList.toggle('active', rapidSaveMode === 'assortment');
   if (fieldsWrap) fieldsWrap.style.display = (rapidSaveMode === 'box' || rapidSaveMode === 'assortment') ? 'flex' : 'none';
+  const labelWrap = document.getElementById('rapid-assortment-label-wrap');
+  if (labelWrap) labelWrap.style.display = rapidSaveMode === 'box' ? 'flex' : 'none';
   if (nameLabel) {
     nameLabel.textContent = rapidSaveMode === 'box' ? 'Box / container / kit name' : 'Checklist item name';
   }
@@ -1114,6 +1173,16 @@ export function toggleRapidDetectedItem(idx, checked) {
   syncRapidSubmitButtonLabel();
 }
 
+export function toggleRapidItemAsBox(idx) {
+  const item = rapidDetectedItems[Number(idx)];
+  if (!item) return;
+  item.save_as_box = !item.save_as_box;
+  if (item.save_as_box) item.included = true;
+  markModalDirty('drawer-rapid-entry-modal');
+  const locId = parseInt(document.getElementById('rapid-location-select')?.value, 10) || null;
+  renderRapidAiResults(rapidDetectedItems, rapidAiMessage, locId);
+}
+
 export function toggleAllRapidDetectedItems(checked) {
   const flag = Boolean(checked);
   for (const item of rapidDetectedItems) {
@@ -1122,6 +1191,19 @@ export function toggleAllRapidDetectedItems(checked) {
   markModalDirty('drawer-rapid-entry-modal');
   const locId = parseInt(document.getElementById('rapid-location-select')?.value, 10) || null;
   renderRapidAiResults(rapidDetectedItems, rapidAiMessage, locId);
+}
+
+export function clearRapidAiCrops() {
+  for (const item of rapidDetectedItems) {
+    if (item) {
+      item.crop_photo_path = null;
+      item._photoPath = null;
+    }
+  }
+  markModalDirty('drawer-rapid-entry-modal');
+  const locId = parseInt(document.getElementById('rapid-location-select')?.value, 10) || null;
+  renderRapidAiResults(rapidDetectedItems, rapidAiMessage, locId);
+  showToast('Cleared AI crops — items will use the drawer/box photo instead.');
 }
 
 export function toggleRapidItemDetails(idx) {
@@ -1146,6 +1228,8 @@ export function updateRapidDetectedItemField(idx, field, value) {
     item.brief_specs = String(value || '').trim() || null;
   } else if (field === 'category') {
     item.category = String(value || '').trim() || null;
+  } else if (field === 'box_label') {
+    item.box_label = String(value || '').trim().slice(0, 40) || null;
   }
   markModalDirty('drawer-rapid-entry-modal');
   syncRapidSubmitButtonLabel();
@@ -1210,10 +1294,15 @@ function renderRapidAiResults(items, message, locId = null) {
     : '';
 
   box.style.display = 'block';
+  if (rapidDetectedItems.length > 0) {
+    markModalDirty('drawer-rapid-entry-modal');
+  }
+  const hasAnyCrop = rapidDetectedItems.some(it => it && it.crop_photo_path);
   box.innerHTML = `
     <div class="ai-results-header">
       <span>${escapeHtml(`${baseMessage}${boxDupSummary}`)}</span>
       <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+        ${hasAnyCrop ? `<button type="button" class="btn btn-secondary btn-xs" onclick="clearRapidAiCrops()" title="Remove AI crop thumbnails if boxes were misaligned">Clear crops</button>` : ''}
         <button type="button" class="btn btn-secondary btn-xs" onclick="toggleAllRapidDetectedItems(true)">Select all</button>
         <button type="button" class="btn btn-secondary btn-xs" onclick="toggleAllRapidDetectedItems(false)">Clear</button>
       </div>
@@ -1223,10 +1312,11 @@ function renderRapidAiResults(items, message, locId = null) {
         const alreadyInBin = isDupInBin(it);
         const itemThumb = sanitizePhotoUrl(it.crop_photo_path || it._photoPath || '');
         const isChecked = it.included !== false;
+        const isBox = Boolean(it.save_as_box) && rapidSaveMode === 'separate';
         const isExpanded = Boolean(it._expanded);
         const hasExtra = Boolean(it.part_number || it.brief_specs);
         return `
-        <div class="ai-detected-row ai-editable-row">
+        <div class="ai-detected-row ai-editable-row ${isBox ? 'ai-row-is-box' : ''}">
           <input
             type="checkbox"
             class="ai-detected-chk"
@@ -1242,23 +1332,33 @@ function renderRapidAiResults(items, message, locId = null) {
                 type="text"
                 class="ai-edit-input ai-edit-name"
                 value="${escapeHtml(it.name || '')}"
-                placeholder="Part or item name"
+                placeholder="${isBox ? 'Box / container name' : 'Part or item name'}"
                 aria-label="Part name"
                 oninput="updateRapidDetectedItemField(${idx}, 'name', this.value)"
               >
               ${alreadyInBin ? `<span class="drawer-badge-count" title="Already exists in this container — check to add anyway">Already in box</span>` : ''}
-              <div class="ai-edit-qty-wrap" title="Quantity">
-                <span class="ai-edit-qty-prefix">×</span>
-                <input
-                  type="number"
-                  class="ai-edit-input ai-edit-qty"
-                  min="1"
-                  max="1000000"
-                  value="${Math.max(1, Number(it.estimated_qty || 1))}"
-                  aria-label="Quantity"
-                  oninput="updateRapidDetectedItemField(${idx}, 'estimated_qty', this.value)"
-                >
-              </div>
+              ${!isBox ? `
+                <div class="ai-edit-qty-wrap" title="Quantity">
+                  <span class="ai-edit-qty-prefix">×</span>
+                  <input
+                    type="number"
+                    class="ai-edit-input ai-edit-qty"
+                    min="1"
+                    max="1000000"
+                    value="${Math.max(1, Number(it.estimated_qty || 1))}"
+                    aria-label="Quantity"
+                    oninput="updateRapidDetectedItemField(${idx}, 'estimated_qty', this.value)"
+                  >
+                </div>
+              ` : ''}
+              ${rapidSaveMode === 'separate' ? `
+                <button
+                  type="button"
+                  class="ai-box-toggle-btn ${isBox ? 'active' : ''}"
+                  title="Convert this entry into an openable Box / Container using its photo"
+                  onclick="toggleRapidItemAsBox(${idx})"
+                >${isBox ? '📦 Box' : '→ Box'}</button>
+              ` : ''}
               <button
                 type="button"
                 class="ai-edit-more-btn ${isExpanded ? 'active' : ''}"
@@ -1274,6 +1374,20 @@ function renderRapidAiResults(items, message, locId = null) {
                 onclick="removeRapidDetectedItem(${idx})"
               >×</button>
             </div>
+            ${isBox ? `
+              <div class="ai-box-meta-row">
+                <span class="ai-box-badge">Saves as Box / Container inside this drawer (using this photo)</span>
+                <input
+                  type="text"
+                  class="ai-edit-input ai-box-label-input"
+                  value="${escapeHtml(it.box_label || '')}"
+                  maxlength="40"
+                  placeholder="Label (e.g. M2)"
+                  aria-label="Box label"
+                  oninput="updateRapidDetectedItemField(${idx}, 'box_label', this.value)"
+                >
+              </div>
+            ` : ''}
             ${isExpanded ? `
               <div class="ai-editable-sub">
                 <input
@@ -1419,6 +1533,7 @@ function markModalDirty(modalId) {
 }
 
 export async function openRapidEntryModal(defaultLocationId = null, options = {}) {
+  abortRapidAiScan();
   populateLocationDropdowns();
   revokeRapidBlobUrls();
   rapidSelectedFiles = [];
@@ -1489,6 +1604,8 @@ export async function openRapidEntryModal(defaultLocationId = null, options = {}
 
   const assortmentNameInput = document.getElementById('rapid-assortment-name');
   if (assortmentNameInput) assortmentNameInput.value = options.initialBoxName ? String(options.initialBoxName) : '';
+  const assortmentLabelInput = document.getElementById('rapid-assortment-label');
+  if (assortmentLabelInput) assortmentLabelInput.value = options.initialBoxLabel ? String(options.initialBoxLabel) : '';
 
   const resultsBox = document.getElementById('rapid-ai-results');
   if (resultsBox) {
@@ -1519,8 +1636,11 @@ export async function openRapidEntryModal(defaultLocationId = null, options = {}
   markModalClean('drawer-rapid-entry-modal');
   document.getElementById('drawer-rapid-entry-modal')?.classList.add('open');
 
+  const openSeq = ++rapidOpenSeq;
   await loadVisionProviderStatus();
-  if (options.autoScan && (rapidPhotoIds.length > 0 || rapidScannedPhotoUrl)) {
+  const stillOpen = openSeq === rapidOpenSeq
+    && document.getElementById('drawer-rapid-entry-modal')?.classList.contains('open');
+  if (stillOpen && options.autoScan && (rapidPhotoIds.length > 0 || rapidScannedPhotoUrl)) {
     await runRapidAiScan();
   }
 }
@@ -1628,11 +1748,38 @@ export async function runRapidAiScan() {
     return;
   }
 
-  const provider = document.getElementById('rapid-vision-provider')?.value || 'local';
+  const providerSelect = document.getElementById('rapid-vision-provider');
+  let provider = providerSelect?.value || 'local';
+  const readiness = await ensureVisionModelReady({
+    provider,
+    onSwitchProvider: (nextProv) => {
+      if (providerSelect && nextProv) {
+        providerSelect.value = nextProv;
+        onVisionProviderChange();
+      }
+    },
+    onRetry: () => runRapidAiScan(),
+    onManual: () => {
+      rapidManualMode = true;
+      syncRapidStageUI();
+      document.getElementById('rapid-add-part-input')?.focus();
+    },
+  });
+  if (!readiness.ok) {
+    if (readiness.meta) {
+      rapidVisionMeta = readiness.meta;
+      updateVisionStatusUI();
+    }
+    return;
+  }
+  provider = readiness.provider;
   const model = document.getElementById('rapid-vision-model')?.value.trim() || '';
   const scanBtn = document.getElementById('rapid-ai-scan-btn');
   const scanBannerText = document.getElementById('rapid-scanning-text');
 
+  if (rapidIsScanning) return;
+  const scanController = new AbortController();
+  rapidScanController = scanController;
   rapidIsScanning = true;
   if (scanBannerText) scanBannerText.textContent = 'Scanning photo for items...';
   syncRapidStageUI();
@@ -1654,8 +1801,10 @@ export async function runRapidAiScan() {
         const attached = await apiPost(
           `/api/v1/locations/${locId}/photos/attach`,
           { photo_path: rapidRemotePhotoPath, photo_type: 'container' },
-          'Could not attach phone photo.'
+          'Could not attach phone photo.',
+          { signal: scanController.signal }
         );
+        if (scanController.signal.aborted) return;
         await loadAllData();
         rapidScannedPhotoUrl = rapidRemotePhotoPath;
         rapidRemotePhotoPath = null;
@@ -1670,6 +1819,7 @@ export async function runRapidAiScan() {
         totalScanned = filesToScan.length;
         let idx = 0;
         for (const file of filesToScan) {
+          if (scanController.signal.aborted) return;
           idx += 1;
           if (totalScanned > 1) {
             if (scanBtn) scanBtn.textContent = `Scanning ${idx}/${totalScanned}...`;
@@ -1681,14 +1831,16 @@ export async function runRapidAiScan() {
           if (model) fd.append('model', model);
           if (expectedCount) fd.append('expected_count', String(expectedCount));
           const compressed = await compressImageFile(file);
+          if (scanController.signal.aborted) return;
           fd.append('file', compressed);
 
           const data = await apiUpload(
             `/api/v1/locations/${locId}/analyze-photo`,
             fd,
             'AI scan failed.',
-            { timeoutMs: AI_SCAN_TIMEOUT_MS }
+            { timeoutMs: AI_SCAN_TIMEOUT_MS, signal: scanController.signal }
           );
+          if (scanController.signal.aborted) return;
           rapidSelectedFiles.shift();
           lastMessage = data.message || lastMessage;
           if (data.status === 'success') {
@@ -1701,6 +1853,7 @@ export async function runRapidAiScan() {
           }
         }
         await loadAllData();
+        if (scanController.signal.aborted) return;
         const updatedLoc = state.locationMap.get(locId);
         const savedPhotos = Array.isArray(updatedLoc?.photos) ? updatedLoc.photos : [];
         if (savedPhotos.length > 0) {
@@ -1717,6 +1870,7 @@ export async function runRapidAiScan() {
         totalScanned = rapidPhotoIds.length;
         let idx = 0;
         for (const pid of rapidPhotoIds) {
+          if (scanController.signal.aborted) return;
           idx += 1;
           if (totalScanned > 1) {
             if (scanBtn) scanBtn.textContent = `Scanning ${idx}/${totalScanned}...`;
@@ -1733,8 +1887,9 @@ export async function runRapidAiScan() {
             `/api/v1/locations/${locId}/analyze-photo`,
             fd,
             'AI scan failed.',
-            { timeoutMs: AI_SCAN_TIMEOUT_MS }
+            { timeoutMs: AI_SCAN_TIMEOUT_MS, signal: scanController.signal }
           );
+          if (scanController.signal.aborted) return;
           lastMessage = data.message || lastMessage;
           if (data.status === 'success') {
             successCount += 1;
@@ -1759,8 +1914,9 @@ export async function runRapidAiScan() {
           `/api/v1/locations/${locId}/analyze-photo`,
           fd,
           'AI scan failed.',
-          { timeoutMs: AI_SCAN_TIMEOUT_MS }
+          { timeoutMs: AI_SCAN_TIMEOUT_MS, signal: scanController.signal }
         );
+        if (scanController.signal.aborted) return;
         lastMessage = data.message || '';
         if (data.status === 'success') {
           successCount = 1;
@@ -1772,6 +1928,7 @@ export async function runRapidAiScan() {
         }
       }
 
+      if (scanController.signal.aborted) return;
       if (rapidPreviewUrls.length > 1) renderRapidPhotoPreviews(rapidPreviewUrls, -1);
 
       const mergedAiItems = mergeDetectedItems(collectedItems);
@@ -1803,6 +1960,9 @@ export async function runRapidAiScan() {
         summaryMsg += ` (${failedCount} failed: ${lastFailureMessage || 'check logs/wims.log'})`;
       }
 
+      if (rapidScanController === scanController) {
+        rapidScanController = null;
+      }
       rapidIsScanning = false;
       renderRapidAiResults(
         combinedItems,
@@ -1826,15 +1986,32 @@ export async function runRapidAiScan() {
         showToast(`AI found ${pluralize(mergedAiItems.length, 'item')} — review or add items below, then click Save.`);
       }
     } catch (err) {
+      if (err?.name === 'UserAbortError' || scanController.signal.aborted) {
+        return;
+      }
       showToast(err.message || 'AI scan failed.', 'error');
     } finally {
-      rapidIsScanning = false;
-      syncRapidStageUI();
+      if (rapidScanController === scanController) {
+        rapidScanController = null;
+        rapidIsScanning = false;
+        syncRapidStageUI();
+      }
     }
   });
 }
 
 export async function submitRapidEntry() {
+  if (rapidIsScanning) {
+    const choice = await showScanAbortPrompt(
+      'The AI scan is still running. Do you want to abort the scan and save now without waiting for the remaining results?'
+    );
+    if (choice !== 'abort') {
+      return;
+    }
+    abortRapidAiScan();
+    syncRapidStageUI();
+  }
+
   const locId = parseInt(document.getElementById('rapid-location-select')?.value, 10);
   if (!locId) {
     showToast('Please choose where these items go first.', 'error');
@@ -1852,6 +2029,7 @@ export async function submitRapidEntry() {
   const text = (document.getElementById('rapid-items-text')?.value || '').trim();
   const category = (document.getElementById('rapid-category-input')?.value || '').trim() || null;
   const assortmentName = (document.getElementById('rapid-assortment-name')?.value || '').trim() || null;
+  const assortmentLabel = (document.getElementById('rapid-assortment-label')?.value || '').trim().slice(0, 40) || null;
 
   if (!checkedParts.length && !text && !rapidSelectedFiles.length && !rapidRemotePhotoPath && !rapidPhotoId) {
     showToast('Scan a photo or add at least one part to save.', 'error');
@@ -1898,7 +2076,26 @@ export async function submitRapidEntry() {
         || ''
       ) || null;
 
-      const structuredItems = checkedParts.map(it => {
+      const boxParts = rapidSaveMode === 'separate'
+        ? checkedParts.filter(it => Boolean(it.save_as_box))
+        : [];
+      const regularParts = rapidSaveMode === 'separate'
+        ? checkedParts.filter(it => !it.save_as_box)
+        : checkedParts;
+
+      const createdBoxes = [];
+      for (const bp of boxParts) {
+        const boxRes = await createSubBoxFromDetectedRow(locId, {
+          ...bp,
+          crop_photo_path: bp.crop_photo_path || bp._photoPath || defaultPhotoUrl,
+        });
+        if (boxRes && boxRes.id) {
+          createdBoxes.push(boxRes);
+          expandSubBox(boxRes.id);
+        }
+      }
+
+      const structuredItems = regularParts.map(it => {
         const candidateName = String(it.name || '').trim().slice(0, 160);
         const candidatePart = (it.part_number && String(it.part_number).trim().slice(0, 120)) || null;
         const cropPhoto = sanitizePhotoUrl(it.crop_photo_path || '') || null;
@@ -1935,8 +2132,11 @@ export async function submitRapidEntry() {
         if (rapidSaveMode === 'box' || rapidSaveMode === 'assortment') {
           bulkPayload.assortment_name = assortmentName ? assortmentName.slice(0, 160) : null;
           bulkPayload.assortment_photo = defaultPhotoUrl;
-          if (rapidSaveMode === 'box' && rapidSessionUploadedPhotoIds.length > 0) {
-            bulkPayload.source_photo_ids = rapidSessionUploadedPhotoIds;
+          if (rapidSaveMode === 'box') {
+            if (assortmentLabel) bulkPayload.assortment_label = assortmentLabel;
+            if (rapidSessionUploadedPhotoIds.length > 0) {
+              bulkPayload.source_photo_ids = rapidSessionUploadedPhotoIds;
+            }
           }
         }
 
@@ -1948,20 +2148,22 @@ export async function submitRapidEntry() {
           showToast(`Created "${assortmentName || 'Box / Kit'}" with ${pluralize(created.length, 'item')}!`);
         } else if (rapidSaveMode === 'assortment' && created.length === 1) {
           showToast(`Saved "${created[0].name}" with searchable contents list!`);
+        } else if (createdBoxes.length > 0) {
+          showToast(`Added ${pluralize(created.length, 'item')} and ${pluralize(createdBoxes.length, 'container')}!`);
         } else {
           showToast(`Added ${pluralize(created.length, 'item')}!`);
         }
 
         const needsAutoPhoto =
           (rapidSaveMode === 'box' || rapidSaveMode === 'separate') &&
-          created.some((it) => !it.item_photo || String(it.item_photo).includes('_crop_'));
+          created.some((it) => !it.item_photo);
         const targetAutoLocId =
           rapidSaveMode === 'box' && created.length > 0 && created[0].location_id
             ? created[0].location_id
             : locId;
         if (needsAutoPhoto && targetAutoLocId) {
-          // Server looks up each item sequentially against several image sources.
-          apiPost(`/api/v1/locations/${targetAutoLocId}/find-item-images`, {}, null, { timeoutMs: 300000 })
+          // Only fill items without a photo; preserve real user photo crops from AI scan.
+          apiPost(`/api/v1/locations/${targetAutoLocId}/find-item-images?include_crops=false`, {}, null, { timeoutMs: 300000 })
             .then((res) => {
               if (res && res.updated_count > 0) {
                 loadAllData();
@@ -1969,6 +2171,8 @@ export async function submitRapidEntry() {
             })
             .catch(() => {});
         }
+      } else if (createdBoxes.length > 0) {
+        showToast(`Created ${pluralize(createdBoxes.length, 'container')}!`);
       } else {
         showToast('Saved photo(s)!');
       }
@@ -2083,7 +2287,7 @@ function bindQuickPhotoPasteAndDrop() {
   }
 }
 
-function collectLocationImportedPhotos(locId) {
+function collectLocationImportedPhotos(locId, { activeUrl = null, includeParent = true } = {}) {
   const loc = state.locationMap.get(locId);
   if (!loc) return [];
   const seen = new Set();
@@ -2094,19 +2298,19 @@ function collectLocationImportedPhotos(locId) {
     seen.add(url);
     list.push({ url, thumb: sanitizePhotoUrl(thumbUrl || '') || url, label: label || loc.name });
   };
-  const activeUrl = sanitizePhotoUrl(loc.container_photo || '');
+  const resolvedActive = sanitizePhotoUrl(activeUrl !== null ? activeUrl : (loc.container_photo || ''));
   pushUrl(loc.container_photo, null, loc.name);
   if (Array.isArray(loc.photos)) {
     for (const p of loc.photos) pushUrl(p.photo_path, p.thumbnail_path, p.caption || loc.name);
   }
   pushUrl(loc.context_photo, null, loc.name);
-  if (loc.parent_id) {
+  if (includeParent && loc.parent_id) {
     const parent = state.locationMap.get(loc.parent_id);
     if (parent && Array.isArray(parent.photos)) {
       for (const p of parent.photos) pushUrl(p.photo_path, p.thumbnail_path, p.caption || parent.name);
     }
   }
-  return list.map(p => ({ ...p, isActive: Boolean(activeUrl && p.url === activeUrl) }));
+  return list.map(p => ({ ...p, isActive: Boolean(resolvedActive && p.url === resolvedActive) }));
 }
 
 export function openQuickPhotoModal(target) {
@@ -2120,7 +2324,18 @@ export function openQuickPhotoModal(target) {
   const existingWrap = document.getElementById('quick-photo-existing-wrap');
   const existingGrid = document.getElementById('quick-photo-existing-grid');
   if (existingWrap && existingGrid) {
-    const candidates = target.kind !== 'item' ? collectLocationImportedPhotos(Number(target.id)) : [];
+    let candidates = [];
+    if (target.kind === 'item') {
+      const item = (state.items || []).find(it => Number(it.id) === Number(target.id));
+      if (item && item.location_id) {
+        candidates = collectLocationImportedPhotos(Number(item.location_id), {
+          activeUrl: item.item_photo || '',
+          includeParent: false,
+        });
+      }
+    } else {
+      candidates = collectLocationImportedPhotos(Number(target.id));
+    }
     if (candidates.length > 0) {
       existingGrid.innerHTML = candidates.map((p) => `
         <button
@@ -2151,22 +2366,24 @@ export function handleQuickPhotoSelected(e) {
 export async function attachQuickPhotoPath(uploadedPath) {
   const target = state.quickPhotoTarget;
   if (!target || !uploadedPath) return;
-  if (target.kind === 'item') {
-    await apiPatch(`/api/v1/items/${target.id}`, { item_photo: uploadedPath }, 'Could not attach photo.');
-  } else if (target.kind === 'location-photo') {
-    await apiPost(
-      `/api/v1/locations/${target.id}/photos/attach`,
-      { photo_path: uploadedPath, photo_type: 'container' },
-      'Could not attach photo.'
-    );
-  } else {
-    const body = target.kind === 'spot' ? { context_photo: uploadedPath } : { container_photo: uploadedPath };
-    await apiPatch(`/api/v1/locations/${target.id}`, body, 'Could not attach photo.');
-  }
-  setQuickPhotoFile(null);
-  closeModal('quick-photo-modal');
-  showToast('Photo saved!');
-  await loadAllData();
+  return withSubmitLock('quick-photo-attach', '', async () => {
+    if (target.kind === 'item') {
+      await apiPatch(`/api/v1/items/${target.id}`, { item_photo: uploadedPath }, 'Could not attach photo.');
+    } else if (target.kind === 'location-photo') {
+      await apiPost(
+        `/api/v1/locations/${target.id}/photos/attach`,
+        { photo_path: uploadedPath, photo_type: 'container' },
+        'Could not attach photo.'
+      );
+    } else {
+      const body = target.kind === 'spot' ? { context_photo: uploadedPath } : { container_photo: uploadedPath };
+      await apiPatch(`/api/v1/locations/${target.id}`, body, 'Could not attach photo.');
+    }
+    setQuickPhotoFile(null);
+    closeModal('quick-photo-modal');
+    showToast('Photo saved!');
+    await loadAllData();
+  });
 }
 
 export async function submitQuickPhoto() {
@@ -2645,8 +2862,10 @@ export async function startBoxUploadScanFromModal() {
   if (!parentId) return;
   const typedName = (document.getElementById('group-box-name-input')?.value || '').trim();
   closeModal('group-into-box-modal', true);
-  await openRapidEntryModal(parentId, { saveMode: 'box', initialBoxName: typedName });
+  const opened = openRapidEntryModal(parentId, { saveMode: 'box', initialBoxName: typedName });
+  // Open the file picker synchronously so the browser still honors the user gesture.
   triggerRapidPhotoAndScan();
+  await opened;
 }
 
 

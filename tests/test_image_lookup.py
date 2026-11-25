@@ -1,6 +1,7 @@
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 from PIL import Image
+from http_mocks import make_http_client
 
 
 def _make_png_bytes(color=(30, 144, 255), size=(120, 120)) -> bytes:
@@ -57,8 +58,7 @@ def test_find_and_import_item_image_updates_item_photo(client):
             return mock_search_resp
         return mock_img_resp
 
-    mock_client = MagicMock()
-    mock_client.get = AsyncMock(side_effect=fake_get)
+    mock_client = make_http_client(fake_get)
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
     mock_cm.__aexit__ = AsyncMock(return_value=None)
@@ -152,8 +152,7 @@ def test_bulk_location_find_images_replaces_crops_and_preserves_custom_photos(cl
             return mock_search_resp
         return mock_img_resp
 
-    mock_client = MagicMock()
-    mock_client.get = AsyncMock(side_effect=fake_get)
+    mock_client = make_http_client(fake_get)
     mock_cm = MagicMock()
     mock_cm.__aenter__ = AsyncMock(return_value=mock_client)
     mock_cm.__aexit__ = AsyncMock(return_value=None)

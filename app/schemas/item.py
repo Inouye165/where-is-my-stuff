@@ -1,7 +1,7 @@
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.audit import AuditLogRead
-from app.schemas.common import ItemStatus, UTCDateTime, validate_safe_photo_ref
+from app.schemas.common import ItemStatus, UTCDateTime, validate_name, validate_safe_photo_ref
 from app.schemas.location import Breadcrumb, LocationRead
 
 
@@ -18,6 +18,11 @@ class ItemBase(BaseModel):
     status: Optional[ItemStatus] = Field(default=ItemStatus.stored)
     status_note: Optional[str] = Field(default=None, max_length=250)
 
+    @field_validator("name")
+    @classmethod
+    def check_name(cls, v: Optional[str]) -> Optional[str]:
+        return validate_name(v)
+
     @field_validator("item_photo")
     @classmethod
     def check_item_photo(cls, v: Optional[str]) -> Optional[str]:
@@ -32,6 +37,7 @@ class ItemBulkCreate(BaseModel):
     location_id: int = Field(..., ge=1)
     save_mode: Literal["separate", "box", "assortment"] = "separate"
     assortment_name: Optional[str] = Field(default=None, max_length=160)
+    assortment_label: Optional[str] = Field(default=None, max_length=40)
     assortment_photo: Optional[str] = Field(default=None, max_length=300)
     source_photo_ids: Optional[List[int]] = None
     category: Optional[str] = Field(default=None, max_length=80)
@@ -63,6 +69,12 @@ class ItemGroupIntoBoxResponse(BaseModel):
     moved_count: int
 
 
+class ItemConvertToBoxRequest(BaseModel):
+    box_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    box_label: Optional[str] = Field(default=None, max_length=40)
+    keep_item_inside: bool = False
+
+
 class ItemUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=160)
     description: Optional[str] = Field(default=None, max_length=20_000)
@@ -75,6 +87,11 @@ class ItemUpdate(BaseModel):
     location_id: Optional[int] = Field(default=None, ge=1)
     status: Optional[ItemStatus] = None
     status_note: Optional[str] = Field(default=None, max_length=250)
+
+    @field_validator("name")
+    @classmethod
+    def check_name(cls, v: Optional[str]) -> Optional[str]:
+        return validate_name(v)
 
     @field_validator("item_photo")
     @classmethod
@@ -124,6 +141,27 @@ class ItemAttachmentRead(BaseModel):
     created_at: UTCDateTime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ItemImagesToPdfRequest(BaseModel):
+    photo_paths: List[str] = Field(..., min_length=1, max_length=50)
+    title: Optional[str] = Field(default=None, max_length=160)
+    max_dimension: int = Field(default=1400, ge=400, le=2400)
+    remove_source_photos: bool = False
+
+    @field_validator("photo_paths")
+    @classmethod
+    def check_photo_paths(cls, v: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for raw in v:
+            safe = validate_safe_photo_ref(raw)
+            if safe and safe not in seen:
+                seen.add(safe)
+                cleaned.append(safe)
+        if not cleaned:
+            raise ValueError("At least one valid photo path is required.")
+        return cleaned
 
 
 class ItemDetailRead(ItemRead):

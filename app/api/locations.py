@@ -1,11 +1,16 @@
 from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.network import get_lan_ip, resolve_effective_base_url
+from app.core.exceptions import NotFoundError
+from app.services.photo_service import photo_service
 from app.schemas.item import ItemRead, ItemUpdate, VisionAnalysisResponse
 from app.schemas.location import (
+    GridSlotEnsureRequest,
+    GridSlotMoveRequest,
     LocationCreate,
     LocationGridSave,
     LocationPhotoAttach,
@@ -144,28 +149,41 @@ async def analyze_drawer_photo(
 async def find_location_item_images(
     location_id: int,
     force: bool = Query(default=False),
+    include_crops: bool = Query(default=True),
     db: Session = Depends(get_db),
 ) -> dict:
-    location_service.get_read_by_id(db, location_id)
-    loc_items = inventory_service.list_items_for_location(db, location_id)
-    candidates = [
-        {
-            "id": it.id,
-            "name": it.name,
-            "serial_or_part_number": it.serial_or_part_number,
-            "category": it.category,
-        }
-        for it in loc_items
-        if force or is_crop_or_missing_photo(it.item_photo)
-    ]
+    def _collect_candidates() -> list[dict]:
+        location_service.get_read_by_id(db, location_id)
+        loc_items = inventory_service.list_items_for_location(db, location_id)
+        return [
+            {
+                "id": it.id,
+                "name": it.name,
+                "serial_or_part_number": it.serial_or_part_number,
+                "category": it.category,
+            }
+            for it in loc_items
+            if force or (is_crop_or_missing_photo(it.item_photo) if include_crops else not it.item_photo)
+        ]
+
+    candidates = await run_in_threadpool(_collect_candidates)
     if not candidates:
         return {"status": "ok", "checked_count": 0, "updated_count": 0}
 
     resolved = await find_and_import_images_batch(candidates)
-    updated_count = 0
-    for item_id, saved_path in resolved.items():
-        inventory_service.update(db, item_id, ItemUpdate(item_photo=saved_path))
-        updated_count += 1
+
+    def _apply_photos() -> int:
+        count = 0
+        for item_id, saved_path in resolved.items():
+            try:
+                inventory_service.update(db, item_id, ItemUpdate(item_photo=saved_path))
+            except NotFoundError:
+                photo_service.delete_upload_url(saved_path)
+                continue
+            count += 1
+        return count
+
+    updated_count = await run_in_threadpool(_apply_photos)
 
     return {
         "status": "ok",
@@ -184,9 +202,30 @@ def get_location_items(location_id: int, db: Session = Depends(get_db)) -> List[
     return inventory_service.list_items_for_location(db, location_id)
 
 
+@router.post("/{location_id}/grid/slot", response_model=LocationRead)
+def ensure_location_grid_slot(
+    location_id: int,
+    data: GridSlotEnsureRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> LocationRead:
+    loc, created = location_service.ensure_grid_slot(db, location_id, data)
+    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    return location_service.get_read_by_id(db, loc.id)
+
+
 @router.put("/{location_id}/grid", response_model=LocationTree)
 def save_location_grid(location_id: int, data: LocationGridSave, db: Session = Depends(get_db)) -> LocationTree:
     return location_service.save_grid_layout(db, location_id, data)
+
+
+@router.post("/{location_id}/grid/move", response_model=LocationTree)
+def move_location_grid_slot(
+    location_id: int,
+    data: GridSlotMoveRequest,
+    db: Session = Depends(get_db),
+) -> LocationTree:
+    return location_service.move_grid_slot(db, location_id, data)
 
 
 @router.patch("/{location_id}", response_model=LocationRead)

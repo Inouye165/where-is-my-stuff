@@ -13,6 +13,7 @@ class Location(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    label: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     location_type: Mapped[str] = mapped_column(String(50), nullable=False, default="room", index=True)
     parent_id: Mapped[Optional[int]] = mapped_column(
@@ -58,6 +59,7 @@ class Location(Base):
                 {
                     "id": curr.id,
                     "name": curr.name,
+                    "label": curr.label,
                     "location_type": curr.location_type,
                 },
             )

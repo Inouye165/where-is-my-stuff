@@ -1,5 +1,6 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.schemas.audit import AuditVerifyRequest
@@ -7,16 +8,20 @@ from app.schemas.common import ItemSortOrder, ItemStatus
 from app.schemas.item import (
     ItemAttachmentRead,
     ItemBulkCreate,
+    ItemConvertToBoxRequest,
     ItemCreate,
     ItemDetailRead,
     ItemGroupIntoBoxRequest,
     ItemGroupIntoBoxResponse,
+    ItemImagesToPdfRequest,
     ItemRead,
     ItemUpdate,
 )
+from app.schemas.location import LocationRead
 from app.core.exceptions import NotFoundError
 from app.services.image_lookup_service import find_and_import_image
 from app.services.inventory_service import inventory_service
+from app.services.photo_service import photo_service
 
 router = APIRouter(prefix="/items", tags=["Items"])
 
@@ -36,6 +41,15 @@ def create_items_bulk(data: ItemBulkCreate, db: Session = Depends(get_db)) -> Li
 @router.post("/group-into-box", response_model=ItemGroupIntoBoxResponse, status_code=status.HTTP_201_CREATED)
 def group_items_into_box(data: ItemGroupIntoBoxRequest, db: Session = Depends(get_db)) -> ItemGroupIntoBoxResponse:
     return inventory_service.group_items_into_box(db, data)
+
+
+@router.post("/{item_id}/convert-to-box", response_model=LocationRead, status_code=status.HTTP_201_CREATED)
+def convert_item_to_box(
+    item_id: int,
+    data: Optional[ItemConvertToBoxRequest] = None,
+    db: Session = Depends(get_db),
+) -> LocationRead:
+    return inventory_service.convert_item_to_box(db, item_id, data or ItemConvertToBoxRequest())
 
 
 @router.get("", response_model=List[ItemRead])
@@ -98,6 +112,20 @@ def upload_item_attachment(
     return ItemAttachmentRead.model_validate(att)
 
 
+@router.post(
+    "/{item_id}/attachments/from-photos-pdf",
+    response_model=ItemAttachmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def convert_item_photos_to_pdf_attachment(
+    item_id: int,
+    data: ItemImagesToPdfRequest,
+    db: Session = Depends(get_db),
+) -> ItemAttachmentRead:
+    att = inventory_service.create_pdf_attachment_from_photos(db=db, item_id=item_id, data=data)
+    return ItemAttachmentRead.model_validate(att)
+
+
 @router.delete("/{item_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_item_attachment(item_id: int, attachment_id: int, db: Session = Depends(get_db)) -> None:
     inventory_service.delete_attachment(db=db, item_id=item_id, attachment_id=attachment_id)
@@ -106,7 +134,7 @@ def delete_item_attachment(item_id: int, attachment_id: int, db: Session = Depen
 
 @router.post("/{item_id}/find-image")
 async def find_and_import_item_image(item_id: int, db: Session = Depends(get_db)) -> dict:
-    item = inventory_service.get_detail(db, item_id)
+    item = await run_in_threadpool(inventory_service.get_detail, db, item_id)
     name = item.name
     part_number = item.serial_or_part_number
     category = item.category
@@ -119,12 +147,19 @@ async def find_and_import_item_image(item_id: int, db: Session = Depends(get_db)
     if not saved_path:
         raise NotFoundError(f"No photo found online for '{name}'.")
 
-    updated = inventory_service.update(db, item_id, ItemUpdate(item_photo=saved_path))
-    item_read = inventory_service.to_read_schema(updated, db=db)
+    def _apply_photo() -> dict:
+        updated = inventory_service.update(db, item_id, ItemUpdate(item_photo=saved_path))
+        return inventory_service.to_read_schema(updated, db=db).model_dump(mode="json")
+
+    try:
+        item_read = await run_in_threadpool(_apply_photo)
+    except Exception:
+        photo_service.delete_upload_url(saved_path)
+        raise
     return {
         "status": "ok",
         "item_photo": saved_path,
-        "item": item_read.model_dump(mode="json"),
+        "item": item_read,
     }
 
 

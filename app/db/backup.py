@@ -31,6 +31,7 @@ class BackupService:
 
         src_conn: Optional[sqlite3.Connection] = None
         dst_conn: Optional[sqlite3.Connection] = None
+        completed = False
         try:
             src_conn = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True, timeout=10.0)
             dst_conn = sqlite3.connect(str(temp_path), timeout=10.0)
@@ -39,11 +40,14 @@ class BackupService:
 
             integrity_row = dst_conn.execute("PRAGMA integrity_check;").fetchone()
             integrity_ok = bool(integrity_row and integrity_row[0] == "ok")
+            completed = True
         finally:
             if dst_conn is not None:
                 dst_conn.close()
             if src_conn is not None:
                 src_conn.close()
+            if not completed:
+                temp_path.unlink(missing_ok=True)
 
         if not integrity_ok:
             temp_path.unlink(missing_ok=True)
@@ -65,9 +69,15 @@ class BackupService:
     def _prune_old_backups(backup_dir: Path, max_keep: int) -> None:
         if max_keep <= 0:
             return
+        def _mtime(p: Path) -> float:
+            try:
+                return p.stat().st_mtime
+            except FileNotFoundError:
+                return 0.0
+
         backups = sorted(
             backup_dir.glob("inventory_backup_*.db"),
-            key=lambda p: p.stat().st_mtime,
+            key=_mtime,
             reverse=True,
         )
         for stale in backups[max_keep:]:

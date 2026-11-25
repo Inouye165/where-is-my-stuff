@@ -4,8 +4,22 @@
  */
 import { onCrossTabSync } from './api.js';
 import { scrollSlotCarousel, syncSlotCarousel } from './carousel.js';
+import {
+  cancelGridCellInlineEdit,
+  handleCompartmentUploadAndScan,
+  openOrCreateGridCompartment,
+  saveGridCellRename,
+  scanCompartmentPhotosWithAi,
+  startGridCellQuickAdd,
+  startGridCellRename,
+  submitGridCellQuickAdd,
+  triggerCompartmentUploadAndScan
+} from './compartment-actions.js';
 import { closeAllModals, closeLightbox, closeModal, closeOnScrim, openLightbox } from './dom.js';
-import { initUnsavedGuard, resolveUnsavedPrompt } from './unsaved-guard.js';
+import { closeScanAbortOnScrim, initUnsavedGuard, resolveScanAbortPrompt, resolveUnsavedPrompt } from './unsaved-guard.js';
+import { closeUnitSetupWizard, launchMobileUnitSetup, openUnitSetupWizard } from './unit-setup-wizard.js';
+import { openConvertItemToBoxModal, openMoveBoxModal, submitConvertItemToBox, submitMoveBox } from './box-actions.js';
+import { closeNoModelModal, continueManualFromNoModel, retryVisionModelCheck } from './vision-guard.js';
 import {
   chooseAddAction,
   handleItemFormSubmit,
@@ -45,9 +59,11 @@ import {
   addPartToRapidList,
   toggleRapidDetectedItem,
   toggleAllRapidDetectedItems,
+  clearRapidAiCrops,
   toggleRapidItemDetails,
   updateRapidDetectedItemField,
   removeRapidDetectedItem,
+  toggleRapidItemAsBox,
   runRapidAiScan,
   startRapidPhoneCapture,
   resetPrintQrBaseUrl,
@@ -85,6 +101,12 @@ import {
   handleDesignerDragStart,
   handleDesignerDropOnEmpty,
   handleDesignerDropOnSlot,
+  handleGridSlotDragEnd,
+  handleGridSlotDragLeave,
+  handleGridSlotDragOver,
+  handleGridSlotDragStart,
+  handleGridSlotDropOnEmpty,
+  handleGridSlotDropOnSlot,
   openInlineGridDesigner,
   removeSelectedDesignerSlot,
   resizeSelectedDesignerSlot,
@@ -183,6 +205,7 @@ import {
   overallViewerAddPhoto,
   overallViewerCropPhoto,
   overallViewerRemovePhoto,
+  overallViewerScanPhoto,
   overallViewerSetCover,
   cancelInlineItemRename,
   deleteDrawerFromMenu,
@@ -226,7 +249,26 @@ import {
   verifyItemFromView,
   findAndImportItemPhoto,
   openBoxCoverPhotoPicker,
-  setLocationCoverPhoto
+  setLocationCoverPhoto,
+  updateItemPdfDraftTitle,
+  toggleItemPdfRemoveSource,
+  toggleItemPdfPhotoSelection,
+  selectAllItemPdfPhotos,
+  setItemMainPhotoFromSaved,
+  convertSelectedItemPhotosToPdf,
+  toggleItemPhotosMoreMenu,
+  toggleItemPdfSelectMode,
+  openAttachmentViewer,
+  toggleAttachmentViewerFullscreen,
+  closeAttachmentViewerModal,
+  overallViewerScanAsBox,
+  toggleDrawerPhotoBoxMode,
+  toggleDrawerPhotoBoxSelection,
+  selectAllDrawerBoxPhotos,
+  updateDrawerPhotoBoxDraft,
+  scanSelectedPhotosAsBox,
+  createEmptyBoxFromSelectedPhotos,
+  detachLocationFromSpace
 } from './views.js';
 
 function resolveEffectiveTheme(pref) {
@@ -266,7 +308,7 @@ export function setAppTheme(pref) {
   state.themePref = pref;
   try {
     localStorage.setItem('wims_theme_pref', pref);
-  } catch {}
+  } catch { }
   initTheme();
 }
 
@@ -281,6 +323,11 @@ function initKeyboardAndRouter() {
       const lightbox = document.getElementById('lightbox-modal');
       if (lightbox && lightbox.classList.contains('open')) {
         closeLightbox();
+        return;
+      }
+      const scanAbortModal = document.getElementById('scan-abort-confirm-modal');
+      if (scanAbortModal && scanAbortModal.classList.contains('open')) {
+        resolveScanAbortPrompt('continue');
         return;
       }
       const unsavedModal = document.getElementById('unsaved-confirm-modal');
@@ -377,7 +424,7 @@ export async function triggerPwaInstall() {
   deferredInstallPrompt.prompt();
   try {
     await deferredInstallPrompt.userChoice;
-  } catch {}
+  } catch { }
   deferredInstallPrompt = null;
   const btn = document.getElementById('more-install-app-btn');
   if (btn) btn.style.display = 'none';
@@ -396,7 +443,7 @@ export async function toggleFullScreenMode() {
     } else {
       await document.exitFullscreen();
     }
-  } catch {}
+  } catch { }
   syncFullscreenButton();
 }
 
@@ -420,7 +467,7 @@ function initPwaAndWindowModes() {
   if (typeof window === 'undefined') return;
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.register('/sw.js').catch(() => { });
   }
 
   const isStandalone =
@@ -530,11 +577,19 @@ if (typeof window !== 'undefined') {
     closeOnScrim: closeOnScrim,
     closeModal: closeModal,
     resolveUnsavedPrompt: resolveUnsavedPrompt,
+    resolveScanAbortPrompt: resolveScanAbortPrompt,
+    closeScanAbortOnScrim: closeScanAbortOnScrim,
     handleItemFormSubmit: handleItemFormSubmit,
     handleItemPhotoPreview: handleItemPhotoPreview,
     openAddItemModal: openAddItemModal,
     openAddItemWithPrefill: openAddItemWithPrefill,
     openAddStorageModal: openAddStorageModal,
+    openUnitSetupWizard: openUnitSetupWizard,
+    closeUnitSetupWizard: closeUnitSetupWizard,
+    launchMobileUnitSetup: launchMobileUnitSetup,
+    closeNoModelModal: closeNoModelModal,
+    retryVisionModelCheck: retryVisionModelCheck,
+    continueManualFromNoModel: continueManualFromNoModel,
     openEditStorageModal: openEditStorageModal,
     handleStorageFormSubmit: handleStorageFormSubmit,
     setStorageTypeChoice: setStorageTypeChoice,
@@ -556,6 +611,12 @@ if (typeof window !== 'undefined') {
     handleDesignerDragEnd: handleDesignerDragEnd,
     handleDesignerDropOnSlot: handleDesignerDropOnSlot,
     handleDesignerDropOnEmpty: handleDesignerDropOnEmpty,
+    handleGridSlotDragStart: handleGridSlotDragStart,
+    handleGridSlotDragOver: handleGridSlotDragOver,
+    handleGridSlotDragLeave: handleGridSlotDragLeave,
+    handleGridSlotDragEnd: handleGridSlotDragEnd,
+    handleGridSlotDropOnSlot: handleGridSlotDropOnSlot,
+    handleGridSlotDropOnEmpty: handleGridSlotDropOnEmpty,
     fillAllEmptyDesignerCells: fillAllEmptyDesignerCells,
     autoNameAllDesignerSlots: autoNameAllDesignerSlots,
     setDesignerDefaultType: setDesignerDefaultType,
@@ -590,9 +651,15 @@ if (typeof window !== 'undefined') {
     addPartToRapidList: addPartToRapidList,
     toggleRapidDetectedItem: toggleRapidDetectedItem,
     toggleAllRapidDetectedItems: toggleAllRapidDetectedItems,
+    clearRapidAiCrops: clearRapidAiCrops,
     toggleRapidItemDetails: toggleRapidItemDetails,
     updateRapidDetectedItemField: updateRapidDetectedItemField,
     removeRapidDetectedItem: removeRapidDetectedItem,
+    toggleRapidItemAsBox: toggleRapidItemAsBox,
+    openConvertItemToBoxModal: openConvertItemToBoxModal,
+    submitConvertItemToBox: submitConvertItemToBox,
+    openMoveBoxModal: openMoveBoxModal,
+    submitMoveBox: submitMoveBox,
     runRapidAiScan: runRapidAiScan,
     startRapidPhoneCapture: startRapidPhoneCapture,
     triggerRapidPhotoInput: triggerRapidPhotoInput,
@@ -728,6 +795,35 @@ if (typeof window !== 'undefined') {
     toggleBoxRowMenu: toggleBoxRowMenu,
     findAndImportItemPhoto: findAndImportItemPhoto,
     openBoxCoverPhotoPicker: openBoxCoverPhotoPicker,
-    setLocationCoverPhoto: setLocationCoverPhoto
+    setLocationCoverPhoto: setLocationCoverPhoto,
+    openOrCreateGridCompartment: openOrCreateGridCompartment,
+    startGridCellRename: startGridCellRename,
+    startGridCellQuickAdd: startGridCellQuickAdd,
+    cancelGridCellInlineEdit: cancelGridCellInlineEdit,
+    saveGridCellRename: saveGridCellRename,
+    submitGridCellQuickAdd: submitGridCellQuickAdd,
+    scanCompartmentPhotosWithAi: scanCompartmentPhotosWithAi,
+    triggerCompartmentUploadAndScan: triggerCompartmentUploadAndScan,
+    handleCompartmentUploadAndScan: handleCompartmentUploadAndScan,
+    overallViewerScanPhoto: overallViewerScanPhoto,
+    updateItemPdfDraftTitle: updateItemPdfDraftTitle,
+    toggleItemPdfRemoveSource: toggleItemPdfRemoveSource,
+    toggleItemPdfPhotoSelection: toggleItemPdfPhotoSelection,
+    selectAllItemPdfPhotos: selectAllItemPdfPhotos,
+    setItemMainPhotoFromSaved: setItemMainPhotoFromSaved,
+    convertSelectedItemPhotosToPdf: convertSelectedItemPhotosToPdf,
+    toggleItemPhotosMoreMenu: toggleItemPhotosMoreMenu,
+    toggleItemPdfSelectMode: toggleItemPdfSelectMode,
+    openAttachmentViewer: openAttachmentViewer,
+    toggleAttachmentViewerFullscreen: toggleAttachmentViewerFullscreen,
+    closeAttachmentViewerModal: closeAttachmentViewerModal,
+    overallViewerScanAsBox: overallViewerScanAsBox,
+    toggleDrawerPhotoBoxMode: toggleDrawerPhotoBoxMode,
+    toggleDrawerPhotoBoxSelection: toggleDrawerPhotoBoxSelection,
+    selectAllDrawerBoxPhotos: selectAllDrawerBoxPhotos,
+    updateDrawerPhotoBoxDraft: updateDrawerPhotoBoxDraft,
+    scanSelectedPhotosAsBox: scanSelectedPhotosAsBox,
+    createEmptyBoxFromSelectedPhotos: createEmptyBoxFromSelectedPhotos,
+    detachLocationFromSpace: detachLocationFromSpace
   });
 }

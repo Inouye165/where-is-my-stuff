@@ -82,9 +82,25 @@ export function closeLightbox() {
   document.getElementById('lightbox-modal')?.classList.remove('open');
 }
 
+const forceCloseHooks = new Map();
+
+export function registerModalForceCloseHook(modalId, fn) {
+  if (modalId && typeof fn === 'function') {
+    forceCloseHooks.set(modalId, fn);
+  }
+}
+
 export function forceCloseModal(id) {
   markModalClean(id);
-  document.getElementById(id)?.classList.remove('open');
+  const el = document.getElementById(id);
+  if (el) {
+    if (el.dataset) el.dataset.scanning = 'false';
+    el.classList.remove('open');
+  }
+  const hook = forceCloseHooks.get(id);
+  if (hook) {
+    try { hook(); } catch {}
+  }
 }
 
 export function closeModal(id, force = false) {
@@ -97,14 +113,21 @@ export function closeModal(id, force = false) {
 
 export function closeOnScrim(e, modalId) {
   if (e && e.target && e.target.id === modalId) {
+    if (e.target.dataset?.scanning === 'true') {
+      showToast('AI scan is still running — wait for it to finish or click Cancel.', 'info');
+      return;
+    }
     closeModal(modalId);
   }
 }
 
 export function closeAllModals() {
   for (const s of document.querySelectorAll('.modal-scrim.open')) {
-    if (s.id) markModalClean(s.id);
-    s.classList.remove('open');
+    if (s.id) {
+      forceCloseModal(s.id);
+    } else {
+      s.classList.remove('open');
+    }
   }
   closeLightbox();
 }

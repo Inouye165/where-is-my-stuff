@@ -1,4 +1,6 @@
+import pytest
 from app.models.location import Location
+from http_mocks import make_http_client
 from app.models.item import Item
 
 def test_deep_hierarchy_breadcrumbs(client):
@@ -1502,8 +1504,11 @@ async def test_downloaded_image_processing_runs_off_event_loop(monkeypatch):
     monkeypatch.setattr(image_lookup_service.photo_service, "process_and_save", fake_process_and_save)
 
     img_resp = MagicMock(status_code=200, headers={"content-type": "image/png"}, content=b"\x89PNG fake")
-    http_client = MagicMock()
-    http_client.get = AsyncMock(return_value=img_resp)
+
+    async def fake_get(url, **kwargs):
+        return img_resp
+
+    http_client = make_http_client(fake_get)
 
     saved = await image_lookup_service.download_and_save_image(http_client, "https://upload.wikimedia.org/a.png")
     assert saved == "/uploads/originals/x.png"
@@ -1515,8 +1520,11 @@ async def test_undecodable_downloaded_image_is_skipped_not_raised():
     from app.services import image_lookup_service
 
     img_resp = MagicMock(status_code=200, headers={"content-type": "image/png"}, content=b"not an image")
-    http_client = MagicMock()
-    http_client.get = AsyncMock(return_value=img_resp)
+
+    async def fake_get(url, **kwargs):
+        return img_resp
+
+    http_client = make_http_client(fake_get)
 
     assert await image_lookup_service.download_and_save_image(http_client, "https://upload.wikimedia.org/a.png") is None
 
@@ -1544,12 +1552,18 @@ async def test_image_download_does_not_follow_redirect_to_private_host(monkeypat
 
     redirect = MagicMock(status_code=302, headers={"location": "https://192.168.1.10/admin.png"}, content=b"")
     redirect.is_redirect = True
-    http_client = MagicMock()
-    http_client.get = AsyncMock(return_value=redirect)
+    seen_kwargs: list[dict] = []
+
+    async def fake_get(url, **kwargs):
+        seen_kwargs.append(kwargs)
+        return redirect
+
+    http_client = make_http_client(fake_get)
 
     assert await image_lookup_service.download_and_save_image(http_client, "https://upload.wikimedia.org/a.png") is None
-    for call in http_client.get.await_args_list:
-        assert call.kwargs.get("follow_redirects") is False
+    assert seen_kwargs
+    for kwargs in seen_kwargs:
+        assert kwargs.get("follow_redirects") is False
 
 
 async def test_gemini_api_key_is_sent_in_header_not_url(monkeypatch):
@@ -1591,3 +1605,1707 @@ def test_location_photo_type_is_validated(client):
         data={"photo_type": "bogus"},
     )
     assert res.status_code == 422
+
+
+def test_storage_unit_grid_view_overflow_tokens_and_duplicate_coord_regression():
+    import re
+    import shutil
+    import subprocess
+    from pathlib import Path
+    import pytest
+
+    static_dir = Path(__file__).resolve().parent.parent / "app" / "static"
+    css = (static_dir / "css" / "app.css").read_text(encoding="utf-8")
+
+    # 1. Theme root tokens must define surface variables used by grid slots & dark/light color-scheme
+    root_match = re.search(r":root\s*\{([^}]+)\}", css)
+    light_match = re.search(r'\[data-theme="light"\]\s*\{([^}]+)\}', css)
+    assert root_match and light_match
+    assert "color-scheme: dark" in root_match.group(1)
+    assert "color-scheme: light" in light_match.group(1)
+    defined_tokens = set(re.findall(r"(--[a-zA-Z0-9_-]+)\s*:", root_match.group(1)))
+    assert "--bg-surface" in defined_tokens
+    assert "--bg-surface-elevated" in defined_tokens
+
+    # 2. .cgrid-slot must clip overflow and .cgrid-slot-info must shrink within narrow columns
+    slot_block = re.search(r"\.cgrid-slot\s*\{([^}]+)\}", css)
+    assert slot_block and "overflow: hidden" in slot_block.group(1)
+    info_block = re.search(r"\.cgrid-slot-info\s*\{([^}]+)\}", css)
+    assert info_block and "flex: 0 0 auto" not in info_block.group(1)
+
+    # 3. Behavioral Node check: no duplicate coord labels on empty/coord-named drawers,
+    #    item name surfaced when drawer name equals coord, and 1-photo carousel never shows scroll arrows
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_dir = (static_dir / "js").as_posix()
+    script = f"""
+    globalThis.BroadcastChannel = undefined;
+    globalThis.window = {{
+      location: {{ host: 'localhost:8000', hash: '#/', origin: 'http://localhost:8000' }},
+      addEventListener() {{}},
+      matchMedia: () => ({{ matches: false, addEventListener() {{}} }}),
+    }};
+    globalThis.document = {{
+      querySelectorAll: () => [],
+      getElementById: () => null,
+    }};
+    globalThis.requestAnimationFrame = () => {{}};
+
+    const stateMod = await import('file://{js_dir}/state.js');
+    const gridMod = await import('file://{js_dir}/grid-designer.js');
+    const carouselMod = await import('file://{js_dir}/carousel.js');
+
+    const unit = {{
+      id: 10,
+      name: 'Yellow storage organizer',
+      location_type: 'container',
+      grid_rows: 6,
+      grid_cols: 8,
+      children: [
+        {{
+          id: 101,
+          name: 'H1',
+          location_type: 'drawer',
+          parent_id: 10,
+          grid_row: 1,
+          grid_col: 8,
+          grid_row_span: 1,
+          grid_col_span: 1,
+          total_item_count: 1,
+          children: [],
+          photos: [{{ id: 1, photo_path: '/uploads/originals/h1.jpg' }}],
+        }},
+        {{
+          id: 102,
+          name: 'A5–B6',
+          location_type: 'drawer',
+          parent_id: 10,
+          grid_row: 5,
+          grid_col: 1,
+          grid_row_span: 2,
+          grid_col_span: 2,
+          total_item_count: 0,
+          children: [],
+          photos: [],
+        }},
+      ],
+    }};
+    stateMod.state.locations = [unit];
+    stateMod.state.items = [
+      {{ id: 901, name: 'OLED 0.96 Display', location_id: 101, quantity: 1 }},
+    ];
+    stateMod.indexLocations();
+
+    const html = gridMod.renderContainerGridHtml(unit);
+
+    // Empty merged drawer A5–B6 must NOT render 'A5–B6' twice inside its card
+    const a5Match = html.match(/id="drawer-card-102"[\\s\\S]*?<\\/div>\\s*(?=<div|$)/);
+    const a5Occurrences = (html.match(/>A5–B6</g) || []).length;
+    if (a5Occurrences !== 1) {{
+      throw new Error(`Expected A5–B6 text once, got ${{a5Occurrences}}`);
+    }}
+
+    // Coord-named drawer H1 with an item must surface the item name ('OLED 0.96 Display') instead of repeating 'H1'
+    if (!html.includes('OLED 0.96 Display')) {{
+      throw new Error('Expected coord-named drawer H1 to surface its item name');
+    }}
+    const h1Occurrences = (html.match(/>H1</g) || []).length;
+    if (h1Occurrences !== 1) {{
+      throw new Error(`Expected H1 text once, got ${{h1Occurrences}}`);
+    }}
+
+    // Single-photo carousel must never toggle can-next / is-overflowing even in narrow cells
+    const classes = new Set();
+    const wrapMock = {{
+      classList: {{
+        toggle(cls, on) {{ if (on) classes.add(cls); else classes.delete(cls); }},
+      }},
+    }};
+    const singleItemTrack = {{
+      scrollWidth: 58,
+      clientWidth: 32,
+      scrollLeft: 0,
+      children: [{{}}],
+      closest: () => wrapMock,
+    }};
+    carouselMod.syncSlotCarousel(singleItemTrack);
+    if (classes.has('can-next') || classes.has('is-overflowing')) {{
+      throw new Error('Single-thumbnail carousel should never render overflow arrows');
+    }}
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Grid view regression check failed:\n{proc.stderr}"
+
+
+def test_grid_slot_ensure_idempotent_bounds_overlap_and_box_preservation(client):
+    room = client.post("/api/v1/locations", json={"name": "Office", "location_type": "room"}).json()
+    unit = client.post(
+        "/api/v1/locations",
+        json={
+            "name": "Yellow storage organizer",
+            "location_type": "container",
+            "parent_id": room["id"],
+            "grid_rows": 4,
+            "grid_cols": 4,
+        },
+    ).json()
+
+    a1 = client.post(
+        "/api/v1/locations",
+        json={
+            "name": "Stepper Drivers",
+            "location_type": "compartment",
+            "parent_id": unit["id"],
+            "grid_row": 1,
+            "grid_col": 1,
+            "grid_row_span": 1,
+            "grid_col_span": 1,
+        },
+    ).json()
+    merged = client.post(
+        "/api/v1/locations",
+        json={
+            "name": "A3–B4",
+            "location_type": "compartment",
+            "parent_id": unit["id"],
+            "grid_row": 3,
+            "grid_col": 1,
+            "grid_row_span": 2,
+            "grid_col_span": 2,
+        },
+    ).json()
+    sub_box = client.post(
+        "/api/v1/locations",
+        json={
+            "name": "JST Connectors Kit",
+            "location_type": "box",
+            "parent_id": unit["id"],
+        },
+    ).json()
+
+    # 1. Clicking empty grid coordinate B1 creates compartment idempotently
+    b1_resp = client.post(
+        f"/api/v1/locations/{unit['id']}/grid/slot",
+        json={"grid_row": 1, "grid_col": 2},
+    )
+    assert b1_resp.status_code in (200, 201), b1_resp.text
+    b1 = b1_resp.json()
+    assert b1["name"] == "B1"
+    assert b1["location_type"] == "compartment"
+    assert b1["grid_row"] == 1 and b1["grid_col"] == 2
+
+    # Repeat call on same coordinate (or inside an existing multi-cell span) returns existing compartment without duplicating
+    b1_again = client.post(
+        f"/api/v1/locations/{unit['id']}/grid/slot",
+        json={"grid_row": 1, "grid_col": 2},
+    )
+    assert b1_again.status_code == 200
+    assert b1_again.json()["id"] == b1["id"]
+
+    span_hit = client.post(
+        f"/api/v1/locations/{unit['id']}/grid/slot",
+        json={"grid_row": 4, "grid_col": 2},
+    )
+    assert span_hit.status_code == 200
+    assert span_hit.json()["id"] == merged["id"]
+
+    # 2. Out-of-bounds and overlap validation enforced across slot endpoint, create, and update
+    oob = client.post(
+        f"/api/v1/locations/{unit['id']}/grid/slot",
+        json={"grid_row": 5, "grid_col": 1},
+    )
+    assert oob.status_code == 400
+
+    dup_create = client.post(
+        "/api/v1/locations",
+        json={
+            "name": "Duplicate A1",
+            "location_type": "compartment",
+            "parent_id": unit["id"],
+            "grid_row": 1,
+            "grid_col": 1,
+        },
+    )
+    assert dup_create.status_code == 400
+
+    dup_patch = client.patch(
+        f"/api/v1/locations/{b1['id']}",
+        json={"grid_row": 1, "grid_col": 1},
+    )
+    assert dup_patch.status_code == 400
+
+    # 3. Saving grid layout preserves unplaced 'box' / 'kit' subcontainers under the container
+    save_res = client.put(
+        f"/api/v1/locations/{unit['id']}/grid",
+        json={
+            "grid_rows": 4,
+            "grid_cols": 4,
+            "slots": [
+                {
+                    "id": a1["id"],
+                    "name": "Stepper Drivers",
+                    "location_type": "compartment",
+                    "grid_row": 1,
+                    "grid_col": 1,
+                    "grid_row_span": 1,
+                    "grid_col_span": 1,
+                },
+                {
+                    "id": b1["id"],
+                    "name": "Buck Converters",
+                    "location_type": "compartment",
+                    "grid_row": 1,
+                    "grid_col": 2,
+                    "grid_row_span": 1,
+                    "grid_col_span": 1,
+                },
+            ],
+        },
+    )
+    assert save_res.status_code == 200
+    child_ids = {c["id"] for c in save_res.json()["children"]}
+    assert sub_box["id"] in child_ids, "Unplaced Box/Kit must not be deleted when saving container grid layout"
+
+
+def test_compartment_grid_inline_and_page_workflow_behavioral():
+    import re
+    import shutil
+    import subprocess
+    from pathlib import Path
+    import pytest
+
+    static_dir = Path(__file__).resolve().parent.parent / "app" / "static"
+    js_dir = static_dir / "js"
+    comp_js_path = js_dir / "compartment-actions.js"
+    assert comp_js_path.exists(), "Expected modular compartment-actions.js"
+
+    sw_src = (static_dir / "sw.js").read_text(encoding="utf-8")
+    assert "/js/compartment-actions.js" in sw_src
+
+    # Verify every inline handler in compartment-actions.js, grid-designer.js, and views.js is exposed on window in app.js
+    app_js = (js_dir / "app.js").read_text(encoding="utf-8")
+    window_block_match = re.search(r"Object\.assign\(\s*window\s*,\s*\{([^}]+)\}", app_js, re.DOTALL)
+    assert window_block_match
+    exported_names = set(re.findall(r"\b([a-zA-Z0-9_]+)\b", window_block_match.group(1)))
+    builtin_inline = {"if", "event", "window", "return"}
+    for fname in ("compartment-actions.js", "grid-designer.js", "views.js"):
+        src = (js_dir / fname).read_text(encoding="utf-8")
+        used = set(re.findall(r'on(?:click|keydown|change|input|submit)=\s*"(?:event\.stopPropagation\(\);\s*)?([a-zA-Z0-9_]+)\s*\(', src))
+        missing = (used - exported_names) - builtin_inline
+        assert not missing, f"Inline handlers in {fname} not exposed on window in app.js: {missing}"
+
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_posix = js_dir.as_posix()
+    script = f"""
+    globalThis.BroadcastChannel = undefined;
+    globalThis.URL.createObjectURL = () => 'blob:test';
+    globalThis.URL.revokeObjectURL = () => {{}};
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    globalThis.requestAnimationFrame = (fn) => fn && fn();
+
+    const elements = {{}};
+    function makeEl(id = '') {{
+      return {{
+        id,
+        value: '',
+        innerHTML: '',
+        textContent: '',
+        hidden: true,
+        open: false,
+        style: {{}},
+        dataset: {{}},
+        files: [],
+        scrollTop: 0,
+        classList: {{
+          _s: new Set(),
+          add(...c) {{ c.forEach(x => this._s.add(x)); }},
+          remove(...c) {{ c.forEach(x => this._s.delete(x)); }},
+          toggle(c, f) {{
+            const on = f === undefined ? !this._s.has(c) : Boolean(f);
+            if (on) this._s.add(c); else this._s.delete(c);
+            return on;
+          }},
+          contains(c) {{ return this._s.has(c); }},
+        }},
+        setAttribute() {{}},
+        appendChild() {{}},
+        remove() {{}},
+        focus() {{}},
+        select() {{}},
+        click() {{}},
+        scrollIntoView() {{}},
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      }};
+    }}
+    function getEl(id) {{
+      if (!elements[id]) elements[id] = makeEl(id);
+      return elements[id];
+    }}
+
+    globalThis.window = {{
+      location: {{ host: 'localhost:8000', hash: '#/unit/10', origin: 'http://localhost:8000' }},
+      history: {{ pushState(_s, _t, h) {{ globalThis.window.location.hash = h; }} }},
+      addEventListener() {{}},
+      matchMedia: () => ({{ matches: false, addEventListener() {{}} }}),
+      confirm: () => true,
+    }};
+    Object.defineProperty(globalThis, 'navigator', {{
+      value: {{ userAgent: 'Mozilla/5.0 Windows NT 10.0', maxTouchPoints: 0 }},
+      configurable: true,
+    }});
+    globalThis.window.navigator = globalThis.navigator;
+    globalThis.history = globalThis.window.history;
+    globalThis.document = {{
+      getElementById: (id) => getEl(id),
+      createElement: (tag) => makeEl(tag),
+      body: makeEl('body'),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+      documentElement: makeEl('html'),
+      activeElement: null,
+    }};
+
+    let mockLocations = [
+      {{
+        id: 1,
+        name: 'Office',
+        location_type: 'room',
+        parent_id: null,
+        full_path: 'Office',
+        total_item_count: 1,
+        child_count: 1,
+        photos: [],
+        children: [
+          {{
+            id: 10,
+            name: 'Yellow storage organizer',
+            location_type: 'container',
+            parent_id: 1,
+            grid_rows: 2,
+            grid_cols: 2,
+            full_path: 'Office > Yellow storage organizer',
+            total_item_count: 1,
+            child_count: 1,
+            photos: [],
+            children: [
+              {{
+                id: 101,
+                name: 'A1',
+                location_type: 'compartment',
+                parent_id: 10,
+                grid_row: 1,
+                grid_col: 1,
+                grid_row_span: 1,
+                grid_col_span: 1,
+                full_path: 'Office > Yellow storage organizer > A1',
+                total_item_count: 1,
+                child_count: 0,
+                photos: [],
+                children: [],
+              }},
+            ],
+          }},
+        ],
+      }},
+    ];
+    let mockItems = [
+      {{ id: 500, name: 'Stepper Driver', quantity: 1, location_id: 101 }},
+    ];
+
+    const calls = [];
+    globalThis.fetch = async (url, opts = {{}}) => {{
+      const method = (opts.method || 'GET').toUpperCase();
+      const u = String(url);
+      calls.push({{ method, url: u, body: opts.body }});
+
+      if (u.includes('/api/v1/locations/tree')) {{
+        return {{ ok: true, status: 200, json: async () => mockLocations }};
+      }}
+      if (u.startsWith('/api/v1/items?')) {{
+        return {{ ok: true, status: 200, json: async () => mockItems }};
+      }}
+      if (u === '/api/v1/locations/10/grid/slot' && method === 'POST') {{
+        const payload = JSON.parse(opts.body);
+        const created = {{
+          id: 102,
+          name: 'B1',
+          location_type: 'compartment',
+          parent_id: 10,
+          grid_row: payload.grid_row,
+          grid_col: payload.grid_col,
+          grid_row_span: 1,
+          grid_col_span: 1,
+          full_path: 'Office > Yellow storage organizer > B1',
+          total_item_count: 0,
+          child_count: 0,
+          photos: [{{ id: 77, photo_path: '/uploads/originals/b1.jpg' }}],
+          children: [],
+        }};
+        mockLocations[0].children[0].children.push(created);
+        return {{ ok: true, status: 201, json: async () => created }};
+      }}
+      if (u.startsWith('/api/v1/locations/') && method === 'PATCH') {{
+        const locId = Number(u.split('/').pop());
+        const payload = JSON.parse(opts.body);
+        const unitChildren = mockLocations[0].children[0].children;
+        const found = unitChildren.find(c => c.id === locId);
+        if (found && payload.name) found.name = payload.name;
+        return {{ ok: true, status: 200, json: async () => found || {{ id: locId, ...payload }} }};
+      }}
+      if (u === '/api/v1/items/bulk' && method === 'POST') {{
+        const payload = JSON.parse(opts.body);
+        const created = [{{ id: 601, name: 'XL4015 Buck Module', quantity: 2, location_id: payload.location_id }}];
+        mockItems.push(...created);
+        return {{ ok: true, status: 201, json: async () => created }};
+      }}
+      if (u.includes('/analyze-photo') && method === 'POST') {{
+        return {{
+          ok: true,
+          status: 200,
+          json: async () => ({{
+            status: 'success',
+            message: 'Detected 1 item',
+            suggested_group_name: 'Power Modules',
+            items: [{{ name: 'MP1584EN Step Down', estimated_qty: 3, part_number: 'MP1584EN' }}],
+          }}),
+        }};
+      }}
+      if (u.includes('/vision-providers')) {{
+        return {{ ok: true, status: 200, json: async () => ({{ default_provider: 'local', providers: [] }}) }};
+      }}
+      return {{ ok: true, status: 200, json: async () => ({{}}) }};
+    }};
+
+    const stateMod = await import('file://{js_posix}/state.js');
+    const views = await import('file://{js_posix}/views.js');
+    const comp = await import('file://{js_posix}/compartment-actions.js');
+    const router = await import('file://{js_posix}/router.js');
+    globalThis.window.renderCurrentWorkspace = router.renderCurrentWorkspace;
+
+    await stateMod.loadAllData();
+    router.navToStorageUnit(10, false);
+    const unitHtml = getEl('app-workspace').innerHTML;
+
+    // 1. Empty coordinate B1 (row 1, col 2) is clickable to open/create compartment
+    if (!unitHtml.includes('openOrCreateGridCompartment(10, 1, 2)')) {{
+      throw new Error('Expected empty grid coordinate B1 to wire openOrCreateGridCompartment(10, 1, 2)');
+    }}
+
+    // 2. Placed compartment A1 (101) supports inline rename & inline quick-add directly from the grid screen
+    if (!unitHtml.includes('startGridCellRename(101') || !unitHtml.includes('startGridCellQuickAdd(101')) {{
+      throw new Error('Expected placed grid compartment A1 to expose inline rename and quick-add triggers');
+    }}
+
+    comp.startGridCellRename(101);
+    getEl('grid-cell-rename-101').value = 'Stepper Drivers';
+    await comp.saveGridCellRename(101);
+    if (stateMod.state.locationMap.get(101).name !== 'Stepper Drivers') {{
+      throw new Error('Inline grid rename did not update compartment 101 name');
+    }}
+
+    comp.startGridCellQuickAdd(101);
+    getEl('grid-cell-add-101').value = '2x XL4015 Buck Module';
+    await comp.submitGridCellQuickAdd(101);
+    if (!mockItems.some(i => i.location_id === 101 && i.name === 'XL4015 Buck Module')) {{
+      throw new Error('Inline grid quick-add did not create item in compartment 101');
+    }}
+
+    // 3. Clicking empty compartment B1 creates it & opens its Compartment Page
+    await comp.openOrCreateGridCompartment(10, 1, 2);
+    if (stateMod.state.currentView !== 'drawer' || stateMod.state.currentLocationId !== 102) {{
+      throw new Error(`Expected navigation to new compartment 102 page, got view=${{stateMod.state.currentView}} id=${{stateMod.state.currentLocationId}}`);
+    }}
+
+    const compPageHtml = getEl('app-workspace').innerHTML;
+    // Compartment page must expose visible rename, direct photo upload, and AI scan of photos
+    if (!compPageHtml.includes('toggleDrawerLabelEdit(102, true)')) {{
+      throw new Error('Expected visible rename button on compartment page');
+    }}
+    if (!compPageHtml.includes('triggerDrawerDirectPhotoUpload(102)')) {{
+      throw new Error('Expected direct photo upload button wired on compartment page');
+    }}
+    if (!compPageHtml.includes('scanCompartmentPhotosWithAi(102)')) {{
+      throw new Error('Expected AI scan button wired on compartment page when photos exist');
+    }}
+
+    // 4. Triggering AI scan on compartment 102 scans its photo and defaults to 'separate' items in compartment 102
+    await comp.scanCompartmentPhotosWithAi(102);
+    const aiHtml = getEl('rapid-ai-results').innerHTML;
+    if (!aiHtml.includes('MP1584EN Step Down')) {{
+      throw new Error('Expected AI scan of compartment photo to populate detected items');
+    }}
+    if (!getEl('rapid-mode-separate').classList.contains('active')) {{
+      throw new Error('Expected compartment AI scan to keep separate items mode active by default');
+    }}
+
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=20)
+    assert proc.returncode == 0, f"Compartment workflow behavioral test failed:\n{proc.stderr}"
+
+
+def test_unmatched_api_route_returns_404_not_405_and_slot_fallback(client):
+    import shutil
+    import subprocess
+    from pathlib import Path
+    import pytest
+
+    # 1. Unmatched /api/* POST routes must return 404 Not Found instead of falling through to StaticFiles (405)
+    unknown_post = client.post("/api/v1/nonexistent-endpoint", json={"x": 1})
+    assert unknown_post.status_code == 404
+
+    # 2. If a stale backend instance returns 405/404 on /grid/slot, openOrCreateGridCompartment falls back cleanly to POST /api/v1/locations
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_posix = (Path(__file__).resolve().parent.parent / "app" / "static" / "js").as_posix()
+    script = f"""
+    globalThis.BroadcastChannel = undefined;
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    globalThis.requestAnimationFrame = () => {{}};
+
+    function makeEl() {{
+      return {{
+        value: '',
+        innerHTML: '',
+        textContent: '',
+        hidden: true,
+        style: {{}},
+        dataset: {{}},
+        classList: {{ add() {{}}, remove() {{}}, toggle() {{}}, contains: () => false }},
+        setAttribute() {{}},
+        appendChild() {{}},
+        remove() {{}},
+        focus() {{}},
+        select() {{}},
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      }};
+    }}
+    globalThis.window = {{
+      location: {{ host: 'localhost:8000', hash: '#/unit/2', origin: 'http://localhost:8000' }},
+      history: {{ pushState(_s, _t, h) {{ globalThis.window.location.hash = h; }} }},
+      addEventListener() {{}},
+      matchMedia: () => ({{ matches: false, addEventListener() {{}} }}),
+    }};
+    Object.defineProperty(globalThis, 'navigator', {{
+      value: {{ userAgent: 'Mozilla/5.0 Windows NT 10.0', maxTouchPoints: 0 }},
+      configurable: true,
+    }});
+    globalThis.window.navigator = globalThis.navigator;
+    globalThis.history = globalThis.window.history;
+    globalThis.document = {{
+      getElementById: () => makeEl(),
+      createElement: () => makeEl(),
+      body: makeEl(),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+      documentElement: makeEl(),
+    }};
+
+    const mockTree = [{{
+      id: 2,
+      name: 'Organizer',
+      location_type: 'container',
+      grid_rows: 4,
+      grid_cols: 4,
+      children: [],
+    }}];
+    let fallbackPostBody = null;
+    globalThis.fetch = async (url, opts = {{}}) => {{
+      const u = String(url);
+      const m = (opts.method || 'GET').toUpperCase();
+      if (u === '/api/v1/locations/2/grid/slot' && m === 'POST') {{
+        return {{ ok: false, status: 405, json: async () => ({{ detail: 'Method Not Allowed' }}) }};
+      }}
+      if (u === '/api/v1/locations' && m === 'POST') {{
+        fallbackPostBody = JSON.parse(opts.body);
+        const created = {{ id: 205, ...fallbackPostBody, children: [], photos: [] }};
+        mockTree[0].children.push(created);
+        return {{ ok: true, status: 201, json: async () => created }};
+      }}
+      if (u.includes('/api/v1/locations/tree')) {{
+        return {{ ok: true, status: 200, json: async () => mockTree }};
+      }}
+      if (u.startsWith('/api/v1/items?')) {{
+        return {{ ok: true, status: 200, json: async () => [] }};
+      }}
+      return {{ ok: true, status: 200, json: async () => ({{}}) }};
+    }};
+
+    const stateMod = await import('file://{js_posix}/state.js');
+    const comp = await import('file://{js_posix}/compartment-actions.js');
+    await stateMod.loadAllData();
+    const res = await comp.openOrCreateGridCompartment(2, 1, 2);
+    if (!res || res.id !== 205 || !fallbackPostBody || fallbackPostBody.name !== 'B1' || fallbackPostBody.grid_row !== 1 || fallbackPostBody.grid_col !== 2) {{
+      throw new Error(`Expected fallback POST /api/v1/locations for B1, got ${{JSON.stringify(fallbackPostBody)}}`);
+    }}
+    if (stateMod.state.currentView !== 'drawer' || stateMod.state.currentLocationId !== 205) {{
+      throw new Error('Expected fallback to navigate into created compartment 205');
+    }}
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Slot 405 fallback test failed:\n{proc.stderr}"
+
+
+def test_grid_view_drag_and_drop_renders_and_calls_move_endpoint():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_dir = (Path(__file__).resolve().parent.parent / "app" / "static" / "js").as_posix()
+    script = f"""
+    const calls = [];
+    globalThis.window = {{ location: {{ origin: 'http://localhost' }}, renderCurrentWorkspace: () => {{}}, addEventListener: () => {{}} }};
+    globalThis.document = {{
+      getElementById: () => null,
+      querySelectorAll: () => [],
+      addEventListener: () => {{}},
+    }};
+    globalThis.fetch = async (url, opts = {{}}) => {{
+      const u = String(url);
+      const m = (opts.method || 'GET').toUpperCase();
+      const body = opts.body ? JSON.parse(opts.body) : null;
+      calls.push({{ u, m, body }});
+      if (u.includes('/grid/move') && m === 'POST') {{
+        return {{ ok: true, status: 200, json: async () => ({{ id: 10, children: [] }}) }};
+      }}
+      if (u.startsWith('/api/v1/locations') || u.startsWith('/api/v1/items')) {{
+        return {{ ok: true, status: 200, json: async () => [] }};
+      }}
+      return {{ ok: true, status: 200, json: async () => ({{}}) }};
+    }};
+
+    const gridMod = await import('file://{js_dir}/grid-designer.js');
+    const unit = {{
+      id: 10,
+      name: 'Organizer',
+      grid_rows: 1,
+      grid_cols: 2,
+      grid_config: null,
+      children: [
+        {{ id: 101, name: 'A1', location_type: 'drawer', grid_row: 1, grid_col: 1, grid_row_span: 1, grid_col_span: 1, children: [] }},
+      ],
+    }};
+
+    const fullHtml = gridMod.renderContainerGridHtml(unit);
+    if (!fullHtml.includes('draggable="true"') || !fullHtml.includes('handleGridSlotDragStart(event, 10, 101)')) {{
+      throw new Error('Expected normal grid view to render draggable slot with dragstart handler');
+    }}
+    if (!fullHtml.includes('handleGridSlotDropOnEmpty(event, 10, 1, 2)')) {{
+      throw new Error('Expected normal grid view empty cell to render drop handler');
+    }}
+
+    const compactHtml = gridMod.renderContainerGridHtml(unit, {{ compact: true }});
+    if (compactHtml.includes('draggable="true"')) {{
+      throw new Error('Compact grid view should not render draggable slots');
+    }}
+
+    const fakeEvent = {{
+      preventDefault: () => {{}},
+      dataTransfer: {{
+        data: '',
+        setData(k, v) {{ this.data = v; }},
+        getData() {{ return this.data; }},
+      }},
+      currentTarget: {{ classList: {{ add() {{}}, remove() {{}} }}, closest: () => null }},
+    }};
+
+    gridMod.handleGridSlotDragStart(fakeEvent, 10, 101);
+    await gridMod.handleGridSlotDropOnEmpty(fakeEvent, 10, 1, 2);
+
+    const moveCall = calls.find(c => c.u === '/api/v1/locations/10/grid/move' && c.m === 'POST');
+    if (!moveCall || moveCall.body.source_id !== 101 || moveCall.body.target_row !== 1 || moveCall.body.target_col !== 2) {{
+      throw new Error(`Expected POST /grid/move to (1,2), got ${{JSON.stringify(moveCall)}}`);
+    }}
+
+    gridMod.handleGridSlotDragStart(fakeEvent, 10, 101);
+    await gridMod.handleGridSlotDropOnSlot(fakeEvent, 10, 102);
+
+    const swapCall = calls.filter(c => c.u === '/api/v1/locations/10/grid/move' && c.m === 'POST')[1];
+    if (!swapCall || swapCall.body.source_id !== 101 || swapCall.body.target_id !== 102) {{
+      throw new Error(`Expected POST /grid/move swap with 102, got ${{JSON.stringify(swapCall)}}`);
+    }}
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Grid view drag/drop JS test failed:\n{proc.stderr}"
+
+
+def test_rapid_scan_scrim_protection_and_collapsed_photo_overflow_badge():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    import pytest
+
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_dir = (Path(__file__).resolve().parent.parent / "app" / "static" / "js").as_posix()
+    script = f"""
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    globalThis.BroadcastChannel = undefined;
+    globalThis.URL.createObjectURL = () => 'blob:mock';
+    globalThis.URL.revokeObjectURL = () => {{}};
+
+    function makeEl(id) {{
+      const classes = new Set();
+      const attrs = {{}};
+      return {{
+        id,
+        value: '',
+        textContent: '',
+        innerHTML: '',
+        style: {{ display: '' }},
+        dataset: {{}},
+        disabled: false,
+        open: false,
+        classList: {{
+          add(...c) {{ c.forEach(x => classes.add(x)); }},
+          remove(...c) {{ c.forEach(x => classes.delete(x)); }},
+          toggle(c, force) {{
+            if (force === undefined) {{
+              if (classes.has(c)) {{ classes.delete(c); return false; }}
+              classes.add(c); return true;
+            }}
+            if (force) classes.add(c); else classes.delete(c);
+            return Boolean(force);
+          }},
+          contains(c) {{ return classes.has(c); }},
+        }},
+        setAttribute(k, v) {{ attrs[k] = String(v); }},
+        getAttribute(k) {{ return attrs[k] || null; }},
+        removeAttribute(k) {{ delete attrs[k]; }},
+        appendChild() {{}},
+        addEventListener() {{}},
+        querySelector() {{ return null; }},
+        scrollIntoView() {{}},
+        focus() {{}},
+      }};
+    }}
+
+    const rapidModal = makeEl('drawer-rapid-entry-modal');
+    const unsavedModal = makeEl('unsaved-confirm-modal');
+    const workspace = makeEl('app-workspace');
+    const elements = {{
+      'drawer-rapid-entry-modal': rapidModal,
+      'unsaved-confirm-modal': unsavedModal,
+      'unsaved-confirm-msg': makeEl('unsaved-confirm-msg'),
+      'app-workspace': workspace,
+      'toast-shelf': makeEl('toast-shelf'),
+      'rapid-location-select': makeEl('rapid-location-select'),
+      'rapid-location-pill-bar': makeEl('rapid-location-pill-bar'),
+      'rapid-location-pill-name': makeEl('rapid-location-pill-name'),
+      'rapid-location-field': makeEl('rapid-location-field'),
+      'rapid-stage-capture': makeEl('rapid-stage-capture'),
+      'rapid-stage-llm': makeEl('rapid-stage-llm'),
+      'rapid-stage-review': makeEl('rapid-stage-review'),
+      'rapid-photo-strip': makeEl('rapid-photo-strip'),
+      'rapid-photo-filename': makeEl('rapid-photo-filename'),
+      'rapid-photo-preview-wrap': makeEl('rapid-photo-preview-wrap'),
+      'rapid-photo-preview': makeEl('rapid-photo-preview'),
+      'rapid-scanning-banner': makeEl('rapid-scanning-banner'),
+      'rapid-scanning-text': makeEl('rapid-scanning-text'),
+      'rapid-ai-results': makeEl('rapid-ai-results'),
+      'rapid-submit-btn': makeEl('rapid-submit-btn'),
+      'rapid-ai-scan-btn': makeEl('rapid-ai-scan-btn'),
+      'rapid-vision-provider': makeEl('rapid-vision-provider'),
+      'rapid-vision-model': makeEl('rapid-vision-model'),
+      'rapid-vision-status': makeEl('rapid-vision-status'),
+      'rapid-expected-count': makeEl('rapid-expected-count'),
+      'rapid-assortment-name': makeEl('rapid-assortment-name'),
+      'rapid-category-input': makeEl('rapid-category-input'),
+      'rapid-items-text': makeEl('rapid-items-text'),
+      'rapid-add-part-input': makeEl('rapid-add-part-input'),
+      'rapid-save-mode-box': makeEl('rapid-save-mode-box'),
+      'rapid-save-mode-hint': makeEl('rapid-save-mode-hint'),
+      'rapid-assortment-fields': makeEl('rapid-assortment-fields'),
+      'rapid-assortment-name-label': makeEl('rapid-assortment-name-label'),
+      'rapid-mode-separate': makeEl('rapid-mode-separate'),
+      'rapid-mode-box': makeEl('rapid-mode-box'),
+      'rapid-mode-assortment': makeEl('rapid-mode-assortment'),
+      'rapid-advanced-details': makeEl('rapid-advanced-details'),
+      'rapid-llm-json-input': makeEl('rapid-llm-json-input'),
+      'rapid-llm-prompt-preview': makeEl('rapid-llm-prompt-preview'),
+      'rapid-photo-input': makeEl('rapid-photo-input'),
+      'rapid-modal-title': makeEl('rapid-modal-title'),
+      'rapid-modal-subtitle': makeEl('rapid-modal-subtitle'),
+      'rapid-existing-photos-btn': makeEl('rapid-existing-photos-btn'),
+    }};
+    elements['rapid-vision-provider'].value = 'local';
+
+    globalThis.window = {{
+      location: {{ host: 'localhost:8000', origin: 'http://localhost:8000', hash: '' }},
+      addEventListener() {{}},
+      matchMedia: () => ({{ matches: false, addEventListener() {{}} }}),
+    }};
+    globalThis.document = {{
+      readyState: 'complete',
+      activeElement: null,
+      getElementById: (id) => elements[id] || null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+      createElement: (tag) => makeEl(tag),
+    }};
+
+    let resolveScan;
+    globalThis.fetch = async (url) => {{
+      const u = String(url);
+      if (u.includes('/vision-providers')) {{
+        return {{ ok: true, status: 200, json: async () => ({{ active_provider: 'local', providers: {{ local: {{ configured: true, available: true, model: 'qwen3-vl:8b' }} }} }}) }};
+      }}
+      if (u.includes('/analyze-photo')) {{
+        return await new Promise((res) => {{ resolveScan = res; }});
+      }}
+      return {{ ok: true, status: 200, json: async () => ({{}}) }};
+    }};
+
+    const stateMod = await import('file://{js_dir}/state.js');
+    const domMod = await import('file://{js_dir}/dom.js');
+    const guardMod = await import('file://{js_dir}/unsaved-guard.js');
+    const modalsMod = await import('file://{js_dir}/modals.js');
+    const viewsMod = await import('file://{js_dir}/views.js');
+
+    const photos = [1, 2, 3, 4, 5, 6].map((id) => ({{
+      id,
+      photo_path: `/uploads/originals/p${{id}}.jpg`,
+      thumbnail_path: `/uploads/thumbnails/p${{id}}_thumb.webp`,
+      photo_type: 'container',
+    }}));
+    stateMod.state.locationMap.set(62, {{
+      id: 62,
+      name: 'A9',
+      location_type: 'drawer',
+      grid_row: 1,
+      grid_col: 9,
+      photos,
+      children: [],
+    }});
+    stateMod.state.items = [];
+
+    // 1. Collapsed bin photos bar with 6 photos should show a +3 overflow badge
+    viewsMod.renderDrawerView(62);
+    if (!workspace.innerHTML.includes('drawer-photos-preview-more') || !workspace.innerHTML.includes('+3')) {{
+      throw new Error('Expected collapsed bin photos preview to show +3 overflow badge when 6 photos exist');
+    }}
+
+    // 2. Backdrop click while scanning must NOT close the rapid modal
+    await modalsMod.openRapidEntryModal(62, {{ photoIds: [1], autoScan: false }});
+    const scanPromise = modalsMod.runRapidAiScan();
+    await new Promise(r => setTimeout(r, 20));
+    if (rapidModal.dataset.scanning !== 'true') {{
+      throw new Error(`Expected rapidModal.dataset.scanning === "true" during scan, got ${{rapidModal.dataset.scanning}}`);
+    }}
+    domMod.closeOnScrim({{ target: rapidModal }}, 'drawer-rapid-entry-modal');
+    if (!rapidModal.classList.contains('open')) {{
+      throw new Error('Expected backdrop click during active AI scan to keep rapid modal open');
+    }}
+
+    // 3. After AI scan detects items, modal must be marked dirty so backdrop click prompts instead of closing silently
+    resolveScan({{
+      ok: true,
+      status: 200,
+      json: async () => ({{
+        status: 'success',
+        message: 'Found 1 item',
+        items: [{{ name: 'AMS1117 3.3V Regulator', estimated_qty: 5 }}],
+      }}),
+    }});
+    await scanPromise;
+    if (rapidModal.dataset.scanning !== 'false') {{
+      throw new Error(`Expected rapidModal.dataset.scanning === "false" after scan, got ${{rapidModal.dataset.scanning}}`);
+    }}
+    if (rapidModal.dataset.dirty !== 'true') {{
+      throw new Error(`Expected rapidModal.dataset.dirty === "true" after AI detected items, got ${{rapidModal.dataset.dirty}}`);
+    }}
+    domMod.closeOnScrim({{ target: rapidModal }}, 'drawer-rapid-entry-modal');
+    await new Promise(r => setTimeout(r, 10));
+    if (!rapidModal.classList.contains('open') || !unsavedModal.classList.contains('open')) {{
+      throw new Error('Expected backdrop click after AI results to trigger unsaved confirmation modal instead of discarding items');
+    }}
+    guardMod.resolveUnsavedPrompt('cancel');
+    await new Promise(r => setTimeout(r, 10));
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Rapid scan scrim & overflow test failed:\n{proc.stderr}"
+
+
+def test_rapid_entry_preserves_ai_crops_and_item_replace_offers_bin_photos(client):
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from unittest.mock import patch
+    import pytest
+
+    # 1. Backend: include_crops=false preserves ai_crop photos while filling missing photos
+    loc = client.post("/api/v1/locations", json={"name": "A9", "location_type": "drawer"}).json()
+    crop_item = client.post(
+        "/api/v1/items",
+        json={
+            "name": "Drok Boost Converter",
+            "location_id": loc["id"],
+            "quantity": 1,
+            "item_photo": "/uploads/originals/ai_crop_real.jpg",
+        },
+    ).json()
+
+    with patch("app.api.locations.find_and_import_images_batch") as mock_batch:
+        resp = client.post(f"/api/v1/locations/{loc['id']}/find-item-images?include_crops=false")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["checked_count"] == 0
+        mock_batch.assert_not_called()
+
+    unchanged = client.get(f"/api/v1/items/{crop_item['id']}").json()
+    assert unchanged["item_photo"] == "/uploads/originals/ai_crop_real.jpg"
+
+    # 2. Frontend: submitRapidEntry does not overwrite ai_crop photos & Replace offers bin's 6 uploaded photos
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_dir = (Path(__file__).resolve().parent.parent / "app" / "static" / "js").as_posix()
+    script = f"""
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    globalThis.BroadcastChannel = undefined;
+    globalThis.URL.createObjectURL = () => 'blob:mock';
+    globalThis.URL.revokeObjectURL = () => {{}};
+
+    function makeEl(id) {{
+      const classes = new Set();
+      const attrs = {{}};
+      const listeners = {{}};
+      return {{
+        id,
+        value: '',
+        textContent: '',
+        innerHTML: '',
+        style: {{ display: '' }},
+        dataset: {{}},
+        disabled: false,
+        open: false,
+        files: [],
+        classList: {{
+          add(...c) {{ c.forEach(x => classes.add(x)); }},
+          remove(...c) {{ c.forEach(x => classes.delete(x)); }},
+          toggle(c, force) {{
+            if (force === undefined) {{
+              if (classes.has(c)) {{ classes.delete(c); return false; }}
+              classes.add(c); return true;
+            }}
+            if (force) classes.add(c); else classes.delete(c);
+            return Boolean(force);
+          }},
+          contains(c) {{ return classes.has(c); }},
+        }},
+        setAttribute(k, v) {{ attrs[k] = String(v); }},
+        getAttribute(k) {{ return attrs[k] || null; }},
+        removeAttribute(k) {{ delete attrs[k]; }},
+        appendChild() {{}},
+        remove() {{}},
+        addEventListener(ev, fn) {{ (listeners[ev] ||= []).push(fn); }},
+        async trigger(ev, eventObj) {{
+          for (const fn of (listeners[ev] || [])) await fn(eventObj);
+        }},
+        querySelector() {{ return null; }},
+        scrollIntoView() {{}},
+        focus() {{}},
+      }};
+    }}
+
+    const existingGrid = makeEl('quick-photo-existing-grid');
+    const existingWrap = makeEl('quick-photo-existing-wrap');
+    const elements = {{
+      'drawer-rapid-entry-modal': makeEl('drawer-rapid-entry-modal'),
+      'unsaved-confirm-modal': makeEl('unsaved-confirm-modal'),
+      'unsaved-confirm-msg': makeEl('unsaved-confirm-msg'),
+      'toast-shelf': makeEl('toast-shelf'),
+      'rapid-location-select': makeEl('rapid-location-select'),
+      'rapid-location-pill-bar': makeEl('rapid-location-pill-bar'),
+      'rapid-location-pill-name': makeEl('rapid-location-pill-name'),
+      'rapid-location-field': makeEl('rapid-location-field'),
+      'rapid-stage-capture': makeEl('rapid-stage-capture'),
+      'rapid-stage-llm': makeEl('rapid-stage-llm'),
+      'rapid-stage-review': makeEl('rapid-stage-review'),
+      'rapid-photo-strip': makeEl('rapid-photo-strip'),
+      'rapid-photo-filename': makeEl('rapid-photo-filename'),
+      'rapid-photo-preview-wrap': makeEl('rapid-photo-preview-wrap'),
+      'rapid-photo-preview': makeEl('rapid-photo-preview'),
+      'rapid-scanning-banner': makeEl('rapid-scanning-banner'),
+      'rapid-scanning-text': makeEl('rapid-scanning-text'),
+      'rapid-ai-results': makeEl('rapid-ai-results'),
+      'rapid-submit-btn': makeEl('rapid-submit-btn'),
+      'rapid-ai-scan-btn': makeEl('rapid-ai-scan-btn'),
+      'rapid-vision-provider': makeEl('rapid-vision-provider'),
+      'rapid-vision-model': makeEl('rapid-vision-model'),
+      'rapid-vision-status': makeEl('rapid-vision-status'),
+      'rapid-expected-count': makeEl('rapid-expected-count'),
+      'rapid-assortment-name': makeEl('rapid-assortment-name'),
+      'rapid-category-input': makeEl('rapid-category-input'),
+      'rapid-items-text': makeEl('rapid-items-text'),
+      'rapid-add-part-input': makeEl('rapid-add-part-input'),
+      'rapid-save-mode-box': makeEl('rapid-save-mode-box'),
+      'rapid-save-mode-hint': makeEl('rapid-save-mode-hint'),
+      'rapid-assortment-fields': makeEl('rapid-assortment-fields'),
+      'rapid-assortment-name-label': makeEl('rapid-assortment-name-label'),
+      'rapid-mode-separate': makeEl('rapid-mode-separate'),
+      'rapid-mode-box': makeEl('rapid-mode-box'),
+      'rapid-mode-assortment': makeEl('rapid-mode-assortment'),
+      'rapid-advanced-details': makeEl('rapid-advanced-details'),
+      'rapid-llm-json-input': makeEl('rapid-llm-json-input'),
+      'rapid-llm-prompt-preview': makeEl('rapid-llm-prompt-preview'),
+      'rapid-photo-input': makeEl('rapid-photo-input'),
+      'rapid-modal-title': makeEl('rapid-modal-title'),
+      'rapid-modal-subtitle': makeEl('rapid-modal-subtitle'),
+      'rapid-existing-photos-btn': makeEl('rapid-existing-photos-btn'),
+      'quick-photo-modal': makeEl('quick-photo-modal'),
+      'quick-photo-title': makeEl('quick-photo-title'),
+      'quick-photo-input': makeEl('quick-photo-input'),
+      'quick-photo-input-label': makeEl('quick-photo-input-label'),
+      'quick-photo-preview': makeEl('quick-photo-preview'),
+      'quick-photo-icon': makeEl('quick-photo-icon'),
+      'quick-photo-dropzone': makeEl('quick-photo-dropzone'),
+      'quick-photo-existing-wrap': existingWrap,
+      'quick-photo-existing-grid': existingGrid,
+    }};
+    elements['rapid-vision-provider'].value = 'local';
+
+    globalThis.window = {{
+      location: {{ host: 'localhost:8000', origin: 'http://localhost:8000', hash: '' }},
+      addEventListener() {{}},
+      matchMedia: () => ({{ matches: false, addEventListener() {{}} }}),
+    }};
+    globalThis.document = {{
+      readyState: 'complete',
+      activeElement: null,
+      getElementById: (id) => elements[id] || null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+      createElement: (tag) => makeEl(tag),
+    }};
+
+    const photos = [1, 2, 3, 4, 5, 6].map((id) => ({{
+      id,
+      photo_path: `/uploads/originals/bin_p${{id}}.jpg`,
+      thumbnail_path: `/uploads/thumbnails/bin_p${{id}}_thumb.webp`,
+      photo_type: 'container',
+    }}));
+    const bin62 = {{
+      id: 62,
+      name: 'A9',
+      location_type: 'drawer',
+      photos,
+      children: [],
+    }};
+    const item137 = {{ id: 137, name: 'Drok Boost Converter', location_id: 62, item_photo: '/uploads/originals/satellite.jpg' }};
+
+    const apiCalls = [];
+    globalThis.fetch = async (url, opts = {{}}) => {{
+      const u = String(url);
+      const m = (opts.method || 'GET').toUpperCase();
+      apiCalls.push({{ u, m, body: opts.body || null }});
+      if (u.includes('/vision-providers')) {{
+        return {{ ok: true, status: 200, json: async () => ({{ active_provider: 'local', providers: {{ local: {{ configured: true, available: true }} }} }}) }};
+      }}
+      if (u.includes('/analyze-photo')) {{
+        return {{
+          ok: true,
+          status: 200,
+          json: async () => ({{
+            status: 'success',
+            message: 'Found 1 item',
+            items: [{{ name: 'Drok Boost Converter', estimated_qty: 1, crop_photo_path: '/uploads/originals/ai_crop_real.jpg' }}],
+          }}),
+        }};
+      }}
+      if (u.endsWith('/api/v1/items/bulk')) {{
+        return {{
+          ok: true,
+          status: 201,
+          json: async () => ([{{ id: 137, name: 'Drok Boost Converter', location_id: 62, item_photo: '/uploads/originals/ai_crop_real.jpg' }}]),
+        }};
+      }}
+      if (u.includes('/api/v1/locations/tree')) {{
+        return {{ ok: true, status: 200, json: async () => ([bin62]) }};
+      }}
+      if (u.includes('/api/v1/items?')) {{
+        return {{ ok: true, status: 200, json: async () => ([item137]) }};
+      }}
+      return {{ ok: true, status: 200, json: async () => ({{}}) }};
+    }};
+
+    const stateMod = await import('file://{js_dir}/state.js');
+    const modalsMod = await import('file://{js_dir}/modals.js');
+
+    stateMod.state.locationMap.set(62, bin62);
+    stateMod.state.items = [item137];
+
+    // a) Rapid scan save with an ai_crop photo must NOT fire find-item-images
+    await modalsMod.openRapidEntryModal(62, {{ photoIds: [1], autoScan: true }});
+    await modalsMod.submitRapidEntry();
+    const findImageCalls = apiCalls.filter(c => c.u.includes('/find-item-images'));
+    if (findImageCalls.length > 0) {{
+      throw new Error(`Expected submitRapidEntry NOT to call /find-item-images when item already has ai_crop photo, got ${{JSON.stringify(findImageCalls)}}`);
+    }}
+
+    // b) Replace item photo modal for item 137 in bin 62 must list all 6 uploaded bin photos
+    modalsMod.openQuickPhotoModal({{ kind: 'item', id: 137, title: 'Replace item photo' }});
+    if (existingWrap.style.display !== 'block') {{
+      throw new Error(`Expected #quick-photo-existing-wrap to be visible for item with bin photos, got display=${{existingWrap.style.display}}`);
+    }}
+    for (let i = 1; i <= 6; i++) {{
+      if (!existingGrid.innerHTML.includes(`/uploads/originals/bin_p${{i}}.jpg`)) {{
+        throw new Error(`Expected #quick-photo-existing-grid to include bin photo ${{i}}, got ${{existingGrid.innerHTML}}`);
+      }}
+    }}
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Crop preservation & item replace test failed:\n{proc.stderr}"
+
+
+def test_item_view_shows_saved_photos_and_converts_selected_to_single_pdf(client):
+    import io
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from PIL import Image as PILImage
+    import pytest
+
+    loc = client.post("/api/v1/locations", json={"name": "A9", "location_type": "drawer"}).json()
+    uploaded_paths = []
+    for idx, color in enumerate([(220, 40, 40), (40, 180, 60), (40, 80, 220)], start=1):
+        buf = io.BytesIO()
+        PILImage.new("RGB", (2200, 1600), color=color).save(buf, format="JPEG", quality=92)
+        buf.seek(0)
+        up = client.post(
+            f"/api/v1/locations/{loc['id']}/photos",
+            files={"file": (f"doc_page_{idx}.jpg", buf, "image/jpeg")},
+        )
+        assert up.status_code == 201, up.text
+        uploaded_paths.append(up.json()["photo_path"])
+
+    item = client.post(
+        "/api/v1/items",
+        json={
+            "name": "Drok DC-DC Boost Converter Module",
+            "location_id": loc["id"],
+            "quantity": 1,
+            "item_photo": uploaded_paths[0],
+        },
+    ).json()
+
+    # Convert selected 2 document images into a single reduced-resolution PDF attachment
+    pdf_resp = client.post(
+        f"/api/v1/items/{item['id']}/attachments/from-photos-pdf",
+        json={
+            "photo_paths": [uploaded_paths[1], uploaded_paths[2]],
+            "title": "Drok Manual & Specs",
+            "max_dimension": 1200,
+        },
+    )
+    assert pdf_resp.status_code == 201, pdf_resp.text
+    att = pdf_resp.json()
+    assert att["attachment_type"] == "pdf"
+    assert att["content_type"] == "application/pdf"
+    assert att["filename"].endswith(".pdf")
+    assert att["title"] == "Drok Manual & Specs"
+    assert att["file_path"].startswith("/uploads/attachments/")
+    assert att["size_bytes"] > 100
+
+    dl = client.get(att["file_path"])
+    assert dl.status_code == 200
+    assert dl.content.startswith(b"%PDF-")
+    assert b"/Count 2" in dl.content
+    assert dl.headers.get("X-Frame-Options") == "SAMEORIGIN"
+    assert "frame-ancestors 'self'" in (dl.headers.get("Content-Security-Policy") or "")
+
+    # Frontend test: renderItemView shows all 6 saved images and converts selected images into one PDF
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_dir = (Path(__file__).resolve().parent.parent / "app" / "static" / "js").as_posix()
+    script = f"""
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    globalThis.BroadcastChannel = undefined;
+
+    function makeEl(id) {{
+      const classes = new Set();
+      return {{
+        id,
+        value: '',
+        textContent: '',
+        innerHTML: '',
+        style: {{ display: '' }},
+        dataset: {{}},
+        disabled: false,
+        checked: false,
+        scrollTop: 0,
+        classList: {{
+          add(...c) {{ c.forEach(x => classes.add(x)); }},
+          remove(...c) {{ c.forEach(x => classes.delete(x)); }},
+          toggle(c, force) {{
+            if (force === undefined) {{
+              if (classes.has(c)) {{ classes.delete(c); return false; }}
+              classes.add(c); return true;
+            }}
+            if (force) classes.add(c); else classes.delete(c);
+            return Boolean(force);
+          }},
+          contains(c) {{ return classes.has(c); }},
+        }},
+        appendChild() {{}},
+        remove() {{}},
+        addEventListener() {{}},
+        querySelector() {{ return null; }},
+      }};
+    }}
+
+    const workspace = makeEl('app-workspace');
+    const pdfTitleInput = makeEl('item-pdf-title-137');
+    pdfTitleInput.value = 'Datasheet Pages';
+    const pdfBtn = makeEl('item-convert-pdf-btn-137');
+    const elements = {{
+      'app-workspace': workspace,
+      'toast-shelf': makeEl('toast-shelf'),
+      'item-pdf-title-137': pdfTitleInput,
+      'item-convert-pdf-btn-137': pdfBtn,
+      'item-attachments-list-137': makeEl('item-attachments-list-137'),
+      'item-audit-history-137': makeEl('item-audit-history-137'),
+      'attachment-viewer-modal': makeEl('attachment-viewer-modal'),
+      'attachment-viewer-card': makeEl('attachment-viewer-card'),
+      'attachment-viewer-badge': makeEl('attachment-viewer-badge'),
+      'attachment-viewer-title': makeEl('attachment-viewer-title'),
+      'attachment-viewer-meta': makeEl('attachment-viewer-meta'),
+      'attachment-viewer-frame': makeEl('attachment-viewer-frame'),
+      'attachment-viewer-img-wrap': makeEl('attachment-viewer-img-wrap'),
+      'attachment-viewer-img': makeEl('attachment-viewer-img'),
+      'attachment-viewer-expand-btn': makeEl('attachment-viewer-expand-btn'),
+      'attachment-viewer-newtab': makeEl('attachment-viewer-newtab'),
+      'attachment-viewer-download': makeEl('attachment-viewer-download'),
+    }};
+
+    globalThis.window = {{
+      location: {{ host: 'localhost:8000', origin: 'http://localhost:8000', hash: '' }},
+      addEventListener() {{}},
+      matchMedia: () => ({{ matches: false, addEventListener() {{}} }}),
+    }};
+    Object.defineProperty(globalThis, 'navigator', {{
+      value: {{ userAgent: 'Mozilla/5.0 Windows NT 10.0', maxTouchPoints: 0 }},
+      configurable: true,
+    }});
+    globalThis.window.navigator = globalThis.navigator;
+    globalThis.document = {{
+      readyState: 'complete',
+      activeElement: null,
+      getElementById: (id) => elements[id] || null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+      createElement: (tag) => makeEl(tag),
+    }};
+
+    const apiCalls = [];
+    globalThis.fetch = async (url, opts = {{}}) => {{
+      const u = String(url);
+      const m = (opts.method || 'GET').toUpperCase();
+      const body = opts.body ? JSON.parse(opts.body) : null;
+      apiCalls.push({{ u, m, body }});
+      if (u.endsWith('/attachments/from-photos-pdf') && m === 'POST') {{
+        return {{
+          ok: true,
+          status: 201,
+          json: async () => ({{
+            id: 55,
+            item_id: 137,
+            file_path: '/uploads/attachments/merged.pdf',
+            filename: 'Datasheet_Pages.pdf',
+            attachment_type: 'pdf',
+            title: 'Datasheet Pages',
+            size_bytes: 42000,
+          }}),
+        }};
+      }}
+      if (u.endsWith('/attachments') && m === 'GET') {{
+        return {{ ok: true, status: 200, json: async () => ([]) }};
+      }}
+      if (u.endsWith('/api/v1/items/137') && m === 'GET') {{
+        return {{ ok: true, status: 200, json: async () => ({{ id: 137, audit_logs: [] }}) }};
+      }}
+      return {{ ok: true, status: 200, json: async () => ([]) }};
+    }};
+
+    const stateMod = await import('file://{js_dir}/state.js');
+    const viewsMod = await import('file://{js_dir}/views.js');
+
+    const photos = [1, 2, 3, 4, 5, 6].map((id) => ({{
+      id,
+      photo_path: `/uploads/originals/bin_p${{id}}.jpg`,
+      thumbnail_path: `/uploads/thumbnails/bin_p${{id}}_thumb.webp`,
+      photo_type: 'container',
+    }}));
+    stateMod.state.locationMap.set(62, {{
+      id: 62,
+      name: 'A9',
+      location_type: 'drawer',
+      photos,
+      children: [],
+    }});
+    stateMod.state.items = [{{
+      id: 137,
+      name: 'Drok DC-DC Boost Converter Module',
+      location_id: 62,
+      item_photo: '/uploads/originals/bin_p1.jpg',
+      quantity: 1,
+      unit: 'pcs',
+      status: 'stored',
+    }}];
+
+    viewsMod.renderItemView(137);
+    if (!workspace.innerHTML.includes('item-saved-photos-grid')) {{
+      throw new Error('Expected renderItemView to render item-saved-photos-grid');
+    }}
+    for (let i = 1; i <= 6; i++) {{
+      if (!workspace.innerHTML.includes(`/uploads/originals/bin_p${{i}}.jpg`)) {{
+        throw new Error(`Expected renderItemView to display saved photo ${{i}}`);
+      }}
+    }}
+    if (workspace.innerHTML.includes('item-pdf-title-137')) {{
+      throw new Error('Expected default viewing mode NOT to show PDF conversion form controls until triggered from menu');
+    }}
+    if (!workspace.innerHTML.includes('toggleItemPhotosMoreMenu(137')) {{
+      throw new Error('Expected default viewing mode to include quiet overflow menu trigger for photo actions');
+    }}
+
+    // Enter PDF selection mode from the overflow menu action
+    viewsMod.toggleItemPdfSelectMode(137, true);
+    if (!workspace.innerHTML.includes('item-pdf-title-137')) {{
+      throw new Error('Expected PDF selection mode to render PDF toolbar controls');
+    }}
+
+    // Select 3 document photos in custom order and convert to 1 PDF
+    viewsMod.toggleItemPdfPhotoSelection(137, '/uploads/originals/bin_p4.jpg', true);
+    viewsMod.toggleItemPdfPhotoSelection(137, '/uploads/originals/bin_p2.jpg', true);
+    viewsMod.toggleItemPdfPhotoSelection(137, '/uploads/originals/bin_p5.jpg', true);
+    await viewsMod.convertSelectedItemPhotosToPdf(137);
+
+    const pdfCall = apiCalls.find(c => c.u === '/api/v1/items/137/attachments/from-photos-pdf' && c.m === 'POST');
+    if (!pdfCall) {{
+      throw new Error('Expected POST /api/v1/items/137/attachments/from-photos-pdf to be called');
+    }}
+    const expectedOrder = ['/uploads/originals/bin_p4.jpg', '/uploads/originals/bin_p2.jpg', '/uploads/originals/bin_p5.jpg'];
+    if (JSON.stringify(pdfCall.body.photo_paths) !== JSON.stringify(expectedOrder)) {{
+      throw new Error(`Expected photo_paths in selection order ${{JSON.stringify(expectedOrder)}}, got ${{JSON.stringify(pdfCall.body.photo_paths)}}`);
+    }}
+    if (workspace.innerHTML.includes('item-pdf-title-137')) {{
+      throw new Error('Expected PDF selection mode to exit back to clean viewing mode after creating PDF');
+    }}
+
+    // In-app attachment viewer window & fullscreen toggle
+    viewsMod.openAttachmentViewer('/uploads/attachments/merged.pdf', 'Datasheet Pages', 'pdf', 'Datasheet_Pages.pdf', '41 KB');
+    if (!elements['attachment-viewer-modal'].classList.contains('open')) {{
+      throw new Error('Expected openAttachmentViewer to open #attachment-viewer-modal inside the app');
+    }}
+    if (!String(elements['attachment-viewer-frame'].src || '').startsWith('/uploads/attachments/merged.pdf')) {{
+      throw new Error(`Expected #attachment-viewer-frame.src to load PDF, got ${{elements['attachment-viewer-frame'].src}}`);
+    }}
+    viewsMod.toggleAttachmentViewerFullscreen();
+    if (!elements['attachment-viewer-card'].classList.contains('is-fullscreen')) {{
+      throw new Error('Expected toggleAttachmentViewerFullscreen to toggle .is-fullscreen on viewer card');
+    }}
+    viewsMod.closeAttachmentViewerModal();
+    if (elements['attachment-viewer-modal'].classList.contains('open')) {{
+      throw new Error('Expected closeAttachmentViewerModal to close #attachment-viewer-modal');
+    }}
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Item saved photos & PDF conversion frontend test failed:\n{proc.stderr}"
+
+
+
+
+
+
+
+
+
+def _jpeg_bytes(color=(10, 20, 30)):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 64), color).save(buf, format="JPEG")
+    buf.seek(0)
+    return buf
+
+
+def test_pdf_from_photos_remove_source_photos_does_not_crash(client):
+    loc = client.post("/api/v1/locations", json={"name": "PDF Room", "location_type": "room"}).json()
+    photo = client.post(
+        f"/api/v1/locations/{loc['id']}/photos",
+        files={"file": ("a.jpg", _jpeg_bytes(), "image/jpeg")},
+    ).json()
+    item = client.post("/api/v1/items", json={"name": "Manual", "location_id": loc["id"]}).json()
+    resp = client.post(
+        f"/api/v1/items/{item['id']}/attachments/from-photos-pdf",
+        json={"photo_paths": [photo["photo_path"]], "remove_source_photos": True},
+    )
+    assert resp.status_code == 201
+    assert client.get(f"/api/v1/locations/{loc['id']}/photos").json() == []
+
+
+def test_unit_setup_second_unit_creation_rejected(client):
+    sess = client.post("/api/v1/unit-setup/sessions", json={}).json()
+    url = f"/api/v1/unit-setup/sessions/{sess['token']}/unit"
+    body = {"name": "Dresser", "compartment_count": 2}
+    assert client.post(url, json=body).status_code == 201
+    assert client.post(url, json=body).status_code == 400
+    units = [l for l in client.get("/api/v1/locations").json() if l["name"] == "Dresser"]
+    assert len(units) == 1
+
+
+def test_unit_setup_reservation_blocks_concurrent_create(client):
+    from app.services.unit_setup_service import unit_setup_service
+    sess = client.post("/api/v1/unit-setup/sessions", json={}).json()
+    unit_setup_service._sessions[sess["token"]].unit_creating = True
+    resp = client.post(
+        f"/api/v1/unit-setup/sessions/{sess['token']}/unit",
+        json={"name": "Racer", "compartment_count": 1},
+    )
+    assert resp.status_code == 400
+    assert not [l for l in client.get("/api/v1/locations").json() if l["name"] == "Racer"]
+
+
+def test_grid_save_removing_slot_keeps_reparented_children(client):
+    unit = client.post("/api/v1/locations", json={"name": "Chest", "location_type": "container"}).json()
+    grid = {"grid_rows": 1, "grid_cols": 2, "slots": [
+        {"name": "A", "grid_row": 1, "grid_col": 1},
+        {"name": "B", "grid_row": 1, "grid_col": 2},
+    ]}
+    tree = client.put(f"/api/v1/locations/{unit['id']}/grid", json=grid).json()
+    a, b = tree["children"][0]["id"], tree["children"][1]["id"]
+    sub = client.post("/api/v1/locations", json={"name": "Sub", "location_type": "box", "parent_id": b}).json()
+    grid2 = {"grid_rows": 1, "grid_cols": 1, "slots": [{"id": a, "name": "A", "grid_row": 1, "grid_col": 1}]}
+    assert client.put(f"/api/v1/locations/{unit['id']}/grid", json=grid2).status_code == 200
+    kept = client.get(f"/api/v1/locations/{sub['id']}")
+    assert kept.status_code == 200
+    assert kept.json()["parent_id"] == unit["id"]
+
+
+def test_whitespace_only_names_rejected(client):
+    assert client.post("/api/v1/items", json={"name": "   "}).status_code == 422
+    assert client.post("/api/v1/locations", json={"name": "  ", "location_type": "room"}).status_code == 422
+
+
+def test_malformed_host_header_port_does_not_crash(client):
+    resp = client.get("/api/v1/locations/network-info", headers={"Host": "foo:abc"})
+    assert resp.status_code == 200
+
+
+def test_concurrent_grid_slot_requests_create_single_slot(client):
+    unit = client.post("/api/v1/locations", json={"name": "Cab", "location_type": "container"}).json()
+    client.put(f"/api/v1/locations/{unit['id']}/grid", json={"grid_rows": 2, "grid_cols": 2, "slots": []})
+    first = client.post(f"/api/v1/locations/{unit['id']}/grid/slot", json={"grid_row": 1, "grid_col": 1})
+    second = client.post(f"/api/v1/locations/{unit['id']}/grid/slot", json={"grid_row": 1, "grid_col": 1})
+    assert first.status_code == 201 and second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+
+
+def test_pending_reference_blocks_photo_cleanup(client, db_session):
+    from app.services.photo_service import photo_service
+    up = client.post("/api/v1/photos/upload", files={"file": ("p.jpg", _jpeg_bytes(), "image/jpeg")}).json()
+    path = up["original_path"]
+    photo_service.register_pending_reference(db_session, path)
+    try:
+        assert photo_service.cleanup_unreferenced_photo(db_session, path) is False
+    finally:
+        photo_service.release_pending_references(db_session)
+    assert photo_service.cleanup_unreferenced_photo(db_session, path) is True
+
+
+def test_shrinking_grid_below_placed_children_rejected(client):
+    unit = client.post("/api/v1/locations", json={"name": "Shrinker", "location_type": "container"}).json()
+    grid = {"grid_rows": 2, "grid_cols": 2, "slots": [{"name": "D", "grid_row": 2, "grid_col": 2}]}
+    assert client.put(f"/api/v1/locations/{unit['id']}/grid", json=grid).status_code == 200
+    assert client.patch(f"/api/v1/locations/{unit['id']}", json={"grid_rows": 1}).status_code == 400
+    assert client.patch(f"/api/v1/locations/{unit['id']}", json={"grid_rows": 3}).status_code == 200
+
+
+def test_cmyk_upload_saves_as_jpeg(client):
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("CMYK", (40, 40), (0, 0, 0, 0)).save(buf, format="JPEG")
+    buf.seek(0)
+    resp = client.post("/api/v1/photos/upload", files={"file": ("cmyk.jpg", buf, "image/jpeg")})
+    assert resp.status_code == 200
+
+
+def test_image_download_blocks_host_resolving_to_private_ip(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services import image_lookup_service
+    monkeypatch.setattr(image_lookup_service, "_host_resolves_publicly", lambda host: False)
+    http_client = MagicMock()
+    http_client.get = AsyncMock()
+    saved = asyncio.run(image_lookup_service.download_and_save_image(http_client, "https://evil.example.com/a.png"))
+    assert saved is None
+    http_client.get.assert_not_called()
+
+
+def test_sweep_removes_only_old_unreferenced_ai_crops(db_session):
+    import os, time
+    from app.models.item import Item
+    db_session.add(Item(name='anchor'))
+    db_session.commit()
+    from app.core.config import settings
+    from app.services.photo_service import photo_service
+    old = settings.ORIGINALS_DIR / "ai_crop_old.jpg"
+    fresh = settings.ORIGINALS_DIR / "ai_crop_fresh.jpg"
+    for p in (old, fresh):
+        p.write_bytes(b"x")
+    stale = time.time() - 3 * 24 * 3600
+    os.utime(old, (stale, stale))
+    assert photo_service.sweep_orphan_ai_crops(db_session) == 1
+    assert not old.exists() and fresh.exists()
+    fresh.unlink()
+
+
+def test_oversized_declared_download_is_rejected():
+    import asyncio
+    import httpx
+    from app.services import image_lookup_service as ils
+    resp = httpx.Response(200, headers={"content-length": str(ils._MAX_IMAGE_BYTES + 1)})
+    try:
+        asyncio.run(ils._reject_oversized_response(resp))
+        raised = False
+    except httpx.HTTPError:
+        raised = True
+    assert raised
+
+
+def test_sweep_refuses_to_run_against_empty_database(db_session):
+    from app.core.config import settings
+    from app.services.photo_service import photo_service
+    crop = settings.ORIGINALS_DIR / "ai_crop_guard.jpg"
+    crop.write_bytes(b"x")
+    import os, time
+    stale = time.time() - 3 * 24 * 3600
+    os.utime(crop, (stale, stale))
+    assert photo_service.sweep_orphan_ai_crops(db_session) == 0
+    assert crop.exists()
+    crop.unlink()
+
+
+def test_grid_merge_writes_audit_entry_and_updates_last_seen(client):
+    unit = client.post("/api/v1/locations", json={"name": "Merger", "location_type": "container"}).json()
+    grid = {"grid_rows": 1, "grid_cols": 2, "slots": [
+        {"name": "A", "grid_row": 1, "grid_col": 1},
+        {"name": "B", "grid_row": 1, "grid_col": 2},
+    ]}
+    tree = client.put(f"/api/v1/locations/{unit['id']}/grid", json=grid).json()
+    a, b = tree["children"][0]["id"], tree["children"][1]["id"]
+    item = client.post("/api/v1/items", json={"name": "Screw", "location_id": b}).json()
+    merged = {"grid_rows": 1, "grid_cols": 2, "slots": [
+        {"id": a, "name": "A", "grid_row": 1, "grid_col": 1, "grid_col_span": 2, "merge_from_ids": [b]},
+    ]}
+    assert client.put(f"/api/v1/locations/{unit['id']}/grid", json=merged).status_code == 200
+    detail = client.get(f"/api/v1/items/{item['id']}").json()
+    assert detail["location_id"] == a
+    moves = [log for log in detail["audit_logs"] if log["action"] == "moved"]
+    assert moves and moves[0]["location_id"] == a
+
+
+def test_unit_setup_whitespace_name_rejected(client):
+    sess = client.post("/api/v1/unit-setup/sessions", json={}).json()
+    resp = client.post(f"/api/v1/unit-setup/sessions/{sess['token']}/unit", json={"name": "   ", "compartment_count": 1})
+    assert resp.status_code == 422
+
+
+def test_reparent_cycle_still_rejected_after_locking(client):
+    parent = client.post("/api/v1/locations", json={"name": "P", "location_type": "room"}).json()
+    child = client.post("/api/v1/locations", json={"name": "C", "location_type": "container", "parent_id": parent["id"]}).json()
+    assert client.patch(f"/api/v1/locations/{parent['id']}", json={"parent_id": child["id"]}).status_code == 400
+    other = client.post("/api/v1/locations", json={"name": "Other", "location_type": "room"}).json()
+    resp = client.patch(f"/api/v1/locations/{child['id']}", json={"parent_id": other["id"]})
+    assert resp.status_code == 200 and resp.json()["parent_id"] == other["id"]
+
+
+async def test_download_without_content_length_is_capped_while_streaming(monkeypatch):
+    from unittest.mock import MagicMock
+    from app.services import image_lookup_service as ils
+
+    monkeypatch.setattr(ils, "_MAX_IMAGE_BYTES", 10)
+    monkeypatch.setattr(ils.photo_service, "process_and_save", lambda upload: pytest.fail("oversized body must not be saved"))
+    big = MagicMock(status_code=200, headers={"content-type": "image/png"}, content=b"x" * 11)
+
+    async def fake_get(url, **kwargs):
+        return big
+
+    assert await ils.download_and_save_image(make_http_client(fake_get), "https://upload.wikimedia.org/a.png") is None
+
+
+def test_location_delete_writes_audit_for_displaced_items(client):
+    room = client.post("/api/v1/locations", json={"name": "Doomed", "location_type": "room"}).json()
+    item = client.post("/api/v1/items", json={"name": "Orphan Bolt", "location_id": room["id"]}).json()
+    before = client.get(f"/api/v1/items/{item['id']}").json()["last_seen_at"]
+    assert client.delete(f"/api/v1/locations/{room['id']}").status_code == 204
+    after = client.get(f"/api/v1/items/{item['id']}").json()
+    assert after["location_id"] is None
+    assert any(log["action"] == "moved" and log["location_id"] is None for log in after["audit_logs"])
+    assert after["last_seen_at"] >= before
+
+
+def _old_crop(name):
+    import os, time
+    from app.core.config import settings
+    path = settings.ORIGINALS_DIR / name
+    path.write_bytes(b"x")
+    stale = time.time() - 3 * 24 * 3600
+    os.utime(path, (stale, stale))
+    return path
+
+
+def test_cleanup_unused_crops_defaults_to_dry_run_and_keeps_referenced(client):
+    unused = _old_crop("ai_crop_unused_x.jpg")
+    used = _old_crop("ai_crop_used_x.jpg")
+    client.post("/api/v1/items", json={"name": "Holder", "item_photo": "/uploads/originals/ai_crop_used_x.jpg"})
+    try:
+        dry = client.post("/api/v1/system/cleanup-unused-crops").json()
+        assert dry == {"dry_run": True, "unused_crops": 1}
+        assert unused.exists() and used.exists()
+        real = client.post("/api/v1/system/cleanup-unused-crops?dry_run=false").json()
+        assert real == {"dry_run": False, "unused_crops": 1}
+        assert not unused.exists() and used.exists()
+    finally:
+        unused.unlink(missing_ok=True)
+        used.unlink(missing_ok=True)
+
+
+def test_convert_item_to_box_keeps_photo_reference_registered(client, db_session):
+    from app.services.photo_service import photo_service
+    up = client.post("/api/v1/photos/upload", files={"file": ("c.jpg", _jpeg_bytes(), "image/jpeg")}).json()
+    item = client.post("/api/v1/items", json={"name": "Camera", "item_photo": up["original_path"]}).json()
+    resp = client.post(f"/api/v1/items/{item['id']}/convert-to-box", json={"keep_item_inside": False})
+    assert resp.status_code == 201
+    assert photo_service._inflight_refs.get(up["original_path"], 0) == 0
+    assert photo_service.cleanup_unreferenced_photo(db_session, up["original_path"]) is False

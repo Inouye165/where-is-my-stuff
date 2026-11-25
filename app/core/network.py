@@ -55,7 +55,11 @@ def resolve_effective_base_url(host_header: Optional[str] = None, base_url_param
     clean_host = host_header.strip().replace("\r", "").replace("\n", "")
     parsed = urlsplit(f"//{clean_host}")
     req_host = (parsed.hostname or "").lower()
-    req_port = str(parsed.port) if parsed.port else str(port)
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        return f"http://{lan_ip}:{port}"
+    req_port = str(parsed_port) if parsed_port else str(port)
 
     if req_host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
         return f"http://{lan_ip}:{req_port}"

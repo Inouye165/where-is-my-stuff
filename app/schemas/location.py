@@ -1,6 +1,6 @@
 from typing import List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from app.schemas.common import LocationType, UTCDateTime, validate_safe_photo_ref
+from app.schemas.common import LocationType, UTCDateTime, validate_name, validate_safe_photo_ref
 
 LocationPhotoType = Literal["container", "context"]
 
@@ -8,6 +8,7 @@ LocationPhotoType = Literal["container", "context"]
 class Breadcrumb(BaseModel):
     id: int
     name: str
+    label: Optional[str] = None
     location_type: str
 
 
@@ -20,6 +21,7 @@ class AutoGenerateChildren(BaseModel):
 
 class LocationBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
+    label: Optional[str] = Field(default=None, max_length=40)
     description: Optional[str] = Field(default=None, max_length=2000)
     location_type: LocationType = Field(default=LocationType.room)
     parent_id: Optional[int] = Field(default=None, ge=1)
@@ -33,6 +35,11 @@ class LocationBase(BaseModel):
     grid_row_span: Optional[int] = Field(default=None, ge=1, le=26)
     grid_col_span: Optional[int] = Field(default=None, ge=1, le=26)
 
+    @field_validator("name")
+    @classmethod
+    def check_name(cls, v: Optional[str]) -> Optional[str]:
+        return validate_name(v)
+
     @field_validator("container_photo", "context_photo")
     @classmethod
     def check_photo_paths(cls, v: Optional[str]) -> Optional[str]:
@@ -45,6 +52,7 @@ class LocationCreate(LocationBase):
 
 class LocationUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    label: Optional[str] = Field(default=None, max_length=40)
     description: Optional[str] = Field(default=None, max_length=2000)
     location_type: Optional[LocationType] = None
     parent_id: Optional[int] = Field(default=None, ge=1)
@@ -57,6 +65,11 @@ class LocationUpdate(BaseModel):
     grid_col: Optional[int] = Field(default=None, ge=1, le=26)
     grid_row_span: Optional[int] = Field(default=None, ge=1, le=26)
     grid_col_span: Optional[int] = Field(default=None, ge=1, le=26)
+
+    @field_validator("name")
+    @classmethod
+    def check_name(cls, v: Optional[str]) -> Optional[str]:
+        return validate_name(v)
 
     @field_validator("container_photo", "context_photo")
     @classmethod
@@ -91,6 +104,7 @@ class LocationPhotoAttach(BaseModel):
 class LocationRead(BaseModel):
     id: int
     name: str
+    label: Optional[str] = None
     description: Optional[str] = None
     location_type: str
     parent_id: Optional[int] = None
@@ -115,6 +129,15 @@ class LocationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class GridSlotEnsureRequest(BaseModel):
+    grid_row: int = Field(..., ge=1, le=26)
+    grid_col: int = Field(..., ge=1, le=26)
+    grid_row_span: int = Field(default=1, ge=1, le=26)
+    grid_col_span: int = Field(default=1, ge=1, le=26)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    location_type: Optional[LocationType] = None
+
+
 class GridSlotSpec(BaseModel):
     id: Optional[int] = Field(default=None, ge=1)
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
@@ -131,6 +154,13 @@ class LocationGridSave(BaseModel):
     grid_cols: int = Field(..., ge=1, le=26)
     grid_config: Optional[str] = Field(default=None, max_length=4000)
     slots: List[GridSlotSpec] = Field(default_factory=list)
+
+
+class GridSlotMoveRequest(BaseModel):
+    source_id: int = Field(..., ge=1)
+    target_id: Optional[int] = Field(default=None, ge=1)
+    target_row: Optional[int] = Field(default=None, ge=1, le=26)
+    target_col: Optional[int] = Field(default=None, ge=1, le=26)
 
 
 class LocationTree(LocationRead):

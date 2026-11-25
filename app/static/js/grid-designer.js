@@ -3,8 +3,9 @@
  * Supports numeric rows (1, 2, 3...), alphabetic columns (A, B, C...),
  * variable drawer spans (merge/combine, resize, split), and section dividers.
  */
-import { apiPut } from './api.js';
+import { apiPost, apiPut } from './api.js';
 import { renderSlotCarouselHtml, scrollSlotCarousel, syncAllSlotCarousels, syncSlotCarousel } from './carousel.js';
+import { getGridInlineEditState } from './compartment-actions.js';
 import { escapeHtml, escapeJsStr, sanitizePhotoUrl, showToast, withSubmitLock } from './dom.js';
 import { lucideIcon } from './icons.js';
 import { getSubtreeItems, isUnknownPlaceholder, loadAllData, state } from './state.js';
@@ -127,6 +128,19 @@ export function formatSlotCoord(row, col, rowSpan = 1, colSpan = 1) {
   return `${start}–${end}`;
 }
 
+function normalizeCoordToken(str) {
+  return String(str || '').trim().replace(/[\u2013\u2014-]/g, '-').replace(/\s+/g, '').toUpperCase();
+}
+
+export function isSameAsCoord(name, coord) {
+  if (!name || !String(name).trim()) return true;
+  return normalizeCoordToken(name) === normalizeCoordToken(coord);
+}
+
+function isGenericAutoSlotName(name) {
+  return /^(drawer|bin|shelf|compartment|cubby|slot)\s+\d+$/i.test(String(name || '').trim());
+}
+
 export function parseGridConfig(rawConfig) {
   if (!rawConfig) return { section_breaks: [] };
   try {
@@ -190,13 +204,14 @@ export function renderContainerGridHtml(unit, options = {}) {
 
   // Build explicit grid-template-rows
   const isSingleCol = cols === 1 && !compact && !diagram;
+  const minColWidth = diagram ? '12px' : compact ? '28px' : cols >= 7 ? '108px' : '124px';
   const rowTracks = ['auto']; // header row
   for (let r = 1; r <= rows; r++) {
     rowTracks.push(
-      diagram ? 'minmax(14px, 1fr)' : compact ? 'minmax(32px, auto)' : isSingleCol ? 'auto' : 'minmax(64px, auto)'
+      diagram ? 'minmax(14px, 1fr)' : compact ? 'minmax(32px, auto)' : isSingleCol ? 'auto' : 'minmax(74px, auto)'
     );
     if (sectionBreaks.includes(r)) {
-      rowTracks.push(diagram ? '4px' : compact ? '8px' : '12px');
+      rowTracks.push(diagram ? '4px' : compact ? '8px' : '14px');
     }
   }
 
@@ -219,12 +234,35 @@ export function renderContainerGridHtml(unit, options = {}) {
     }
   }
 
+  const safeUnitId = Number(unit?.id) || 0;
+  const inlineEdit = (!compact && !diagram) ? getGridInlineEditState() : { renameId: null, quickAddId: null };
+
   let emptyCellsHtml = '';
   for (let r = 1; r <= rows; r++) {
     const cssR = cssRowForDataRow(r, sectionBreaks);
     for (let c = 1; c <= cols; c++) {
       if (!occupiedMap.has(`${r},${c}`)) {
-        emptyCellsHtml += `<div class="cgrid-empty-slot" style="grid-row: ${cssR}; grid-column: ${c + 1};"></div>`;
+        if (!compact && !diagram && safeUnitId) {
+          const emptyCoord = formatSlotCoord(r, c, 1, 1);
+          emptyCellsHtml += `
+            <button
+              type="button"
+              class="cgrid-empty-slot is-interactive"
+              style="grid-row: ${cssR}; grid-column: ${c + 1};"
+              onclick="openOrCreateGridCompartment(${safeUnitId}, ${r}, ${c})"
+              ondragover="handleGridSlotDragOver(event)"
+              ondragleave="handleGridSlotDragLeave(event)"
+              ondrop="handleGridSlotDropOnEmpty(event, ${safeUnitId}, ${r}, ${c})"
+              title="Open compartment ${escapeHtml(emptyCoord)}"
+              aria-label="Open empty compartment ${escapeHtml(emptyCoord)}"
+            >
+              <span class="cgrid-empty-slot-coord">${escapeHtml(emptyCoord)}</span>
+              <span class="cgrid-empty-slot-cta">+ Open</span>
+            </button>
+          `;
+        } else {
+          emptyCellsHtml += `<div class="cgrid-empty-slot" style="grid-row: ${cssR}; grid-column: ${c + 1};" aria-hidden="true"></div>`;
+        }
       }
     }
   }
@@ -241,21 +279,24 @@ export function renderContainerGridHtml(unit, options = {}) {
 
     const isHighlighted = highlightDrawerId !== null && Number(d.id) === Number(highlightDrawerId);
     const coord = formatSlotCoord(r0, c0, rs, cs);
-    const itemCount = getSubtreeItems(d.id).length || Number(d.total_item_count || 0);
+    const subtreeItems = getSubtreeItems(d.id);
+    const itemCount = subtreeItems.length || Number(d.total_item_count || 0);
     const safeId = Number(d.id);
     const onClickAttr = diagram
-      ? `locateDrawerInUnit(${Number(unit.id)}, ${safeId})`
+      ? `locateDrawerInUnit(${safeUnitId}, ${safeId})`
       : `navToDrawer(${safeId}, true)`;
+    const sameAsCoord = isSameAsCoord(d.name, coord);
 
     if (diagram) {
+      const diagTitle = sameAsCoord ? coord : `${d.name} (${coord})`;
       return `
         <button
           type="button"
           class="cgrid-slot is-diagram ${isHighlighted ? 'is-highlighted' : ''}"
           style="grid-row: ${startCssR} / ${endCssR}; grid-column: ${startCssC} / ${endCssC};"
           onclick="${onClickAttr}"
-          title="${escapeHtml(d.name)} (${escapeHtml(coord)})"
-          aria-label="${escapeHtml(d.name)} (${escapeHtml(coord)})${isHighlighted ? ' — item is here' : ''}"
+          title="${escapeHtml(diagTitle)}"
+          aria-label="${escapeHtml(diagTitle)}${isHighlighted ? ' — item is here' : ''}"
         >
           ${isHighlighted ? `<span class="cgrid-diagram-coord">${escapeHtml(coord)}</span>` : ''}
         </button>
@@ -263,41 +304,207 @@ export function renderContainerGridHtml(unit, options = {}) {
     }
 
     const slotPhotos = (!compact && !diagram) ? getSlotPhotos(d) : [];
-    const childBoxCount = (d.children || []).filter(c => !isUnknownPlaceholder(c)).length;
+    const childBoxes = (d.children || []).filter(c => !isUnknownPlaceholder(c));
+    const childBoxCount = childBoxes.length;
     const isEmptySlot = !compact && !diagram && itemCount === 0 && slotPhotos.length === 0 && childBoxCount === 0;
     const slotCarouselHtml = renderSlotCarouselHtml(slotPhotos);
 
-    let singleColBadge = '';
-    if (isSingleCol && !isHighlighted) {
-      const parts = [];
-      if (childBoxCount > 0) parts.push(`${childBoxCount} ${childBoxCount === 1 ? 'box' : 'boxes'}`);
-      if (itemCount > 0) parts.push(`${itemCount} ${itemCount === 1 ? 'item' : 'items'}`);
-      singleColBadge = parts.length > 0
-        ? `<span class="cgrid-slot-summary">${escapeHtml(parts.join(' · '))}</span>`
-        : `<span class="cgrid-slot-summary is-empty">Empty</span>`;
+    // Resolve clean, non-redundant display title & optional secondary preview
+    const firstContentName = childBoxes[0]?.name || subtreeItems[0]?.name || '';
+    let displayTitle = '';
+    let secondaryPreview = '';
+    if (sameAsCoord) {
+      displayTitle = firstContentName;
+      const totalEntries = childBoxCount + subtreeItems.length;
+      if (displayTitle && totalEntries > 1) {
+        secondaryPreview = `+${totalEntries - 1} more`;
+      }
+    } else {
+      displayTitle = d.name || '';
+      if (
+        !compact &&
+        !isSingleCol &&
+        firstContentName &&
+        isGenericAutoSlotName(displayTitle) &&
+        normalizeCoordToken(firstContentName) !== normalizeCoordToken(displayTitle)
+      ) {
+        secondaryPreview = firstContentName;
+      }
     }
+
+    const tooltipParts = [coord];
+    if (!sameAsCoord && d.name) tooltipParts.push(d.name);
+    else if (firstContentName) tooltipParts.push(firstContentName);
+    if (itemCount > 0) tooltipParts.push(`${itemCount} ${itemCount === 1 ? 'item' : 'items'}`);
+    else if (childBoxCount > 0) tooltipParts.push(`${childBoxCount} ${childBoxCount === 1 ? 'box' : 'boxes'}`);
+    else tooltipParts.push('Empty');
+    const slotTooltip = tooltipParts.join(' · ');
+
+    if (compact) {
+      return `
+        <div
+          role="button"
+          tabindex="0"
+          class="cgrid-slot ${isHighlighted ? 'is-highlighted spotlight-highlight' : ''} is-compact"
+          style="grid-row: ${startCssR} / ${endCssR}; grid-column: ${startCssC} / ${endCssC};"
+          onclick="${onClickAttr}"
+          onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); ${onClickAttr}; }"
+          title="${escapeHtml(slotTooltip)}"
+        >
+          <div class="cgrid-slot-info">
+            <span class="cgrid-slot-coord">${escapeHtml(coord)}</span>
+            ${displayTitle ? `<span class="cgrid-slot-name">${escapeHtml(displayTitle)}</span>` : ''}
+            ${isHighlighted ? `<span class="cgrid-here-badge">Here</span>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    const isRenamingCell = inlineEdit.renameId === safeId;
+    const isQuickAddingCell = inlineEdit.quickAddId === safeId;
+    const isInlineActive = isRenamingCell || isQuickAddingCell;
+
+    const quickActionBtnsHtml = !isInlineActive ? `
+      <span class="cgrid-slot-quick-btns" onclick="event.stopPropagation()">
+        <button
+          type="button"
+          class="cgrid-quick-btn"
+          title="${sameAsCoord ? `Name ${escapeHtml(coord)}` : `Rename ${escapeHtml(coord)}`}"
+          aria-label="${sameAsCoord ? `Name ${escapeHtml(coord)}` : `Rename ${escapeHtml(coord)}`}"
+          onclick="event.stopPropagation(); startGridCellRename(${safeId}, event)"
+        >${lucideIcon('pencil', '', 11)}</button>
+        <button
+          type="button"
+          class="cgrid-quick-btn"
+          title="Add item to ${escapeHtml(coord)}"
+          aria-label="Add item to ${escapeHtml(coord)}"
+          onclick="event.stopPropagation(); startGridCellQuickAdd(${safeId}, event)"
+        >${lucideIcon('plus', '', 12)}</button>
+      </span>
+    ` : '';
+
+    const inlineFormHtml = isRenamingCell ? `
+      <div class="cgrid-inline-form" onclick="event.stopPropagation()">
+        <input
+          type="text"
+          id="grid-cell-rename-${safeId}"
+          class="cgrid-inline-input"
+          value="${escapeHtml(sameAsCoord ? '' : (d.name || ''))}"
+          placeholder="Name ${escapeHtml(coord)}…"
+          aria-label="Compartment name"
+          onkeydown="if (event.key === 'Enter') { event.preventDefault(); saveGridCellRename(${safeId}, event); } else if (event.key === 'Escape') { event.preventDefault(); cancelGridCellInlineEdit(event); }"
+        >
+        <div class="cgrid-inline-form-btns">
+          <button type="button" class="btn btn-primary btn-xs" onclick="event.stopPropagation(); saveGridCellRename(${safeId}, event)">Save</button>
+          <button type="button" class="btn btn-secondary btn-xs" onclick="event.stopPropagation(); cancelGridCellInlineEdit(event)">Cancel</button>
+        </div>
+      </div>
+    ` : isQuickAddingCell ? `
+      <div class="cgrid-inline-form" onclick="event.stopPropagation()">
+        <input
+          type="text"
+          id="grid-cell-add-${safeId}"
+          class="cgrid-inline-input"
+          placeholder="Add item (e.g. 2x M3 screw)…"
+          aria-label="Quick add item"
+          onkeydown="if (event.key === 'Enter') { event.preventDefault(); submitGridCellQuickAdd(${safeId}, event); } else if (event.key === 'Escape') { event.preventDefault(); cancelGridCellInlineEdit(event); }"
+        >
+        <div class="cgrid-inline-form-btns">
+          <button type="button" class="btn btn-primary btn-xs" onclick="event.stopPropagation(); submitGridCellQuickAdd(${safeId}, event)">Add</button>
+          <button type="button" class="btn btn-secondary btn-xs" title="Scan photo with AI" onclick="event.stopPropagation(); cancelGridCellInlineEdit(event); scanCompartmentPhotosWithAi(${safeId})">${lucideIcon('camera', '', 12)}</button>
+          <button type="button" class="btn btn-secondary btn-xs" onclick="event.stopPropagation(); cancelGridCellInlineEdit(event)">Cancel</button>
+        </div>
+      </div>
+    ` : '';
+
+    const cellClickAttr = isInlineActive ? '' : onClickAttr;
+    const cellKeydownAttr = isInlineActive
+      ? ''
+      : `if (event.key === 'Enter' || event.key === ' ') { if (event.target === this) { event.preventDefault(); ${onClickAttr}; } }`;
+    const cellDragAttrs = (!isInlineActive && safeUnitId)
+      ? `draggable="true"
+        ondragstart="handleGridSlotDragStart(event, ${safeUnitId}, ${safeId})"
+        ondragover="handleGridSlotDragOver(event)"
+        ondragleave="handleGridSlotDragLeave(event)"
+        ondrop="handleGridSlotDropOnSlot(event, ${safeUnitId}, ${safeId})"
+        ondragend="handleGridSlotDragEnd(event)"`
+      : '';
+
+    if (isSingleCol) {
+      let singleColBadge = '';
+      if (!isHighlighted) {
+        const parts = [];
+        if (childBoxCount > 0) parts.push(`${childBoxCount} ${childBoxCount === 1 ? 'box' : 'boxes'}`);
+        if (itemCount > 0) parts.push(`${itemCount} ${itemCount === 1 ? 'item' : 'items'}`);
+        singleColBadge = parts.length > 0
+          ? `<span class="cgrid-slot-summary">${escapeHtml(parts.join(' · '))}</span>`
+          : `<span class="cgrid-slot-summary is-empty">Empty</span>`;
+      }
+      return `
+        <div
+          role="button"
+          tabindex="0"
+          id="drawer-card-${safeId}"
+          class="cgrid-slot ${isHighlighted ? 'is-highlighted spotlight-highlight' : ''} ${isEmptySlot ? 'is-empty' : ''} ${isInlineActive ? 'is-inline-editing' : ''}"
+          style="grid-row: ${startCssR} / ${endCssR}; grid-column: ${startCssC} / ${endCssC};"
+          onclick="${cellClickAttr}"
+          onkeydown="${cellKeydownAttr}"
+          ${cellDragAttrs}
+          title="${escapeHtml(slotTooltip)}"
+        >
+          <div class="cgrid-slot-body">
+            <div class="cgrid-slot-info">
+              <div class="cgrid-slot-head">
+                <span class="cgrid-slot-coord">${escapeHtml(coord)}</span>
+                ${quickActionBtnsHtml}
+              </div>
+              ${isInlineActive ? inlineFormHtml : `
+                ${displayTitle ? `<span class="cgrid-slot-name">${escapeHtml(displayTitle)}</span>` : ''}
+                ${isHighlighted ? `<span class="cgrid-here-badge">Inside here</span>` : ''}
+              `}
+            </div>
+            ${!isInlineActive ? slotCarouselHtml : ''}
+            ${!isInlineActive ? singleColBadge : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    const rightBadgeHtml = isHighlighted
+      ? `<span class="cgrid-here-badge">Inside here</span>`
+      : itemCount > 0
+        ? `<span class="cgrid-slot-count ${itemCount > 1 ? 'is-multi' : ''}" aria-label="${itemCount} ${itemCount === 1 ? 'item' : 'items'}">${itemCount}</span>`
+        : childBoxCount > 0
+          ? `<span class="cgrid-slot-count">${childBoxCount} ${childBoxCount === 1 ? 'box' : 'boxes'}</span>`
+          : '';
 
     return `
       <div
         role="button"
         tabindex="0"
-        id="${compact ? '' : `drawer-card-${safeId}`}"
-        class="cgrid-slot ${isHighlighted ? 'is-highlighted spotlight-highlight' : ''} ${compact ? 'is-compact' : ''} ${isEmptySlot ? 'is-empty' : ''}"
+        id="drawer-card-${safeId}"
+        class="cgrid-slot ${isHighlighted ? 'is-highlighted spotlight-highlight' : ''} ${isEmptySlot ? 'is-empty' : ''} ${slotPhotos.length > 0 ? 'has-photos' : ''} ${isInlineActive ? 'is-inline-editing' : ''}"
         style="grid-row: ${startCssR} / ${endCssR}; grid-column: ${startCssC} / ${endCssC};"
-        onclick="${onClickAttr}"
-        onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); ${onClickAttr}; }"
-        title="${escapeHtml(d.name)} (${escapeHtml(coord)})"
+        onclick="${cellClickAttr}"
+        onkeydown="${cellKeydownAttr}"
+        ${cellDragAttrs}
+        title="${escapeHtml(slotTooltip)}"
       >
-        <div class="cgrid-slot-body">
+        <div class="cgrid-slot-head">
+          <span class="cgrid-slot-coord">${escapeHtml(coord)}</span>
+          <span class="cgrid-slot-head-right">
+            ${quickActionBtnsHtml}
+            ${rightBadgeHtml}
+          </span>
+        </div>
+        ${isInlineActive ? inlineFormHtml : `
           <div class="cgrid-slot-info">
-            <span class="cgrid-slot-coord">${escapeHtml(coord)}</span>
-            <span class="cgrid-slot-name">${escapeHtml(d.name)}</span>
-            ${isHighlighted ? `<span class="cgrid-here-badge">${compact ? 'Here' : 'Inside here'}</span>` : ''}
+            ${displayTitle ? `<span class="cgrid-slot-name">${escapeHtml(displayTitle)}</span>` : ''}
+            ${secondaryPreview ? `<span class="cgrid-slot-sub">${escapeHtml(secondaryPreview)}</span>` : ''}
+            ${isEmptySlot ? `<span class="cgrid-slot-empty-tag">Empty</span>` : ''}
           </div>
           ${slotCarouselHtml}
-          ${singleColBadge}
-        </div>
-        ${!isSingleCol && !compact && !isHighlighted && itemCount > 0 ? `<span class="cgrid-slot-count">${itemCount}</span>` : ''}
+        `}
       </div>
     `;
   }).join('');
@@ -310,7 +517,7 @@ export function renderContainerGridHtml(unit, options = {}) {
     <div class="cgrid-wrap ${compact ? 'is-compact' : ''} ${diagram ? 'is-diagram' : ''} ${isSingleCol ? 'is-single-col' : ''}">
       <div
         class="cgrid-board"
-        style="grid-template-columns: ${diagram ? '16px' : compact ? '24px' : '30px'} repeat(${cols}, ${diagram ? 'minmax(12px, 1fr)' : `minmax(${compact ? '28px' : '54px'}, 1fr)`}); grid-template-rows: ${rowTracks.join(' ')};"
+        style="grid-template-columns: ${diagram ? '16px' : compact ? '24px' : '28px'} repeat(${cols}, minmax(${minColWidth}, 1fr)); grid-template-rows: ${rowTracks.join(' ')};"
       >
         <div class="cgrid-corner" style="grid-row: 1; grid-column: 1;"></div>
         ${colHeaderHtml}
@@ -933,7 +1140,10 @@ export function updateSelectedDesignerSlotField(field, value) {
   // Update the live cell label without losing input focus
   const cellEl = document.querySelector(`[data-gd-slot="${slot.tempId}"] .cgrid-slot-name`);
   if (cellEl && field === 'name') {
-    cellEl.textContent = value || formatSlotCoord(slot.grid_row, slot.grid_col, slot.grid_row_span, slot.grid_col_span);
+    const coord = formatSlotCoord(slot.grid_row, slot.grid_col, slot.grid_row_span, slot.grid_col_span);
+    const same = isSameAsCoord(value, coord);
+    cellEl.textContent = same ? 'Drawer' : value;
+    cellEl.classList.toggle('is-muted-placeholder', same);
   }
 }
 
@@ -1013,6 +1223,8 @@ function renderDesignerCanvas() {
     const endCssC = s.grid_col + s.grid_col_span + 1;
     const isSel = designer.selectedKeys.has(s.tempId);
     const coord = formatSlotCoord(s.grid_row, s.grid_col, s.grid_row_span, s.grid_col_span);
+    const same = isSameAsCoord(s.name, coord);
+    const typeFallback = SLOT_TYPE_LABELS[s.location_type] || 'Drawer';
 
     return `
       <button
@@ -1027,9 +1239,10 @@ function renderDesignerCanvas() {
         ondragleave="handleDesignerDragLeave(event)"
         ondrop="handleDesignerDropOnSlot(event, '${escapeJsStr(s.tempId)}')"
         ondragend="handleDesignerDragEnd(event)"
+        title="${escapeHtml(same ? coord : `${coord} · ${s.name}`)}"
       >
         <span class="cgrid-slot-coord">${escapeHtml(coord)}</span>
-        <span class="cgrid-slot-name">${escapeHtml(s.name)}</span>
+        <span class="cgrid-slot-name ${same ? 'is-muted-placeholder' : ''}">${escapeHtml(same ? typeFallback : s.name)}</span>
       </button>
     `;
   }).join('');
@@ -1280,6 +1493,114 @@ export async function saveGridDesigner() {
     }
   });
   return Boolean(result);
+}
+
+// =========================================================================
+// Live Container Grid View Drag-and-Drop (Grab & Move / Swap Bins)
+// =========================================================================
+
+const gridViewDrag = {
+  unitId: null,
+  slotId: null,
+  inFlight: false,
+};
+
+function clearGridViewDragClasses() {
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll('.cgrid-board.is-slot-dragging').forEach(el => el.classList.remove('is-slot-dragging'));
+  document.querySelectorAll('.cgrid-slot.is-dragging').forEach(el => el.classList.remove('is-dragging'));
+  document.querySelectorAll('.is-drop-target').forEach(el => el.classList.remove('is-drop-target'));
+}
+
+function readGridDragSource(event) {
+  if (gridViewDrag.slotId && gridViewDrag.unitId) {
+    return { unitId: Number(gridViewDrag.unitId), slotId: Number(gridViewDrag.slotId) };
+  }
+  const raw = event?.dataTransfer?.getData('text/plain') || '';
+  const match = /^grid-slot:(\d+):(\d+)$/.exec(raw);
+  if (!match) return null;
+  return { unitId: Number(match[1]), slotId: Number(match[2]) };
+}
+
+async function executeGridSlotMove(unitId, payload, successMessage) {
+  if (gridViewDrag.inFlight) return;
+  gridViewDrag.inFlight = true;
+  try {
+    await apiPost(`/api/v1/locations/${Number(unitId)}/grid/move`, payload, 'Could not move bin.');
+    await loadAllData();
+    showToast(successMessage);
+  } catch (err) {
+    showToast(err?.message || 'Could not move bin.', 'info');
+  } finally {
+    gridViewDrag.inFlight = false;
+  }
+}
+
+export function handleGridSlotDragStart(event, unitId, slotId) {
+  if (gridViewDrag.inFlight) {
+    event?.preventDefault?.();
+    return;
+  }
+  gridViewDrag.unitId = Number(unitId);
+  gridViewDrag.slotId = Number(slotId);
+  if (event?.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', `grid-slot:${Number(unitId)}:${Number(slotId)}`);
+  }
+  const el = event?.currentTarget;
+  el?.classList?.add('is-dragging');
+  el?.closest?.('.cgrid-board')?.classList?.add('is-slot-dragging');
+}
+
+export function handleGridSlotDragOver(event) {
+  if (!gridViewDrag.slotId) return;
+  event?.preventDefault?.();
+  if (event?.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  event?.currentTarget?.classList?.add('is-drop-target');
+}
+
+export function handleGridSlotDragLeave(event) {
+  event?.currentTarget?.classList?.remove('is-drop-target');
+}
+
+export function handleGridSlotDragEnd(event) {
+  gridViewDrag.unitId = null;
+  gridViewDrag.slotId = null;
+  event?.currentTarget?.classList?.remove('is-dragging');
+  clearGridViewDragClasses();
+}
+
+export async function handleGridSlotDropOnSlot(event, unitId, targetSlotId) {
+  event?.preventDefault?.();
+  const src = readGridDragSource(event);
+  gridViewDrag.unitId = null;
+  gridViewDrag.slotId = null;
+  clearGridViewDragClasses();
+
+  const targetId = Number(targetSlotId);
+  if (!src || src.unitId !== Number(unitId) || !targetId || src.slotId === targetId) return;
+
+  await executeGridSlotMove(
+    unitId,
+    { source_id: src.slotId, target_id: targetId },
+    'Bins swapped'
+  );
+}
+
+export async function handleGridSlotDropOnEmpty(event, unitId, targetRow, targetCol) {
+  event?.preventDefault?.();
+  const src = readGridDragSource(event);
+  gridViewDrag.unitId = null;
+  gridViewDrag.slotId = null;
+  clearGridViewDragClasses();
+
+  if (!src || src.unitId !== Number(unitId)) return;
+
+  await executeGridSlotMove(
+    unitId,
+    { source_id: src.slotId, target_row: Number(targetRow), target_col: Number(targetCol) },
+    'Bin moved'
+  );
 }
 
 registerGridUnsavedHooks({

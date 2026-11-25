@@ -1,16 +1,22 @@
-const CACHE_NAME = 'wims-shell-v30';
+const CACHE_NAME = 'wims-shell-v49';
 const NEVER_CACHE_PATHS = new Set(['/docs', '/redoc', '/openapi.json', '/docs/oauth2-redirect']);
 const APP_SHELL_URLS = [
   '/',
   '/index.html',
+  '/setup.html',
+  '/capture.html',
   '/manifest.webmanifest',
   '/css/app.css',
+  '/css/unit-setup.css',
   '/js/app.js',
   '/js/api.js',
+  '/js/box-actions.js',
   '/js/carousel.js',
+  '/js/compartment-actions.js',
   '/js/dom.js',
   '/js/grid-designer.js',
   '/js/icons.js',
+  '/js/mobile-unit-setup.js',
   '/js/mobile-views.js',
   '/js/modals.js',
   '/js/phone-capture.js',
@@ -18,8 +24,10 @@ const APP_SHELL_URLS = [
   '/js/photo-editor.js',
   '/js/router.js',
   '/js/state.js',
+  '/js/unit-setup-wizard.js',
   '/js/unsaved-guard.js',
   '/js/views.js',
+  '/js/vision-guard.js',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/icon-512-maskable.png',
@@ -61,7 +69,7 @@ self.addEventListener('fetch', (event) => {
         return res;
       })
       .catch(() =>
-        caches.match(req).then((cached) => {
+        caches.match(req, { ignoreSearch: true }).then((cached) => {
           if (cached) return cached;
           if (req.mode === 'navigate') return caches.match('/index.html');
           return new Response('', { status: 504, statusText: 'Offline' });

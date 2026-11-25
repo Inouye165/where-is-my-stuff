@@ -1,16 +1,20 @@
 import io
 import os
 from pathlib import Path
+import re
 import threading
+import time
 from typing import Any, Optional
 import uuid
 from fastapi import UploadFile
-from PIL import Image, ImageOps
-from sqlalchemy import event
+from PIL import Image, ImageOps, UnidentifiedImageError
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 from app.core.config import settings
-from app.core.exceptions import BadRequestError, PayloadTooLargeError
+from app.core.exceptions import BadRequestError, NotFoundError, PayloadTooLargeError
 from app.core.logging_config import logger
+from app.models.item import Item
+from app.models.location import Location
 from app.repositories.item_repository import item_repository
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
@@ -24,8 +28,32 @@ READ_CHUNK_SIZE = 64 * 1024
 class PhotoService:
     def __init__(self) -> None:
         self._cleanup_lock = threading.Lock()
+        self._inflight_refs: dict[str, int] = {}
         Image.MAX_IMAGE_PIXELS = settings.MAX_IMAGE_PIXELS
         settings.init_directories()
+
+    def register_pending_reference(self, db: Session, photo_url: Optional[str]) -> None:
+        """Mark a photo as referenced by an uncommitted transaction so concurrent cleanup keeps the file."""
+        if not photo_url or not photo_url.startswith("/uploads/"):
+            return
+        mine: set[str] = db.info.setdefault("pending_refs", set())
+        if photo_url in mine:
+            return
+        mine.add(photo_url)
+        with self._cleanup_lock:
+            self._inflight_refs[photo_url] = self._inflight_refs.get(photo_url, 0) + 1
+
+    def release_pending_references(self, db: Session) -> None:
+        mine = db.info.pop("pending_refs", None)
+        if not mine:
+            return
+        with self._cleanup_lock:
+            for url in mine:
+                left = self._inflight_refs.get(url, 0) - 1
+                if left > 0:
+                    self._inflight_refs[url] = left
+                else:
+                    self._inflight_refs.pop(url, None)
 
     def _read_upload_bounded(self, file: UploadFile) -> bytes:
         max_bytes = int(settings.MAX_IMAGE_UPLOAD_SIZE_MB) * 1024 * 1024
@@ -111,7 +139,7 @@ class PhotoService:
                 if save_image.width > max_dim or save_image.height > max_dim:
                     save_image.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
 
-                if pil_save_format == "JPEG" and save_image.mode in ("RGBA", "P", "LA"):
+                if pil_save_format == "JPEG" and save_image.mode not in ("RGB", "L"):
                     save_image = save_image.convert("RGB")
 
                 save_kwargs: dict[str, Any] = {}
@@ -123,7 +151,7 @@ class PhotoService:
                 save_image.save(tmp_orig, format=pil_save_format, **save_kwargs)
 
                 thumb_img = transposed.copy()
-                if thumb_img.mode in ("RGBA", "P", "LA"):
+                if thumb_img.mode not in ("RGB", "L"):
                     thumb_img = thumb_img.convert("RGB")
                 thumb_img.thumbnail(
                     (settings.THUMBNAIL_MAX_DIMENSION, settings.THUMBNAIL_MAX_DIMENSION),
@@ -248,6 +276,8 @@ class PhotoService:
             return False
 
         with self._cleanup_lock:
+            if self._inflight_refs.get(photo_url, 0) > 0:
+                return False
             if item_repository.count_photo_references(db, photo_url) > 0:
                 return False
             removed = self.delete_upload_url(photo_url)
@@ -335,6 +365,101 @@ class PhotoService:
             "size_bytes": len(raw),
         }
 
+    def convert_photos_to_pdf_attachment(
+        self,
+        photo_paths: list[str],
+        filename: str,
+        max_dimension: int = 1400,
+    ) -> dict[str, Any]:
+        if not photo_paths:
+            raise BadRequestError("Select at least one photo to convert to PDF.")
+
+        pages: list[Image.Image] = []
+        try:
+            for photo_url in photo_paths:
+                disk_path = self.resolve_safe_upload_path(photo_url)
+                if not disk_path.exists() or not disk_path.is_file():
+                    raise NotFoundError(f"Photo not found: {photo_url}")
+                try:
+                    with Image.open(disk_path) as src_im:
+                        transposed = ImageOps.exif_transpose(src_im)
+                        rgb = transposed.convert("RGB")
+                        if rgb.width > max_dimension or rgb.height > max_dimension:
+                            rgb.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+                        pages.append(rgb)
+                except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
+                    raise BadRequestError(f"Could not read image for PDF conversion: {Path(photo_url).name}") from exc
+
+            settings.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+            file_id = uuid.uuid4().hex
+            stored_name = f"{file_id}.pdf"
+            target_path = (settings.ATTACHMENTS_DIR / stored_name).resolve()
+            tmp_path = (settings.ATTACHMENTS_DIR / f".{stored_name}.tmp").resolve()
+            if not target_path.is_relative_to(settings.ATTACHMENTS_DIR.resolve()):
+                raise BadRequestError("Invalid attachment filename.")
+
+            try:
+                pages[0].save(
+                    tmp_path,
+                    format="PDF",
+                    resolution=150.0,
+                    save_all=True,
+                    append_images=pages[1:],
+                    quality=75,
+                    optimize=True,
+                )
+                os.replace(tmp_path, target_path)
+            except Exception as exc:
+                tmp_path.unlink(missing_ok=True)
+                target_path.unlink(missing_ok=True)
+                raise BadRequestError(f"Failed to generate PDF: {exc}") from exc
+        finally:
+            for im in pages:
+                try:
+                    im.close()
+                except Exception:
+                    pass
+
+        safe_filename = re.sub(r"[^A-Za-z0-9._\- ]+", "_", (filename or "Document").strip()).strip(" ._") or "Document"
+        if not safe_filename.lower().endswith(".pdf"):
+            safe_filename = f"{safe_filename[:240]}.pdf"
+        size_bytes = target_path.stat().st_size if target_path.exists() else 0
+        return {
+            "file_path": f"/uploads/attachments/{stored_name}",
+            "thumbnail_path": None,
+            "filename": safe_filename[:255],
+            "content_type": "application/pdf",
+            "attachment_type": "pdf",
+            "size_bytes": size_bytes,
+        }
+
+    def sweep_orphan_ai_crops(self, db: Session, max_age_seconds: float = 24 * 3600, dry_run: bool = False) -> int:
+        """Count (dry_run) or delete old AI-detection crops that nothing references. Manual use only.
+
+        Refuses to run against a database with no items or locations, since every file would look orphaned.
+        """
+        if db.execute(select(func.count(Item.id))).scalar() == 0 and db.execute(
+            select(func.count(Location.id))
+        ).scalar() == 0:
+            return 0
+        removed = 0
+        cutoff = time.time() - max_age_seconds
+        for path in settings.ORIGINALS_DIR.glob("ai_crop_*"):
+            try:
+                if not path.is_file() or path.name.startswith(".") or path.stat().st_mtime > cutoff:
+                    continue
+            except OSError:
+                continue
+            url = f"/uploads/originals/{path.name}"
+            if dry_run:
+                with self._cleanup_lock:
+                    if self._inflight_refs.get(url, 0) == 0 and item_repository.count_photo_references(db, url) == 0:
+                        removed += 1
+                continue
+            if self.cleanup_unreferenced_photo(db, url):
+                removed += 1
+        return removed
+
     def delete_attachment_files(self, db: Session, file_path: Optional[str], thumbnail_path: Optional[str] = None) -> None:
         if not file_path or not file_path.startswith("/uploads/"):
             return
@@ -351,6 +476,7 @@ photo_service = PhotoService()
 
 @event.listens_for(Session, "after_commit")
 def _run_deferred_session_file_cleanups(session: Session) -> None:
+    photo_service.release_pending_references(session)
     session.info.pop("rollback_file_deletes", None)
     direct_files = list(session.info.pop("pending_file_deletes", ()))
     photo_urls = list(session.info.pop("pending_photo_cleanups", ()))
@@ -367,6 +493,7 @@ def _run_deferred_session_file_cleanups(session: Session) -> None:
 
 @event.listens_for(Session, "after_rollback")
 def _run_rollback_session_file_cleanups(session: Session) -> None:
+    photo_service.release_pending_references(session)
     session.info.pop("pending_file_deletes", None)
     session.info.pop("pending_photo_cleanups", None)
     rollback_files = list(session.info.pop("rollback_file_deletes", ()))

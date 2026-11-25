@@ -125,3 +125,82 @@ def test_grid_layout_rejects_overlap_and_out_of_bounds(client):
     )
     assert overlap_resp.status_code == 400
 
+
+def test_grid_move_and_swap_slots(client):
+    unit_resp = client.post(
+        "/api/v1/locations",
+        json={"name": "Organizer", "location_type": "container"},
+    )
+    assert unit_resp.status_code == 201
+    unit_id = unit_resp.json()["id"]
+
+    # Setup 3x2 grid:
+    # A1 (auto-named "A1"), B1 (custom name "Resistors"), A2–B2 (wide slot)
+    save_resp = client.put(
+        f"/api/v1/locations/{unit_id}/grid",
+        json={
+            "grid_rows": 2,
+            "grid_cols": 3,
+            "slots": [
+                {"name": "A1", "location_type": "drawer", "grid_row": 1, "grid_col": 1},
+                {"name": "Resistors", "location_type": "drawer", "grid_row": 1, "grid_col": 2},
+                {"name": "A2–B2", "location_type": "drawer", "grid_row": 2, "grid_col": 1, "grid_col_span": 2},
+            ],
+        },
+    )
+    assert save_resp.status_code == 200
+    children = save_resp.json()["children"]
+    slot_a1 = next(c for c in children if c["name"] == "A1")
+    slot_res = next(c for c in children if c["name"] == "Resistors")
+    slot_wide = next(c for c in children if c["grid_row"] == 2)
+
+    # Also add an unplaced drawer to ensure move does not delete unplaced children
+    unplaced_resp = client.post(
+        "/api/v1/locations",
+        json={"name": "Loose Bin", "location_type": "drawer", "parent_id": unit_id},
+    )
+    assert unplaced_resp.status_code == 201
+    unplaced_id = unplaced_resp.json()["id"]
+
+    # 1. Move auto-named A1 -> empty C1 (1, 3): name should auto-update to C1
+    move_resp = client.post(
+        f"/api/v1/locations/{unit_id}/grid/move",
+        json={"source_id": slot_a1["id"], "target_row": 1, "target_col": 3},
+    )
+    assert move_resp.status_code == 200
+    tree = move_resp.json()
+    moved_a1 = next(c for c in tree["children"] if c["id"] == slot_a1["id"])
+    assert (moved_a1["grid_row"], moved_a1["grid_col"]) == (1, 3)
+    assert moved_a1["name"] == "C1"
+    assert any(c["id"] == unplaced_id for c in tree["children"])
+
+    # 2. Swap C1 (auto-named) with Resistors (custom-named at B1):
+    #    C1 moves to (1, 2) and becomes "B1"; Resistors moves to (1, 3) and keeps "Resistors"
+    swap_resp = client.post(
+        f"/api/v1/locations/{unit_id}/grid/move",
+        json={"source_id": slot_a1["id"], "target_id": slot_res["id"]},
+    )
+    assert swap_resp.status_code == 200
+    tree = swap_resp.json()
+    swapped_a1 = next(c for c in tree["children"] if c["id"] == slot_a1["id"])
+    swapped_res = next(c for c in tree["children"] if c["id"] == slot_res["id"])
+    assert (swapped_a1["grid_row"], swapped_a1["grid_col"]) == (1, 2)
+    assert swapped_a1["name"] == "B1"
+    assert (swapped_res["grid_row"], swapped_res["grid_col"]) == (1, 3)
+    assert swapped_res["name"] == "Resistors"
+
+    # 3. Reject moving wide slot (1x2) to (1, 3) (out of bounds)
+    oob_move = client.post(
+        f"/api/v1/locations/{unit_id}/grid/move",
+        json={"source_id": slot_wide["id"], "target_row": 1, "target_col": 3},
+    )
+    assert oob_move.status_code == 400
+
+    # 4. Reject swapping wide slot (1x2 at A2-B2) with Resistors (1x1 at C1 -> would go out of bounds)
+    bad_swap = client.post(
+        f"/api/v1/locations/{unit_id}/grid/move",
+        json={"source_id": slot_wide["id"], "target_id": slot_res["id"]},
+    )
+    assert bad_swap.status_code == 400
+
+

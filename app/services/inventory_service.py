@@ -16,10 +16,12 @@ from app.schemas.common import ItemSortOrder
 from app.schemas.item import (
     ItemAttachmentRead,
     ItemBulkCreate,
+    ItemConvertToBoxRequest,
     ItemCreate,
     ItemDetailRead,
     ItemGroupIntoBoxRequest,
     ItemGroupIntoBoxResponse,
+    ItemImagesToPdfRequest,
     ItemRead,
     ItemUpdate,
     LocationPhotos,
@@ -125,6 +127,7 @@ class InventoryService:
                 raise NotFoundError(f"Location {data.location_id} does not exist.")
 
         now = datetime.now(timezone.utc)
+        photo_service.register_pending_reference(db, data.item_photo)
         status_val = data.status.value if hasattr(data.status, "value") else (data.status or "stored")
         item = Item(
             name=data.name.strip(),
@@ -273,8 +276,11 @@ class InventoryService:
             if not group_name:
                 group_name = (f"Assorted {default_cat}" if default_cat else f"Box in {loc.name}")[:120]
             group_photo = data.assortment_photo
+            photo_service.register_pending_reference(db, group_photo)
+            group_label = (data.assortment_label or "").strip()[:40] or None
             child_box = Location(
                 name=group_name,
+                label=group_label,
                 location_type="box",
                 parent_id=loc.id,
                 container_photo=group_photo,
@@ -413,6 +419,7 @@ class InventoryService:
             if not raw_name:
                 raise BadRequestError("Please enter a Box or Kit name.")
             photo = data.box_photo or next((it.item_photo for it in items if it.item_photo), None)
+            photo_service.register_pending_reference(db, photo)
             box = Location(
                 name=raw_name,
                 location_type="box",
@@ -464,6 +471,7 @@ class InventoryService:
         old_photo = item.item_photo
         update_dict = data.model_dump(exclude_unset=True)
         now = datetime.now(timezone.utc)
+        photo_service.register_pending_reference(db, update_dict.get("item_photo"))
 
         if "status" in update_dict and update_dict["status"] is not None:
             raw_status = update_dict["status"]
@@ -637,6 +645,55 @@ class InventoryService:
         return att
 
     @classmethod
+    def create_pdf_attachment_from_photos(
+        cls,
+        db: Session,
+        item_id: int,
+        data: ItemImagesToPdfRequest,
+    ) -> ItemAttachment:
+        item = item_repository.get_by_id(db, item_id)
+        if not item:
+            raise NotFoundError("Item not found.")
+
+        clean_title = (data.title or "").strip()[:160] or f"{item.name} Document"[:160]
+        meta = photo_service.convert_photos_to_pdf_attachment(
+            photo_paths=data.photo_paths,
+            filename=clean_title,
+            max_dimension=data.max_dimension,
+        )
+        photo_service.schedule_rollback_cleanup(db, meta["file_path"])
+        att = ItemAttachment(
+            item_id=item.id,
+            file_path=meta["file_path"],
+            thumbnail_path=None,
+            filename=meta["filename"],
+            content_type=meta["content_type"],
+            attachment_type=meta["attachment_type"],
+            title=clean_title,
+            size_bytes=meta.get("size_bytes", 0),
+        )
+        db.add(att)
+        db.flush()
+
+        if data.remove_source_photos and item.location_id:
+            loc_photos = list(
+                db.execute(
+                    select(LocationPhoto).where(
+                        LocationPhoto.location_id == item.location_id,
+                        LocationPhoto.photo_path.in_(data.photo_paths),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for lp in loc_photos:
+                if lp.photo_path != item.item_photo:
+                    location_service.delete_photo(db, item.location_id, lp.id)
+
+        db.refresh(att)
+        return att
+
+    @classmethod
     def delete_attachment(cls, db: Session, item_id: int, attachment_id: int) -> None:
         item = item_repository.get_by_id(db, item_id)
         if not item:
@@ -656,6 +713,65 @@ class InventoryService:
             item.item_photo = None
         db.flush()
         photo_service.schedule_attachment_cleanup(db, old_path, old_thumb)
+
+    @classmethod
+    def convert_item_to_box(
+        cls,
+        db: Session,
+        item_id: int,
+        data: ItemConvertToBoxRequest,
+    ):
+        item = item_repository.get_by_id(db, item_id)
+        if not item:
+            raise NotFoundError("Item not found.")
+        box_name = (data.box_name or item.name).strip()[:120]
+        if not box_name:
+            raise BadRequestError("Box name cannot be empty.")
+
+        clean_label = (data.box_label or "").strip()[:40] or None
+        photo_service.register_pending_reference(db, item.item_photo)
+        box = Location(
+            name=box_name,
+            label=clean_label,
+            description=item.description,
+            location_type="box",
+            parent_id=item.location_id,
+            container_photo=item.item_photo,
+        )
+        db.add(box)
+        db.flush()
+
+        if item.item_photo:
+            stem = Path(item.item_photo).stem
+            thumb_rel = f"/uploads/thumbnails/{stem}_thumb.webp"
+            db.add(
+                LocationPhoto(
+                    location_id=box.id,
+                    photo_path=item.item_photo,
+                    thumbnail_path=thumb_rel if item.item_photo.startswith("/uploads/originals/") else None,
+                    photo_type="container",
+                )
+            )
+
+        if data.keep_item_inside:
+            item.location_id = box.id
+            item.last_seen_at = datetime.now(timezone.utc)
+            db.add(
+                AuditLog(
+                    item_id=item.id,
+                    location_id=box.id,
+                    action="moved",
+                    notes=f"Moved into box '{box_name}'",
+                )
+            )
+        else:
+            # Delete directly so item.item_photo (now owned by box) is NOT scheduled for orphan cleanup.
+            for att in list(item.attachments or []):
+                photo_service.schedule_attachment_cleanup(db, att.file_path, att.thumbnail_path)
+            db.delete(item)
+
+        db.flush()
+        return location_service.get_read_by_id(db, box.id)
 
 
 inventory_service = InventoryService()

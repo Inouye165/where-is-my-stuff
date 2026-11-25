@@ -168,6 +168,7 @@ export async function refreshPhonePhotoQr() {
     await openLocationPhoneCaptureModal({
       locationId: activeLocationId,
       locationName: activeLabel,
+      defaultMode: activeCaptureSaveMode,
       onDone: activeLocationDoneCb,
     });
     return;

@@ -61,9 +61,20 @@ function extractErrorMessage(payload, fallbackMessage) {
 }
 
 export async function apiFetch(url, options = {}) {
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, fallbackError = 'Request failed.', ...fetchOpts } = options;
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, fallbackError = 'Request failed.', signal: externalSignal, ...fetchOpts } = options;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      clearTimeout(timer);
+      const e = new Error('Request cancelled.');
+      e.name = 'UserAbortError';
+      throw e;
+    }
+    externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+  }
 
   try {
     const response = await fetch(url, {
@@ -92,6 +103,11 @@ export async function apiFetch(url, options = {}) {
     return data;
   } catch (err) {
     if (err && err.name === 'AbortError') {
+      if (externalSignal && externalSignal.aborted) {
+        const cancelErr = new Error('Request cancelled.');
+        cancelErr.name = 'UserAbortError';
+        throw cancelErr;
+      }
       throw new Error('Request timed out. Check your Wi-Fi connection and try again.');
     }
     if (err instanceof TypeError) {
@@ -103,6 +119,9 @@ export async function apiFetch(url, options = {}) {
     throw err;
   } finally {
     clearTimeout(timer);
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort);
+    }
   }
 }
 

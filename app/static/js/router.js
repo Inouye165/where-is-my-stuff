@@ -4,12 +4,23 @@
 import { isUnknownPlaceholder, state, updateNavStateAndCounts } from './state.js';
 import { guardNavigation, isGridDirty } from './unsaved-guard.js';
 
+let committedHash = typeof window !== 'undefined' ? (window.location.hash || '') : '';
+
 function runGuarded(fn) {
-  if (!isGridDirty()) {
+  const run = () => {
     fn();
+    committedHash = window.location.hash || '';
+    if (committedHash) saveLastRoute(committedHash);
+  };
+  if (!isGridDirty()) {
+    run();
     return;
   }
-  guardNavigation(fn);
+  Promise.resolve(guardNavigation(run)).then((ok) => {
+    if (ok === false && (window.location.hash || '') !== committedHash) {
+      history.replaceState(null, '', committedHash || window.location.pathname);
+    }
+  });
 }
 import {
   renderCatalogView,
@@ -66,7 +77,6 @@ export function updateHash(hash) {
 
 export function handleHashRouting() {
   const hash = window.location.hash || '';
-  if (hash) saveLastRoute(hash);
   if (!hash || hash === '#' || hash === '#/' || hash === '#/places' || hash === '#/rooms' || hash === '#/storage') {
     switchAppTab('places', false);
   } else if (hash === '#/needs-home') {
@@ -87,6 +97,7 @@ export function handleHashRouting() {
     if (id) navToItem(id, false);
   } else if (hash === '#/touch-capture' || hash.startsWith('#/touch-capture/')) {
     const rest = hash.replace('#/touch-capture', '').replace(/^\//, '');
+    saveLastRoute(hash);
     const parts = rest ? rest.split('/') : [];
     const rId = parts[0] === 'needs-home' ? 'needs-home' : (parts[0] ? parseInt(parts[0], 10) : null);
     const uId = parts[1] ? parseInt(parts[1], 10) : null;
@@ -237,6 +248,7 @@ export function locateDrawerInUnit(unitId, drawerId) {
 
   clearTimeout(state.spotlightTimer);
   state.spotlightTimer = setTimeout(() => {
+    if (state.currentView !== 'unit' || Number(state.currentLocationId) !== Number(resolvedUnitId)) return;
     state.spotlightDrawerId = null;
     document.querySelector('.drawer-card.spotlight-highlight')?.classList.remove('spotlight-highlight');
     document.querySelector('.spotlight-badge')?.remove();
@@ -248,6 +260,10 @@ export function handleGlobalBack() {
     if (state.historyStack.length > 1) {
       state.historyStack.pop();
       const prev = state.historyStack[state.historyStack.length - 1];
+      const prevHash = prev.view === 'needs-home' ? '#/needs-home'
+        : (prev.id && ['room', 'unit', 'drawer', 'item'].includes(prev.view)) ? `#/${prev.view}/${prev.id}`
+        : (prev.view === 'touch-capture' ? null : (prev.tab === 'items' ? '#/items' : '#/'));
+      if (prevHash) updateHash(prevHash);
       if (prev.view === 'needs-home') {
         navToNeedsHome(false);
       } else if (prev.view === 'room' && prev.id) {

@@ -50,6 +50,7 @@ class LocationRepository:
         for tok in tokens:
             pat = f"%{escape_like(tok)}%"
             clauses.append(Location.name.ilike(pat, escape="\\"))
+            clauses.append(Location.label.ilike(pat, escape="\\"))
 
         matched = db.execute(select(Location.id).where(or_(*clauses))).scalars().all()
         if not matched:

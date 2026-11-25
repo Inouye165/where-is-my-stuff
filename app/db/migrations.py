@@ -99,12 +99,23 @@ def _migration_005_item_attachments(conn: Connection) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_item_attachments_item_id ON item_attachments (item_id)"))
 
 
+def _migration_006_location_label(conn: Connection) -> None:
+    inspector = inspect(conn)
+    if "locations" not in inspector.get_table_names():
+        return
+    existing_cols = {col["name"] for col in inspector.get_columns("locations")}
+    if "label" not in existing_cols:
+        conn.execute(text("ALTER TABLE locations ADD COLUMN label VARCHAR(40)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_locations_label ON locations (label)"))
+
+
 MIGRATIONS: List[MigrationStep] = [
     (1, "001_initial_schema", _migration_001_initial_schema),
     (2, "002_performance_indexes", _migration_002_performance_indexes),
     (3, "003_location_grid_layout", _migration_003_location_grid_layout),
     (4, "004_location_photos", _migration_004_location_photos),
     (5, "005_item_attachments", _migration_005_item_attachments),
+    (6, "006_location_label", _migration_006_location_label),
 ]
 
 

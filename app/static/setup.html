@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Guided Storage Setup — WhereIsMyStuff</title>
+  <meta name="theme-color" content="#0b1120">
+  <script>
+    (function () {
+      try {
+        var pref = localStorage.getItem('wims_theme_pref') || 'dark';
+        var resolved = pref === 'system'
+          ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+          : pref;
+        document.documentElement.setAttribute('data-theme', resolved);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/css/unit-setup.css">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230284c7'><path d='M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z'/></svg>">
+</head>
+<body>
+  <div id="setup-app" class="setup-shell">
+    <header class="setup-header">
+      <div class="setup-header-row">
+        <div class="setup-brand">
+          <span class="setup-brand-mark" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path>
+              <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            </svg>
+          </span>
+          <div class="setup-brand-text">
+            <span class="setup-brand-name">WhereIsMyStuff</span>
+            <span id="setup-room-pill" class="setup-room-pill" hidden></span>
+          </div>
+        </div>
+        <div class="setup-header-actions">
+          <button type="button" id="setup-finish-early-btn" class="setup-header-btn" hidden>Finish</button>
+          <button type="button" id="setup-theme-btn" class="setup-icon-btn" aria-label="Toggle theme" title="Switch Light / Dark theme">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="4"></circle>
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <nav class="setup-stepper" id="setup-stepper" aria-label="Setup Progress">
+        <div class="setup-step-item" data-step="1">
+          <span class="setup-step-dot">1</span>
+          <span class="setup-step-label">Unit</span>
+        </div>
+        <div class="setup-step-line"></div>
+        <div class="setup-step-item" data-step="2">
+          <span class="setup-step-dot">2</span>
+          <span class="setup-step-label">Exterior</span>
+        </div>
+        <div class="setup-step-line"></div>
+        <div class="setup-step-item" data-step="3">
+          <span class="setup-step-dot">3</span>
+          <span class="setup-step-label">Drawers</span>
+        </div>
+        <div class="setup-step-line"></div>
+        <div class="setup-step-item" data-step="4">
+          <span class="setup-step-dot">4</span>
+          <span class="setup-step-label">Done</span>
+        </div>
+      </nav>
+    </header>
+
+    <main id="setup-main" class="setup-main">
+      <div class="setup-loading-card">
+        <div class="setup-spinner" aria-hidden="true"></div>
+        <p class="setup-loading-text">Connecting to your inventory…</p>
+      </div>
+    </main>
+
+    <footer id="setup-footer" class="setup-footer" hidden></footer>
+  </div>
+
+  <div id="setup-toast" class="setup-toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="/js/mobile-unit-setup.js"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import os
 import uuid
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.core.config import settings
@@ -8,6 +8,7 @@ from app.core.database import get_db
 from app.db.backup import backup_service
 from app.db.migrations import get_current_schema_version
 from app.schemas.system import BackupResponse, HealthResponse
+from app.services.photo_service import photo_service
 
 router = APIRouter(tags=["System"])
 
@@ -47,4 +48,14 @@ def health_check(db: Session = Depends(get_db)) -> HealthResponse:
 def trigger_hot_backup() -> BackupResponse:
     meta = backup_service.create_hot_backup()
     return BackupResponse(**meta)
+
+
+@router.post("/system/cleanup-unused-crops")
+def cleanup_unused_crops(
+    dry_run: bool = Query(default=True, description="Only count unused crops; pass false to delete them."),
+    min_age_hours: float = Query(default=24.0, ge=1.0, le=24.0 * 365),
+    db: Session = Depends(get_db),
+) -> dict:
+    count = photo_service.sweep_orphan_ai_crops(db, max_age_seconds=min_age_hours * 3600, dry_run=dry_run)
+    return {"dry_run": dry_run, "unused_crops": count}
 

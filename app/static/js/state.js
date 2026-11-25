@@ -101,8 +101,14 @@ export function indexLocations() {
       rawRooms.push(node);
     }
 
+    const isUnassignedTopLevel = (!parentNode || isUnknownPlaceholder(parentNode))
+      && !isUnknownPlaceholder(node)
+      && ltype !== 'room'
+      && ltype !== 'site';
+
     if (
       ltype === 'container' ||
+      isUnassignedTopLevel ||
       (isTopOrRoomChild && node.children && node.children.length > 0 && ltype !== 'room' && ltype !== 'site')
     ) {
       rawContainers.push(node);

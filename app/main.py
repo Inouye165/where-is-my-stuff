@@ -4,10 +4,10 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api import items, locations, photos, search, system
+from app.api import items, locations, photos, search, system, unit_setup
 from app.core.config import settings
 from app.core.database import engine
-from app.core.exceptions import register_exception_handlers
+from app.core.exceptions import NotFoundError, register_exception_handlers
 from app.core.logging_config import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware
 from app.core.network import get_lan_ip
@@ -49,6 +49,7 @@ app.include_router(locations.router, prefix="/api/v1")
 app.include_router(items.router, prefix="/api/v1")
 app.include_router(photos.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
+app.include_router(unit_setup.router, prefix="/api/v1")
 
 mimetypes.add_type("image/webp", ".webp")
 
@@ -56,9 +57,16 @@ settings.init_directories()
 uploads_static = StaticFiles(directory=str(settings.UPLOAD_DIR))
 app.mount("/uploads", uploads_static, name="uploads")
 
+class FrontendStaticFiles(StaticFiles):
+    async def __call__(self, scope, receive, send) -> None:  # type: ignore[override]
+        if scope.get("type") == "http" and str(scope.get("path", "")).startswith("/api/"):
+            raise NotFoundError("API endpoint not found.")
+        await super().__call__(scope, receive, send)
+
+
 static_dir = settings.BASE_DIR / "app" / "static"
 static_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+app.mount("/", FrontendStaticFiles(directory=str(static_dir), html=True), name="static")
 
 
 def get_local_ip() -> str:

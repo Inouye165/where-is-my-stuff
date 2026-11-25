@@ -12,19 +12,30 @@ from app.schemas.item import DetectedItem, VisionAnalysisResponse
 from app.services.photo_service import photo_service
 
 _VISION_PROMPT = (
-    "Analyze this photo of an open storage drawer, bin, tool tray, or compartmented assortment container/kit (open or closed lid). "
+    "Analyze this photo of an open storage drawer, bin, tool tray, compartmented assortment container/kit (open or closed lid), or a printed inventory list / packing list / lid chart. "
     "Identify all visible parts, electronic components (such as transistors, resistors, capacitors, potentiometers, ICs, modules), fasteners, screwdrivers, or tools. "
-    "CRITICAL: If this is an assortment box, parts kit, or printed lid chart/table listing multiple values, part numbers, or compartments (e.g. '12 Values', '100Ω(101) 5PCS', '1KΩ(102) 5PCS'), you MUST output ONE separate item object in \"items\" for EACH distinct value/cell/compartment (for example, 12 separate items for a 12-value chart). NEVER collapse a multi-value kit into a single summary item. "
+    "CRITICAL: If this is an assortment box, parts kit, printed inventory list, packing list, or lid chart/table listing multiple values, part numbers, or compartments (e.g. '12 Values', '100Ω(101) 5PCS', 'M3*6 Screws 40 Pcs'), you MUST output ONE separate item object in \"items\" for EACH distinct listed item/value/compartment. "
+    "If a single chart cell or line lists TWO OR MORE distinct items (for example 'M3*6 Screws 40 Pcs' and 'M3*6+6 mm 10 Pcs' in the same cell), output EACH as its own separate item object with its exact printed count in estimated_qty. NEVER collapse or summarize a multi-value kit or inventory list into fewer items. "
     "Only include printed part numbers, component values, or brand names if clearly readable in the photo; never guess or invent unreadable markings. "
-    "Include the specific value or part code in \"name\" or \"part_number\" (e.g. name: 'Square Trimming Potentiometer 100Ω (101)', part_number: '3296-101' or '100Ω(101)', or '2N2222', '10k ohm'). "
+    "Include the specific value or part code in \"name\" or \"part_number\" (e.g. name: 'Square Trimming Potentiometer 100Ω (101)', part_number: '3296-101' or '100Ω(101)', or 'M3*6+6 mm Brass Standoff', '2N2222', '10k ohm'). "
     "In brief_specs, briefly describe what the item is and any visible specs, package type, or markings. "
-    "Set estimated_qty to the printed per-cell count (e.g. 5 for '5PCS') or 1 if no count is shown. "
-    "If the items together form a cohesive assortment or kit, set suggested_group_name to a concise descriptive title (e.g. 'Assorted NPN/PNP Transistors', '3296 Square Trimming Potentiometer Assortment', 'Assorted Screwdrivers') and suggested_category to its category; otherwise leave suggested_group_name empty. "
-    "For each item, ALWAYS include \"bbox\": [x_min, y_min, x_max, y_max] as integers 0-1000 (0=left/top, 1000=right/bottom) framing the physical part/compartment if visible, or that specific value cell on the lid chart if closed (never omit bbox). "
+    "Set estimated_qty to the printed per-cell or per-line count (e.g. 40 for '40 Pcs', 5 for '5PCS') or 1 if no count is shown. "
+    "If the items together form a cohesive assortment or kit, set suggested_group_name to a concise descriptive title (e.g. 'M3/M2.5/M2 Brass Spacer Standoff Kit', 'Assorted NPN/PNP Transistors', '3296 Square Trimming Potentiometer Assortment') and suggested_category to its category; otherwise leave suggested_group_name empty. "
+    "For each item, ALWAYS include \"bbox\": [x_min, y_min, x_max, y_max] as integers 0-1000 (0=left/top, 1000=right/bottom) framing the physical part/compartment if visible, or that specific value cell/line on the lid chart or inventory list if closed (never omit bbox). "
     "Avoid unescaped double quotes inside string values (write 'in' or 'inch' instead of '\"'). "
     "Return ONLY valid JSON matching: "
     '{"suggested_group_name": "...", "suggested_category": "...", "items": [{"name": "...", "part_number": "...", "category": "...", "estimated_qty": 1, "brief_specs": "...", "bbox": [x_min, y_min, x_max, y_max]}]}'
 )
+
+
+_MIME_BY_SUFFIX = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
 
 
 def _build_vision_prompt(expected_count: Optional[int] = None) -> str:
@@ -241,6 +252,10 @@ class VisionService:
             ],
             "format": "json",
             "stream": False,
+            "options": {
+                "num_predict": 4096,
+                "temperature": 0.1,
+            },
         }
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(f"{ollama_url}/api/chat", json=payload)
@@ -276,7 +291,8 @@ class VisionService:
             )
 
     async def _analyze_with_gemini(
-        self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None
+        self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None,
+        mime_type: str = "image/jpeg",
     ) -> VisionAnalysisResponse:
         prompt = _build_vision_prompt(expected_count)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -285,7 +301,7 @@ class VisionService:
                 {
                     "parts": [
                         {"text": prompt},
-                        {"inline_data": {"mime_type": "image/jpeg", "data": b64_data}},
+                        {"inline_data": {"mime_type": mime_type, "data": b64_data}},
                     ]
                 }
             ],
@@ -319,7 +335,8 @@ class VisionService:
             )
 
     async def _analyze_with_openai(
-        self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None
+        self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None,
+        mime_type: str = "image/jpeg",
     ) -> VisionAnalysisResponse:
         payload = {
             "model": model,
@@ -328,7 +345,7 @@ class VisionService:
                     "role": "user",
                     "content": [
                         {"type": "text", "text": _build_vision_prompt(expected_count)},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_data}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}},
                     ],
                 }
             ],
@@ -383,6 +400,7 @@ class VisionService:
                 message="Photo uploaded. Enter items line-by-line below to batch-add them to this drawer.",
             )
 
+        mime_type = _MIME_BY_SUFFIX.get(image_path.suffix.lower(), "image/jpeg") if image_path else "image/jpeg"
         selected = (provider or os.environ.get("VISION_PROVIDER") or settings.VISION_PROVIDER or "").strip().lower()
         gemini_key = self._effective_gemini_key()
         openai_key = self._effective_openai_key()
@@ -401,7 +419,8 @@ class VisionService:
                         message="GEMINI_API_KEY is not configured. Add it to .env or switch to Local Model (Ollama).",
                     )
                 result = await self._analyze_with_gemini(
-                    b64_data, model or settings.GEMINI_VISION_MODEL, gemini_key, expected_count=expected_count
+                    b64_data, model or settings.GEMINI_VISION_MODEL, gemini_key, expected_count=expected_count,
+                    mime_type=mime_type,
                 )
             elif selected == "openai":
                 if not openai_key:
@@ -413,7 +432,8 @@ class VisionService:
                         message="OPENAI_API_KEY is not configured. Add it to .env or switch to Local Model (Ollama).",
                     )
                 result = await self._analyze_with_openai(
-                    b64_data, model or settings.OPENAI_VISION_MODEL, openai_key, expected_count=expected_count
+                    b64_data, model or settings.OPENAI_VISION_MODEL, openai_key, expected_count=expected_count,
+                    mime_type=mime_type,
                 )
             else:
                 # Default: local (Ollama)

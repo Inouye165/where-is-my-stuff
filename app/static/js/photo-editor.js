@@ -30,6 +30,7 @@ let editorState = {
 };
 
 const HANDLE_RADIUS = 10;
+let editorOpenSeq = 0;
 const MIN_CROP_FRAC = 0.08;
 const QUAD_LABELS = ['TL', 'TR', 'BR', 'BL'];
 
@@ -387,6 +388,10 @@ function warpQuadToCanvas(img, rotation, quad) {
       const sy = (h3 * u + h4 * v + h5) / denom;
       const dstIdx = (v * outW + u) * 4;
 
+      if (!Number.isFinite(sx) || !Number.isFinite(sy)) {
+        dstData[dstIdx + 3] = 255;
+        continue;
+      }
       if (sx < 0 || sy < 0 || sx >= sw - 1 || sy >= sh - 1) {
         const cx = clamp(Math.round(sx), 0, sw - 1);
         const cy = clamp(Math.round(sy), 0, sh - 1);
@@ -610,6 +615,7 @@ export function resetPhotoEditorCrop() {
 }
 
 export function closePhotoEditorModal() {
+  editorOpenSeq += 1;
   if (editorState.objectUrl) {
     URL.revokeObjectURL(editorState.objectUrl);
     editorState.objectUrl = null;
@@ -752,8 +758,10 @@ export async function openPhotoEditorModal({ imageUrl = null, file = null, sourc
   editorState.sourcePhoto = sourcePhoto;
   editorState.onApply = onApply;
 
+  const loadSeq = ++editorOpenSeq;
   const img = new Image();
   img.onload = () => {
+    if (loadSeq !== editorOpenSeq) return;
     editorState.img = img;
     editorState.originalImg = img;
     document.getElementById('photo-editor-modal')?.classList.add('open');

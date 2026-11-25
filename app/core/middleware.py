@@ -31,11 +31,15 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
         response.headers["X-Request-ID"] = req_id
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=()"
         # User-uploaded SVGs can embed script; opened directly they'd run in the app origin.
         path = request.url.path.lower()
+        if path.startswith("/uploads/") and path.endswith((".pdf", ".txt", ".md", ".csv", ".json")):
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = "frame-ancestors 'self'"
+        else:
+            response.headers["X-Frame-Options"] = "DENY"
         if path.startswith("/uploads/") and path.endswith(".svg"):
             response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
         return response
