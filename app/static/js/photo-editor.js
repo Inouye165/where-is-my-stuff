@@ -101,7 +101,7 @@ function syncEditorControlsUI() {
   if (hintEl) {
     hintEl.textContent = isQuad
       ? 'Align TL, TR, BR, BL with the 4 corners of the cabinet, then click "Flatten & Preview" or "Use Photo".'
-      : 'Drag corners to crop, use Tilt/Width/Height to align, or switch to 4-Corner Straighten.';
+      : 'Drag the corners to crop. Rotate 90° if the photo is sideways.';
   }
 }
 
@@ -757,6 +757,8 @@ export async function openPhotoEditorModal({ imageUrl = null, file = null, sourc
   editorState.quadPickIndex = -1;
   editorState.sourcePhoto = sourcePhoto;
   editorState.onApply = onApply;
+  const adjustDetails = document.getElementById('photo-editor-adjust-details');
+  if (adjustDetails) adjustDetails.open = false;
 
   const loadSeq = ++editorOpenSeq;
   const img = new Image();

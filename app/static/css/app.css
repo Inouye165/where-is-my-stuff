@@ -4465,6 +4465,55 @@ textarea {
   gap: 0.65rem;
 }
 
+.item-detail-card[hidden],
+.item-add-chip[hidden] {
+  display: none !important;
+}
+
+/* Empty optional sections collapse into compact "+ Add ..." chips */
+.item-add-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.item-add-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 32px;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  border: 1px dashed var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
+}
+
+.item-add-chip:hover,
+.item-add-chip:focus-visible {
+  border-color: var(--accent-primary);
+  color: var(--accent-text);
+  background: var(--accent-subtle);
+}
+
+.item-history-details:not([open]) {
+  gap: 0;
+}
+
+.item-history-summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: revert;
+}
+
+.item-history-summary:hover {
+  color: var(--text-primary);
+}
+
 .item-where-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5487,6 +5536,53 @@ textarea {
   font-size: 0.82rem;
   color: var(--text-secondary);
   line-height: 1.45;
+}
+
+.gd-inspector-inline-hint {
+  font-size: 0.78rem;
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+/* Grid designer: templates & bulk tools tucked behind one toggle */
+.gd-tools-details {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+}
+
+.gd-tools-details[open] {
+  flex-basis: 100%;
+}
+
+.gd-tools-summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.gd-tools-summary::-webkit-details-marker {
+  display: none;
+}
+
+.gd-tools-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.gd-tools-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  min-width: 5.5rem;
 }
 
 .gd-inspector-row {

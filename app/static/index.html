@@ -159,7 +159,7 @@
           </span>
           <span class="action-choice-body">
             <strong>Add Item Manually</strong>
-            <span>Quickly log an individual tool, cable, household item, or component.</span>
+            <span id="add-sheet-item-desc">Quickly log an individual tool, cable, household item, or component.</span>
           </span>
           <span class="action-choice-arrow" aria-hidden="true">→</span>
         </button>
@@ -169,19 +169,8 @@
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path><path d="M12 22V12"></path><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path><path d="m7.5 4.27 9 5.15"></path></svg>
           </span>
           <span class="action-choice-body">
-            <strong>Add Location or Container</strong>
-            <span>Set up a space, storage bin, or multi-drawer organizer.</span>
-          </span>
-          <span class="action-choice-arrow" aria-hidden="true">→</span>
-        </button>
-
-        <button type="button" class="action-choice-card" onclick="chooseAddAction('space')">
-          <span class="action-choice-icon" aria-hidden="true">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
-          </span>
-          <span class="action-choice-body">
-            <strong>New Space</strong>
-            <span>Create a room, garage, shed, or storage area.</span>
+            <strong id="add-sheet-place-title">New Space or Container</strong>
+            <span id="add-sheet-place-desc">Create a room, storage area, bin, or multi-drawer organizer.</span>
           </span>
           <span class="action-choice-arrow" aria-hidden="true">→</span>
         </button>
@@ -206,9 +195,16 @@
             <input type="text" id="item-name" placeholder="e.g., Phillips screwdriver, USB-C cable, ESP32 board, or M3 screws" required>
           </div>
 
-          <div class="form-field">
+          <div id="item-location-pill-bar" class="rapid-location-pill-bar" style="display: none;">
+            <span class="rapid-location-pill-text">
+              Stored in: <strong id="item-location-pill-name"></strong>
+            </span>
+            <button type="button" class="btn-link-subtle" onclick="toggleItemLocationPicker()">Change</button>
+          </div>
+
+          <div class="form-field" id="item-location-field">
             <label for="item-location-select">Where is it kept? *</label>
-            <select id="item-location-select" required>
+            <select id="item-location-select" required onchange="handleItemLocationChange()">
               <option value="">Choose a drawer, container, or space</option>
             </select>
           </div>
@@ -219,44 +215,49 @@
               <input type="number" id="item-quantity" min="0" placeholder="Leave blank if uncounted">
             </div>
             <div class="form-field">
-              <label for="item-unit">Unit</label>
-              <input type="text" id="item-unit" value="pcs" placeholder="pcs, pair, roll, set">
+              <label>Photo (Optional)</label>
+              <label for="item-photo-input" class="upload-dropzone compact">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                  <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+                <span id="item-photo-input-label">Add photo</span>
+                <input type="file" id="item-photo-input" accept="image/*" capture="environment" style="display: none;" onchange="handleItemPhotoPreview(event)">
+              </label>
             </div>
           </div>
 
-          <div class="form-grid-2">
-            <div class="form-field">
-              <label for="item-category">Category (Optional)</label>
-              <input type="text" id="item-category" list="item-category-datalist" placeholder="e.g., Tools, Electronics, Fasteners, Kitchen">
-              <datalist id="item-category-datalist"></datalist>
+          <details id="item-more-details" class="rapid-advanced-details">
+            <summary class="rapid-advanced-summary">+ More details ▾</summary>
+            <div class="rapid-advanced-body">
+              <div class="form-grid-2">
+                <div class="form-field">
+                  <label for="item-unit">Unit</label>
+                  <input type="text" id="item-unit" value="pcs" placeholder="pcs, pair, roll, set">
+                </div>
+                <div class="form-field">
+                  <label for="item-category">Category (Optional)</label>
+                  <input type="text" id="item-category" list="item-category-datalist" placeholder="e.g., Tools, Electronics, Fasteners, Kitchen">
+                  <datalist id="item-category-datalist"></datalist>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label for="item-serial">Brand or model (Optional)</label>
+                <input type="text" id="item-serial" placeholder="e.g., DeWalt DCD771, Raspberry Pi 5, Anker 65W">
+              </div>
+
+              <div class="form-field">
+                <label for="item-tags">Search keywords (Optional)</label>
+                <input type="text" id="item-tags" placeholder="e.g., spare, metric, 5V, waterproof">
+              </div>
+
+              <div class="form-field">
+                <label for="item-description">Notes (Optional)</label>
+                <textarea id="item-description" rows="2" placeholder="Size, color, voltage, or helpful details..."></textarea>
+              </div>
             </div>
-            <div class="form-field">
-              <label for="item-serial">Brand or model (Optional)</label>
-              <input type="text" id="item-serial" placeholder="e.g., DeWalt DCD771, Raspberry Pi 5, Anker 65W">
-            </div>
-          </div>
-
-          <div class="form-field">
-            <label for="item-tags">Search keywords (Optional)</label>
-            <input type="text" id="item-tags" placeholder="e.g., spare, metric, 5V, waterproof">
-          </div>
-
-          <div class="form-field">
-            <label for="item-description">Notes (Optional)</label>
-            <textarea id="item-description" rows="2" placeholder="Size, color, voltage, or helpful details..."></textarea>
-          </div>
-
-          <div class="form-field">
-            <label>Photo (Optional)</label>
-            <label for="item-photo-input" class="upload-dropzone compact">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
-                <circle cx="12" cy="13" r="4"></circle>
-              </svg>
-              <span id="item-photo-input-label">Add photo</span>
-              <input type="file" id="item-photo-input" accept="image/*" capture="environment" style="display: none;" onchange="handleItemPhotoPreview(event)">
-            </label>
-          </div>
+          </details>
         </div>
 
         <div class="modal-bottom">
@@ -314,7 +315,14 @@
             <input type="hidden" id="room-emoji-input" value="🔧">
           </div>
 
-          <!-- Parent Room / Container Selection -->
+          <!-- Parent: compact pill when launched from context, dropdown behind [Change] -->
+          <div id="storage-parent-pill-bar" class="rapid-location-pill-bar" style="display: none;">
+            <span class="rapid-location-pill-text">
+              in <strong id="storage-parent-pill-name"></strong>
+            </span>
+            <button type="button" class="btn-link-subtle" onclick="toggleStorageParentPicker()">Change</button>
+          </div>
+
           <div class="form-field" id="storage-parent-field">
             <label for="storage-parent-select" id="storage-parent-label">Which space is it in?</label>
             <select id="storage-parent-select" onchange="handleStorageParentChange()">
@@ -333,86 +341,94 @@
             <input type="text" id="storage-name" placeholder="e.g., Yellow Parts Organizer, Clear Storage Tote, Mechanics Tool Chest" required>
           </div>
 
-          <div class="form-field" id="storage-label-field">
-            <label for="storage-label">Physical label / code (Optional)</label>
-            <input type="text" id="storage-label" maxlength="40" placeholder="e.g. M2, A1, Bin 4 (stays fixed even if contents change)">
-          </div>
-
-          <!-- Multi-Drawer Auto-Generator (for Containers) -->
-          <div id="multi-drawer-box" class="auto-drawer-card">
-            <label class="toggle-checkbox-row">
-              <input type="checkbox" id="auto-drawers-toggle" onchange="toggleAutoDrawersUi()">
-              <span><strong>Create numbered drawers automatically</strong></span>
-            </label>
-
-            <div id="auto-drawers-inputs" style="display: none; margin-top: 0.8rem;">
-              <div class="form-grid-3">
-                <div class="form-field">
-                  <label for="auto-prefix">Label</label>
-                  <select id="auto-prefix" onchange="updateDrawerBatchPreview()">
-                    <option value="Drawer">Drawer</option>
-                    <option value="Bin">Bin</option>
-                    <option value="Shelf">Shelf</option>
-                    <option value="Box">Box</option>
-                  </select>
-                </div>
-                <div class="form-field">
-                  <label for="auto-start">From #</label>
-                  <input type="number" id="auto-start" value="1" min="1" max="500" oninput="updateDrawerBatchPreview()">
-                </div>
-                <div class="form-field">
-                  <label for="auto-end">To #</label>
-                  <input type="number" id="auto-end" value="10" min="1" max="500" oninput="updateDrawerBatchPreview()">
-                </div>
-              </div>
-              <p id="auto-drawers-preview-text" class="drawer-preview-caption">Creates Drawer 1 through Drawer 10</p>
-            </div>
-
-            <label class="toggle-checkbox-row" style="margin-top: 0.65rem;">
-              <input type="checkbox" id="use-grid-toggle" onchange="toggleUseGridUi()">
-              <span><strong>Design custom drawer / shelf grid</strong></span>
-            </label>
-
-            <div id="use-grid-inputs" style="display: none; margin-top: 0.8rem;">
-              <div class="form-grid-2">
-                <div class="form-field">
-                  <label for="new-grid-rows">Rows (1, 2, 3…)</label>
-                  <input type="number" id="new-grid-rows" value="3" min="1" max="26">
-                </div>
-                <div class="form-field">
-                  <label for="new-grid-cols">Columns (A, B, C…)</label>
-                  <input type="number" id="new-grid-cols" value="6" min="1" max="26">
-                </div>
-              </div>
-              <p class="drawer-preview-caption">Opens the Grid Designer right after saving so you can resize or combine drawers.</p>
-            </div>
-          </div>
-
-          <div class="form-field">
-            <label for="storage-desc">Notes (Optional)</label>
-            <textarea id="storage-desc" rows="2" placeholder="e.g. Top shelf on the left wall"></textarea>
-          </div>
-
-          <!-- Photos -->
-          <div class="form-grid-2" id="storage-photos-grid">
+          <!-- Primary photo (inside/cover for containers & drawers, space photo for rooms) -->
+          <div id="storage-primary-photo-slot">
             <div class="form-field" id="storage-bin-photo-field">
-              <label id="storage-bin-photo-title">Inside photo</label>
+              <label id="storage-bin-photo-title">Photo (Optional)</label>
               <label for="storage-bin-photo" class="upload-dropzone compact">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
                 <span id="storage-bin-photo-label">Add photo</span>
                 <input type="file" id="storage-bin-photo" accept="image/*" capture="environment" style="display: none;" onchange="handleStoragePhotoChange(event, 'bin')">
               </label>
             </div>
-
-            <div class="form-field" id="storage-spot-photo-field">
-              <label id="storage-spot-photo-title">Where it sits</label>
-              <label for="storage-spot-photo" class="upload-dropzone compact">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-                <span id="storage-spot-photo-label">Add photo</span>
-                <input type="file" id="storage-spot-photo" accept="image/*" capture="environment" style="display: none;" onchange="handleStoragePhotoChange(event, 'spot')">
-              </label>
-            </div>
           </div>
+
+          <details id="storage-more-details" class="rapid-advanced-details">
+            <summary class="rapid-advanced-summary" id="storage-more-summary">+ More options ▾</summary>
+            <div class="rapid-advanced-body">
+              <div class="form-field" id="storage-label-field">
+                <label for="storage-label">Physical label / code (Optional)</label>
+                <input type="text" id="storage-label" maxlength="40" placeholder="e.g. M2, A1, Bin 4 (stays fixed even if contents change)">
+              </div>
+
+              <!-- Multi-Drawer Auto-Generator (for Containers) -->
+              <div id="multi-drawer-box" class="auto-drawer-card">
+                <label class="toggle-checkbox-row">
+                  <input type="checkbox" id="auto-drawers-toggle" onchange="toggleAutoDrawersUi()">
+                  <span><strong>Create numbered drawers automatically</strong></span>
+                </label>
+
+                <div id="auto-drawers-inputs" style="display: none; margin-top: 0.8rem;">
+                  <div class="form-grid-3">
+                    <div class="form-field">
+                      <label for="auto-prefix">Label</label>
+                      <select id="auto-prefix" onchange="updateDrawerBatchPreview()">
+                        <option value="Drawer">Drawer</option>
+                        <option value="Bin">Bin</option>
+                        <option value="Shelf">Shelf</option>
+                        <option value="Box">Box</option>
+                      </select>
+                    </div>
+                    <div class="form-field">
+                      <label for="auto-start">From #</label>
+                      <input type="number" id="auto-start" value="1" min="1" max="500" oninput="updateDrawerBatchPreview()">
+                    </div>
+                    <div class="form-field">
+                      <label for="auto-end">To #</label>
+                      <input type="number" id="auto-end" value="10" min="1" max="500" oninput="updateDrawerBatchPreview()">
+                    </div>
+                  </div>
+                  <p id="auto-drawers-preview-text" class="drawer-preview-caption">Creates Drawer 1 through Drawer 10</p>
+                </div>
+
+                <label class="toggle-checkbox-row" style="margin-top: 0.65rem;">
+                  <input type="checkbox" id="use-grid-toggle" onchange="toggleUseGridUi()">
+                  <span><strong>Design custom drawer / shelf grid</strong></span>
+                </label>
+
+                <div id="use-grid-inputs" style="display: none; margin-top: 0.8rem;">
+                  <div class="form-grid-2">
+                    <div class="form-field">
+                      <label for="new-grid-rows">Rows (1, 2, 3…)</label>
+                      <input type="number" id="new-grid-rows" value="3" min="1" max="26">
+                    </div>
+                    <div class="form-field">
+                      <label for="new-grid-cols">Columns (A, B, C…)</label>
+                      <input type="number" id="new-grid-cols" value="6" min="1" max="26">
+                    </div>
+                  </div>
+                  <p class="drawer-preview-caption">Opens the Grid Designer right after saving so you can resize or combine drawers.</p>
+                </div>
+              </div>
+
+              <div class="form-field">
+                <label for="storage-desc">Notes (Optional)</label>
+                <textarea id="storage-desc" rows="2" placeholder="e.g. Top shelf on the left wall"></textarea>
+              </div>
+
+              <!-- Second context photo (where it sits); moved upfront for spaces -->
+              <div id="storage-spot-photo-slot">
+                <div class="form-field" id="storage-spot-photo-field">
+                  <label id="storage-spot-photo-title">Where it sits</label>
+                  <label for="storage-spot-photo" class="upload-dropzone compact">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                    <span id="storage-spot-photo-label">Add photo</span>
+                    <input type="file" id="storage-spot-photo" accept="image/*" capture="environment" style="display: none;" onchange="handleStoragePhotoChange(event, 'spot')">
+                  </label>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
 
         <div class="modal-bottom">
@@ -1029,40 +1045,48 @@
         </div>
 
         <div class="photo-editor-toolbar">
-          <button type="button" class="btn btn-secondary btn-sm" id="photo-editor-mode-crop" onclick="setPhotoEditorMode('crop')">Crop &amp; Fine-Tune</button>
-          <button type="button" class="btn btn-secondary btn-sm" id="photo-editor-mode-quad" onclick="setPhotoEditorMode('quad')">4-Corner Straighten</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="rotatePhotoEditor(-90)">↺ -90°</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="rotatePhotoEditor(90)">↻ +90°</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="rotatePhotoEditor(-90)">↺ Rotate</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="rotatePhotoEditor(90)">↻ Rotate 90°</button>
           <button type="button" class="btn btn-secondary btn-sm" onclick="resetPhotoEditorCrop()">Reset</button>
         </div>
 
-        <div id="photo-editor-quad-controls" class="photo-editor-fine-panel" style="display: none;">
-          <div class="photo-editor-quad-row">
-            <button type="button" class="btn btn-primary btn-sm" id="photo-editor-pick-corners-btn" onclick="startPhotoEditorCornerPick()">Click 4 Corners</button>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="flattenPhotoEditorQuad()">Flatten &amp; Preview</button>
-            <span id="photo-editor-quad-status" class="photo-editor-quad-status">Drag the 4 corners to match the cabinet edges, or click "Click 4 Corners".</span>
-          </div>
-        </div>
+        <details id="photo-editor-adjust-details" class="rapid-advanced-details">
+          <summary class="rapid-advanced-summary">Adjust &amp; Perspective ▾</summary>
+          <div class="rapid-advanced-body">
+            <div class="photo-editor-toolbar">
+              <button type="button" class="btn btn-secondary btn-sm" id="photo-editor-mode-crop" onclick="setPhotoEditorMode('crop')">Crop &amp; Fine-Tune</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="photo-editor-mode-quad" onclick="setPhotoEditorMode('quad')">4-Corner Straighten</button>
+            </div>
 
-        <div id="photo-editor-fine-controls" class="photo-editor-fine-panel">
-          <div class="photo-editor-slider-row">
-            <label for="photo-editor-fine-rot">Tilt</label>
-            <button type="button" class="btn btn-secondary btn-xs" onclick="nudgePhotoEditorFineRotation(-0.1)">−0.1°</button>
-            <input type="range" id="photo-editor-fine-rot" min="-15" max="15" step="0.1" value="0" oninput="setPhotoEditorFineRotation(this.value)">
-            <button type="button" class="btn btn-secondary btn-xs" onclick="nudgePhotoEditorFineRotation(0.1)">+0.1°</button>
-            <span id="photo-editor-fine-rot-val" class="photo-editor-slider-val">0.0°</span>
-          </div>
-          <div class="photo-editor-slider-row">
-            <label for="photo-editor-scale-x">Width</label>
-            <input type="range" id="photo-editor-scale-x" min="70" max="130" step="1" value="100" oninput="setPhotoEditorScale('x', this.value)">
-            <span id="photo-editor-scale-x-val" class="photo-editor-slider-val">100%</span>
-            <label for="photo-editor-scale-y" style="margin-left: 0.5rem;">Height</label>
-            <input type="range" id="photo-editor-scale-y" min="70" max="130" step="1" value="100" oninput="setPhotoEditorScale('y', this.value)">
-            <span id="photo-editor-scale-y-val" class="photo-editor-slider-val">100%</span>
-          </div>
-        </div>
+            <div id="photo-editor-quad-controls" class="photo-editor-fine-panel" style="display: none;">
+              <div class="photo-editor-quad-row">
+                <button type="button" class="btn btn-primary btn-sm" id="photo-editor-pick-corners-btn" onclick="startPhotoEditorCornerPick()">Click 4 Corners</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="flattenPhotoEditorQuad()">Flatten &amp; Preview</button>
+                <span id="photo-editor-quad-status" class="photo-editor-quad-status">Drag the 4 corners to match the cabinet edges, or click "Click 4 Corners".</span>
+              </div>
+            </div>
 
-        <div id="photo-editor-hint" class="photo-editor-hint">Drag corners to crop, use Tilt/Width/Height to align, or switch to 4-Corner Straighten.</div>
+            <div id="photo-editor-fine-controls" class="photo-editor-fine-panel">
+              <div class="photo-editor-slider-row">
+                <label for="photo-editor-fine-rot">Tilt</label>
+                <button type="button" class="btn btn-secondary btn-xs" onclick="nudgePhotoEditorFineRotation(-0.1)">−0.1°</button>
+                <input type="range" id="photo-editor-fine-rot" min="-15" max="15" step="0.1" value="0" oninput="setPhotoEditorFineRotation(this.value)">
+                <button type="button" class="btn btn-secondary btn-xs" onclick="nudgePhotoEditorFineRotation(0.1)">+0.1°</button>
+                <span id="photo-editor-fine-rot-val" class="photo-editor-slider-val">0.0°</span>
+              </div>
+              <div class="photo-editor-slider-row">
+                <label for="photo-editor-scale-x">Width</label>
+                <input type="range" id="photo-editor-scale-x" min="70" max="130" step="1" value="100" oninput="setPhotoEditorScale('x', this.value)">
+                <span id="photo-editor-scale-x-val" class="photo-editor-slider-val">100%</span>
+                <label for="photo-editor-scale-y" style="margin-left: 0.5rem;">Height</label>
+                <input type="range" id="photo-editor-scale-y" min="70" max="130" step="1" value="100" oninput="setPhotoEditorScale('y', this.value)">
+                <span id="photo-editor-scale-y-val" class="photo-editor-slider-val">100%</span>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <div id="photo-editor-hint" class="photo-editor-hint">Drag the corners to crop. Rotate 90° if the photo is sideways.</div>
       </div>
 
       <div class="modal-bottom">

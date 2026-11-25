@@ -32,7 +32,42 @@ const AI_SCAN_TIMEOUT_MS = 130000;
 // 1. UNIFIED '+' ACTION SHEET
 // ============================================================================
 export function openAddSheet() {
+  syncAddSheetContext();
   document.getElementById('add-action-sheet')?.classList.add('open');
+}
+
+function getAddSheetContextLocation() {
+  const locId = state.currentView === 'item'
+    ? (state.items.find(i => i.id === state.currentLocationId)?.location_id || null)
+    : (state.currentLocationId || null);
+  const loc = locId ? state.locationMap.get(locId) : null;
+  return loc && !isUnknownPlaceholder(loc) ? loc : null;
+}
+
+// Context-aware labels so the sheet says exactly where a new thing will land.
+function syncAddSheetContext() {
+  const loc = getAddSheetContextLocation();
+  const itemDesc = document.getElementById('add-sheet-item-desc');
+  const placeTitle = document.getElementById('add-sheet-place-title');
+  const placeDesc = document.getElementById('add-sheet-place-desc');
+  const locType = loc ? getLocType(loc) : null;
+
+  if (itemDesc) {
+    itemDesc.textContent = loc
+      ? `Log a tool, cable, or component in ${loc.name}.`
+      : 'Quickly log an individual tool, cable, household item, or component.';
+  }
+  if (!placeTitle || !placeDesc) return;
+  if (loc && (locType === 'room' || locType === 'site')) {
+    placeTitle.textContent = `New Container in ${loc.name}`;
+    placeDesc.textContent = 'Set up a bin, shelf, or multi-drawer organizer here.';
+  } else if (loc) {
+    placeTitle.textContent = `New Drawer or Box in ${loc.name}`;
+    placeDesc.textContent = 'Add a drawer, bin, or box inside this container.';
+  } else {
+    placeTitle.textContent = 'New Space or Container';
+    placeDesc.textContent = 'Create a room, storage area, bin, or multi-drawer organizer.';
+  }
 }
 
 export function chooseAddAction(choice) {
@@ -49,12 +84,14 @@ export function chooseAddAction(choice) {
     const parentId = state.currentView === 'room' && ctxLocId ? ctxLocId : null;
     openUnitSetupWizard(parentId);
   } else if (choice === 'space') {
-    openAddStorageModal(null, 'room');
+    openAddStorageModal(null, 'room', { lockType: true });
   } else if (choice === 'place') {
-    if (state.currentView === 'room' && ctxLocId) {
-      openUnitSetupWizard(ctxLocId);
-    } else if (state.currentView === 'unit' && ctxLocId) {
-      openAddStorageModal(ctxLocId, 'drawer');
+    const ctxLoc = getAddSheetContextLocation();
+    const ctxType = ctxLoc ? getLocType(ctxLoc) : null;
+    if (ctxLoc && (ctxType === 'room' || ctxType === 'site')) {
+      openUnitSetupWizard(ctxLoc.id);
+    } else if (ctxLoc) {
+      openAddStorageModal(ctxLoc.id, 'drawer');
     } else {
       openAddStorageModal(null, 'room');
     }
@@ -64,7 +101,7 @@ export function chooseAddAction(choice) {
 // ============================================================================
 // 2. ADD / EDIT ITEM MODAL
 // ============================================================================
-export function openAddItemModal(defaultLocationId = null, existingItem = null) {
+export function openAddItemModal(defaultLocationId = null, existingItem = null, options = {}) {
   populateLocationDropdowns();
   const modal = document.getElementById('add-item-modal');
   const title = document.getElementById('item-modal-title');
@@ -93,12 +130,58 @@ export function openAddItemModal(defaultLocationId = null, existingItem = null) 
     const locVal = existingItem ? existingItem.location_id : defaultLocationId;
     locSelect.value = locVal ? String(locVal) : '';
   }
+  itemLocationPickerExpanded = false;
+  syncItemLocationPill();
+
+  const moreDetails = document.getElementById('item-more-details');
+  if (moreDetails) moreDetails.open = Boolean((existingItem && itemHasOptionalDetails(existingItem)) || options.focusId);
 
   if (title) title.textContent = existingItem ? 'Edit Item' : 'Add Item Manually';
   if (submitBtn) submitBtn.textContent = existingItem ? 'Save changes' : 'Save item';
 
   markModalClean('add-item-modal');
   modal?.classList.add('open');
+  if (options.focusId) {
+    setTimeout(() => document.getElementById(options.focusId)?.focus(), 50);
+  }
+}
+
+let itemLocationPickerExpanded = false;
+
+function itemHasOptionalDetails(item) {
+  const unit = (item.unit || '').trim().toLowerCase();
+  return Boolean(
+    (unit && unit !== 'pcs')
+    || item.category
+    || item.serial_or_part_number
+    || item.tags
+    || item.description
+  );
+}
+
+function syncItemLocationPill() {
+  const locSelect = document.getElementById('item-location-select');
+  const pillBar = document.getElementById('item-location-pill-bar');
+  const pillName = document.getElementById('item-location-pill-name');
+  const locField = document.getElementById('item-location-field');
+  const locId = parseInt(locSelect?.value, 10) || null;
+  const loc = locId ? state.locationMap.get(locId) : null;
+  const showPill = Boolean(loc && !itemLocationPickerExpanded);
+
+  if (pillName && loc) pillName.textContent = formatHumanPath(loc.full_path || loc.name);
+  if (pillBar) pillBar.style.display = showPill ? 'flex' : 'none';
+  if (locField) locField.style.display = showPill ? 'none' : '';
+}
+
+export function toggleItemLocationPicker() {
+  itemLocationPickerExpanded = true;
+  syncItemLocationPill();
+  document.getElementById('item-location-select')?.focus();
+}
+
+export function handleItemLocationChange() {
+  itemLocationPickerExpanded = false;
+  syncItemLocationPill();
 }
 
 export function handleItemPhotoPreview(e) {
@@ -160,7 +243,7 @@ export async function handleItemFormSubmit(e) {
 // ============================================================================
 // 3. ADD / EDIT ROOM, CONTAINER, OR DRAWER MODAL
 // ============================================================================
-export function openAddStorageModal(parentLocationId = null, kind = 'unit') {
+export function openAddStorageModal(parentLocationId = null, kind = 'unit', options = {}) {
   const modal = document.getElementById('add-storage-modal');
   document.getElementById('edit-storage-id').value = '';
   document.getElementById('storage-name').value = '';
@@ -188,8 +271,13 @@ export function openAddStorageModal(parentLocationId = null, kind = 'unit') {
   document.getElementById('storage-bin-photo-label').textContent = 'Add photo';
   document.getElementById('storage-spot-photo-label').textContent = 'Add photo';
   document.getElementById('storage-delete-btn').style.display = 'none';
-  document.getElementById('storage-type-segmented').style.display = 'flex';
   document.getElementById('storage-inline-room-field').style.display = 'none';
+  const moreDetails = document.getElementById('storage-more-details');
+  if (moreDetails) moreDetails.open = false;
+
+  storageContextLocked = Boolean(parentLocationId || options.lockType);
+  storageParentPickerExpanded = false;
+  document.getElementById('storage-type-segmented').style.display = storageContextLocked ? 'none' : 'flex';
 
   setStorageTypeChoice(kind, parentLocationId);
   selectRoomEmoji('🔧');
@@ -216,6 +304,8 @@ export function openEditStorageModal(locationId) {
     if (photoLabelEl) photoLabelEl.textContent = 'Add photo';
   }
   document.getElementById('storage-type-segmented').style.display = 'none';
+  storageContextLocked = true;
+  storageParentPickerExpanded = false;
   setStorageTypeChoice(kind, loc.parent_id, loc.id);
 
   document.getElementById('storage-modal-title').textContent = `Edit ${loc.name}`;
@@ -225,6 +315,8 @@ export function openEditStorageModal(locationId) {
   document.getElementById('storage-desc').value = loc.description || '';
   document.getElementById('multi-drawer-box').style.display = 'none';
   document.getElementById('storage-delete-btn').style.display = 'inline-flex';
+  const moreDetails = document.getElementById('storage-more-details');
+  if (moreDetails) moreDetails.open = Boolean(loc.description || (kind !== 'room' && loc.label));
 
   if (kind === 'room') {
     selectRoomEmoji(getRoomEmoji(loc));
@@ -290,6 +382,48 @@ export function setStorageTypeChoice(kind, selectedParentId = null, excludeId = 
     spotPhotoTitle.textContent = 'Where it sits';
     populateStorageParentDropdown('drawer', selectedParentId, excludeId);
   }
+
+  placeStorageSpotPhotoField(kind === 'room');
+  syncStorageParentPill();
+}
+
+let storageContextLocked = false;
+let storageParentPickerExpanded = false;
+
+function placeStorageSpotPhotoField(upfront) {
+  const spotField = document.getElementById('storage-spot-photo-field');
+  const slot = document.getElementById(upfront ? 'storage-primary-photo-slot' : 'storage-spot-photo-slot');
+  if (spotField && slot && spotField.parentElement !== slot) {
+    slot.appendChild(spotField);
+  }
+}
+
+export function syncStorageParentPill() {
+  const sel = document.getElementById('storage-parent-select');
+  const pillBar = document.getElementById('storage-parent-pill-bar');
+  const pillName = document.getElementById('storage-parent-pill-name');
+  const parentField = document.getElementById('storage-parent-field');
+  const rawVal = sel?.value || '';
+  const parentId = parseInt(rawVal, 10) || null;
+  const parentLoc = parentId ? state.locationMap.get(parentId) : null;
+  const topLevelLocked = storageContextLocked && rawVal === '';
+  const showPill = Boolean((parentLoc || topLevelLocked) && !storageParentPickerExpanded);
+
+  if (pillName) {
+    if (parentLoc) {
+      pillName.textContent = formatHumanPath(parentLoc.full_path || parentLoc.name);
+    } else {
+      pillName.textContent = state.storageTypeChoice === 'room' ? 'Places (top level)' : 'Needs a home';
+    }
+  }
+  if (pillBar) pillBar.style.display = showPill ? 'flex' : 'none';
+  if (parentField) parentField.style.display = showPill ? 'none' : 'flex';
+}
+
+export function toggleStorageParentPicker() {
+  storageParentPickerExpanded = true;
+  syncStorageParentPill();
+  document.getElementById('storage-parent-select')?.focus();
 }
 
 export function selectRoomEmoji(emoji) {
@@ -307,6 +441,8 @@ export function handleStorageParentChange() {
   if (sel && inlineField) {
     inlineField.style.display = sel.value === '__new__' ? 'flex' : 'none';
   }
+  storageParentPickerExpanded = false;
+  syncStorageParentPill();
 }
 
 export function toggleAutoDrawersUi() {

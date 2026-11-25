@@ -462,7 +462,7 @@ export function renderHomeStageBody() {
         <button type="button" class="btn btn-secondary btn-sm" onclick="openUnitSetupWizard(null)" title="Add a box or container via Phone QR or manually (attach to a space later)">
           ${lucideIcon('plus', '', 15)} New container
         </button>
-        <button type="button" class="btn btn-secondary btn-sm" onclick="openAddStorageModal(null, 'room')">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="openAddStorageModal(null, 'room', { lockType: true })">
           ${lucideIcon('plus', '', 15)} New space
         </button>
       </div>
@@ -491,7 +491,7 @@ function renderHomeTileHtml(tile) {
   if (tile.kind === 'add-room') {
     const sub = state.namedRooms.length === 0 ? 'No spaces added yet' : 'Create a new space';
     return `
-      <div class="room-tile add-room-tile" onclick="openAddStorageModal(null, 'room')" role="button" tabindex="0">
+      <div class="room-tile add-room-tile" onclick="openAddStorageModal(null, 'room', { lockType: true })" role="button" tabindex="0">
         <div class="room-tile-visual is-empty-visual">
           <div class="room-tile-empty-badge">${lucideIcon('plus', '', 24)}</div>
         </div>
@@ -873,7 +873,7 @@ export function renderNeedsHomeView() {
     <button type="button" class="btn btn-secondary btn-sm" onclick="openUnitSetupWizard(null)">
       ${lucideIcon('smartphone', '', 15)} Guided setup
     </button>
-    <button type="button" class="btn btn-primary btn-sm" onclick="openAddStorageModal(null, 'unit')">
+    <button type="button" class="btn btn-primary btn-sm" onclick="openAddStorageModal(null, 'unit', { lockType: true })">
       ${lucideIcon('plus', '', 15)} New loose container
     </button>
   `;
@@ -887,7 +887,7 @@ export function renderNeedsHomeView() {
           <h3 class="empty-state-title">No loose containers or boxes</h3>
           <p class="empty-state-desc">All of your containers and boxes are currently attached to a space. You can add a loose container anytime and attach it to a room later.</p>
           <div style="display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap;">
-            <button type="button" class="btn btn-primary" onclick="openAddStorageModal(null, 'unit')">+ Add loose container</button>
+            <button type="button" class="btn btn-primary" onclick="openAddStorageModal(null, 'unit', { lockType: true })">+ Add loose container</button>
             <button type="button" class="btn btn-secondary" onclick="navToHome()">Back to Spaces</button>
           </div>
         </div>
@@ -1016,6 +1016,40 @@ export async function quickMoveContainerToRoom(containerId, roomId, roomName, em
 // ============================================================================
 // 3. CLEAN DRILL-DOWN VIEWS (ROOM -> CONTAINER -> DRAWER)
 // ============================================================================
+const MENU_DIVIDER = '<div class="unit-more-divider" role="separator"></div>';
+
+function menuItem(icon, label, onclick, danger = false) {
+  return `<button type="button" class="unit-more-item${danger ? ' danger' : ''}" role="menuitem" onclick="closeUnitMoreMenu(false); ${onclick}">${lucideIcon(icon, '', 15)}<span>${escapeHtml(label)}</span></button>`;
+}
+
+// Header overflow menu shared by room, container, and item views (only one is rendered at a time).
+function renderHeaderMoreMenu(ariaLabel, items) {
+  return `
+    <div class="unit-more-wrap">
+      <button
+        type="button"
+        id="unit-more-btn"
+        class="btn btn-secondary btn-sm unit-more-btn"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        aria-label="${escapeHtml(ariaLabel)}"
+        title="${escapeHtml(ariaLabel)}"
+        onclick="toggleUnitMoreMenu(event)"
+      >${lucideIcon('moreHorizontal', '', 16)}</button>
+      <div
+        id="unit-more-menu"
+        class="unit-more-menu"
+        role="menu"
+        aria-labelledby="unit-more-btn"
+        onkeydown="handleUnitMoreKeydown(event)"
+        hidden
+      >
+        ${items.filter(Boolean).join('')}
+      </div>
+    </div>
+  `;
+}
+
 function renderStickyContextBar(crumbs, rightActionsHtml = '') {
   return `
     <div class="sticky-context-bar no-print">
@@ -1077,12 +1111,17 @@ export function renderRoomView(roomId) {
       ${renderStickyContextBar(
     crumbs,
     `
-          <button type="button" class="btn btn-secondary btn-sm" onclick="openQuickPhotoModal({ kind: 'spot', id: ${safeRoomId}, title: 'Add space photo' })">
-            ${lucideIcon('camera', '', 15)} ${roomPhoto ? 'Change photo' : 'Add space photo'}
-          </button>
-          ${roomPhoto ? `<button type="button" class="btn btn-secondary btn-sm" onclick="editExistingPhoto({ kind: 'spot', id: ${safeRoomId}, photoUrl: '${escapeJsStr(roomPhoto)}', title: 'Edit space photo' })">${lucideIcon('scissors', '', 15)} Crop</button>` : ''}
-          <button type="button" class="btn btn-secondary btn-sm" onclick="openEditStorageModal(${safeRoomId})">Edit</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="openAddItemModal(${safeRoomId})">${lucideIcon('package', '', 15)} Add item</button>
           <button type="button" class="btn btn-primary btn-sm" onclick="openUnitSetupWizard(${safeRoomId})">+ Add container</button>
+          ${renderHeaderMoreMenu('More space actions', [
+      menuItem('smartphone', 'Add photos via Phone (QR)', `scanPhoneForLocation(${safeRoomId})`),
+      menuItem('camera', roomPhoto ? 'Change space photo' : 'Add space photo', `openQuickPhotoModal({ kind: 'spot', id: ${safeRoomId}, title: 'Add space photo' })`),
+      roomPhoto ? menuItem('scissors', 'Crop photo', `editExistingPhoto({ kind: 'spot', id: ${safeRoomId}, photoUrl: '${escapeJsStr(roomPhoto)}', title: 'Edit space photo' })`) : '',
+      menuItem('pencil', 'Rename, edit, or move', `openEditStorageModal(${safeRoomId})`),
+      menuItem('printer', 'Print QR label', `openPrintQrModal(${safeRoomId})`),
+      MENU_DIVIDER,
+      menuItem('x', 'Delete space', `deleteSpaceFromMenu(${safeRoomId})`, true),
+    ])}
         `
   )}
 
@@ -1103,19 +1142,13 @@ export function renderRoomView(roomId) {
           </div>
         </div>
 
-        <div class="room-hero-actions">
-          <button type="button" class="btn btn-secondary btn-sm" onclick="scanPhoneForLocation(${safeRoomId})">
-            ${lucideIcon('qrCode', '', 15)} Scan with Phone
-          </button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="openAddItemModal(${safeRoomId})">
-            ${lucideIcon('package', '', 15)} Add item
-          </button>
-          ${unassignedCount > 0 ? `
+        ${unassignedCount > 0 ? `
+          <div class="room-hero-actions">
             <button type="button" class="btn btn-secondary btn-sm" onclick="navToNeedsHome(true)">
               Place unassigned (${unassignedCount})
             </button>
-          ` : ''}
-        </div>
+          </div>
+        ` : ''}
       </div>
 
       ${subRooms.length > 0 ? `
@@ -1151,9 +1184,6 @@ export function renderRoomView(roomId) {
             <h2 class="home-section-title">Storage containers</h2>
             <span class="home-section-sub">${escapeHtml(pluralize(containers.length, 'container'))} in ${escapeHtml(room.name)}</span>
           </div>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="openUnitSetupWizard(${safeRoomId})">
-            ${lucideIcon('plus', '', 15)} New container
-          </button>
         </div>
         <div class="containers-grid">
           ${containers.map(c => renderContainerCard(c)).join('')}
@@ -1461,6 +1491,26 @@ export async function deleteContainerFromMenu(unitId) {
   }
 }
 
+export async function deleteSpaceFromMenu(roomId) {
+  closeUnitMoreMenu(false);
+  const room = state.locationMap.get(roomId);
+  if (!room) return;
+  if (!window.confirm(`Remove "${room.name}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`)) return;
+  try {
+    await apiDelete(`/api/v1/locations/${roomId}`, 'Could not delete space.');
+    showToast('Space deleted.');
+    const parent = room.parent_id ? state.locationMap.get(room.parent_id) : null;
+    await loadAllData();
+    if (parent && !isUnknownPlaceholder(parent)) {
+      navToRoom(parent.id, true);
+    } else {
+      navToHome();
+    }
+  } catch (err) {
+    showToast(err.message || 'Could not delete space.', 'error');
+  }
+}
+
 export function renderStorageUnitView(unitId) {
   const unit = state.locationMap.get(unitId);
   const workspace = document.getElementById('app-workspace');
@@ -1512,39 +1562,24 @@ export function renderStorageUnitView(unitId) {
     `
               ${isEditingGrid
       ? `<button type="button" class="btn btn-secondary btn-sm" onclick="cancelInlineGridDesigner()">${lucideIcon('x', '', 15)} Done editing</button>`
-      : `<button type="button" class="btn btn-secondary btn-sm" onclick="openInlineGridDesigner(${safeUnitId})">${lucideIcon('grid', '', 15)} ${hasGrid ? 'Edit grid' : 'Design grid'}</button>`
+      : `<button type="button" class="btn btn-secondary btn-sm" onclick="openAddItemModal(${safeUnitId})">${lucideIcon('plus', '', 15)} Add item</button>`
     }
-              <button type="button" class="btn btn-secondary btn-sm" onclick="openRapidEntryModal(${safeUnitId})">${lucideIcon('camera', '', 15)} Scan Items</button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="openAddItemModal(${safeUnitId})">${lucideIcon('plus', '', 15)} Add item</button>
-              <button type="button" class="btn btn-primary btn-sm" onclick="openAddStorageModal(${safeUnitId}, 'drawer')">${lucideIcon('plus', '', 15)} Add drawer</button>
-              <div class="unit-more-wrap">
-                <button
-                  type="button"
-                  id="unit-more-btn"
-                  class="btn btn-secondary btn-sm unit-more-btn"
-                  aria-haspopup="menu"
-                  aria-expanded="false"
-                  aria-label="More container actions"
-                  onclick="toggleUnitMoreMenu(event)"
-                >${lucideIcon('moreHorizontal', '', 16)}</button>
-                <div
-                  id="unit-more-menu"
-                  class="unit-more-menu"
-                  role="menu"
-                  aria-labelledby="unit-more-btn"
-                  onkeydown="handleUnitMoreKeydown(event)"
-                  hidden
-                >
-                  <button type="button" class="unit-more-item" role="menuitem" onclick="closeUnitMoreMenu(false); openGroupIntoBoxModal(${safeUnitId}, { createOnly: true })">${lucideIcon('package', '', 15)}<span>Add a Box / Kit</span></button>
-                  <button type="button" class="unit-more-item" role="menuitem" onclick="closeUnitMoreMenu(false); openEditStorageModal(${safeUnitId})">${lucideIcon('pencil', '', 15)}<span>Rename or edit</span></button>
-                  <button type="button" class="unit-more-item" role="menuitem" onclick="closeUnitMoreMenu(false); scanPhoneForLocation(${safeUnitId})">${lucideIcon('smartphone', '', 15)}<span>Add photos via Phone (QR)</span></button>
-                  <button type="button" class="unit-more-item" role="menuitem" onclick="closeUnitMoreMenu(false); openPrintQrModal(${safeUnitId})">${lucideIcon('printer', '', 15)}<span>Print QR label</span></button>
-                  <button type="button" class="unit-more-item" role="menuitem" onclick="openMoveContainerModal(${safeUnitId})">${lucideIcon('arrowRight', '', 15)}<span>${isUnassigned ? 'Attach to a space' : 'Move to another space'}</span></button>
-                  ${!isUnassigned ? `<button type="button" class="unit-more-item" role="menuitem" onclick="detachLocationFromSpace(${safeUnitId})">${lucideIcon('inbox', '', 15)}<span>Detach from space (Loose boxes)</span></button>` : ''}
-                  <div class="unit-more-divider" role="separator"></div>
-                  <button type="button" class="unit-more-item danger" role="menuitem" onclick="deleteContainerFromMenu(${safeUnitId})">${lucideIcon('x', '', 15)}<span>Delete container</span></button>
-                </div>
-              </div>
+              <button type="button" class="btn btn-primary btn-sm" onclick="openRapidEntryModal(${safeUnitId})">${lucideIcon('camera', '', 15)} Scan Items</button>
+              ${renderHeaderMoreMenu('More container actions', [
+      menuItem('plus', 'Add drawer', `openAddStorageModal(${safeUnitId}, 'drawer')`),
+      menuItem('package', 'Add a Box / Kit', `openGroupIntoBoxModal(${safeUnitId}, { createOnly: true })`),
+      isEditingGrid ? '' : menuItem('grid', hasGrid ? 'Edit drawer grid' : 'Design drawer / shelf grid', `openInlineGridDesigner(${safeUnitId})`),
+      MENU_DIVIDER,
+      menuItem('camera', photo ? 'Change photo' : 'Add photo', `openQuickPhotoModal({ kind: 'bin', id: ${safeUnitId}, title: '${photo ? 'Replace photo' : 'Add a photo'}' })`),
+      photo ? menuItem('scissors', 'Crop photo', `editExistingPhoto({ kind: 'bin', id: ${safeUnitId}, photoUrl: '${escapeJsStr(photo)}', title: 'Crop' })`) : '',
+      menuItem('smartphone', 'Add photos via Phone (QR)', `scanPhoneForLocation(${safeUnitId})`),
+      menuItem('pencil', 'Rename or edit', `openEditStorageModal(${safeUnitId})`),
+      menuItem('printer', 'Print QR label', `openPrintQrModal(${safeUnitId})`),
+      menuItem('arrowRight', isUnassigned ? 'Attach to a space' : 'Move to another space', `openMoveContainerModal(${safeUnitId})`),
+      !isUnassigned ? menuItem('inbox', 'Detach from space (Loose boxes)', `detachLocationFromSpace(${safeUnitId})`) : '',
+      MENU_DIVIDER,
+      menuItem('x', 'Delete container', `deleteContainerFromMenu(${safeUnitId})`, true),
+    ])}
             `
   )}
         </div>
@@ -1579,13 +1614,6 @@ export function renderStorageUnitView(unitId) {
                 <p class="place-hero-sub">
                   ${pluralize(drawers.length, 'drawer')} · ${pluralize(totalItemsCount, 'item')}${isUnassigned ? ' · Currently in Needs a home' : ` · In ${escapeHtml(toSentenceCase(parent.name))}`}${unit.description ? ` · ${escapeHtml(unit.description)}` : ''}
                 </p>
-                ${!hasGrid && !isEditingGrid ? `
-                  <div style="margin-top: 0.5rem;">
-                    <button type="button" class="btn btn-secondary btn-sm" onclick="openInlineGridDesigner(${safeUnitId})">
-                      ${lucideIcon('grid', '', 14)} Design drawer / shelf grid
-                    </button>
-                  </div>
-                ` : ''}
                 ${isUnassigned && moveChoices.length > 0 ? `
                   <div class="quick-move-pills" style="margin-top: 0.5rem;">
                     ${moveChoices.map(r => `
@@ -3438,6 +3466,13 @@ export async function deleteItemAttachment(itemId, attachmentId) {
 }
 
 let itemAttachmentsLoadSeq = 0;
+
+function syncItemAttachmentsVisibility(itemId, count) {
+  const card = document.getElementById(`item-attachments-card-${itemId}`);
+  const chip = document.getElementById(`item-attach-chip-${itemId}`);
+  if (card) card.hidden = count === 0;
+  if (chip) chip.hidden = count > 0;
+}
 const itemPdfSelectModeByItem = new Map();
 const itemPdfSelectionByItem = new Map();
 const itemPdfTitleDraftByItem = new Map();
@@ -3678,7 +3713,9 @@ async function loadItemAttachmentsIntoView(itemId) {
     if (reqSeq !== itemAttachmentsLoadSeq) return;
     const target = document.getElementById(`item-attachments-list-${itemId}`);
     if (!target) return;
-    if (!Array.isArray(attachments) || attachments.length === 0) {
+    const count = Array.isArray(attachments) ? attachments.length : 0;
+    syncItemAttachmentsVisibility(itemId, count);
+    if (count === 0) {
       target.innerHTML = `<p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">No datasheets, charts, or files attached yet.</p>`;
       return;
     }
@@ -3777,7 +3814,9 @@ export function renderItemView(itemId) {
     ? String(item.tags).split(',').map(t => t.trim()).filter(Boolean)
     : [];
   const statusLabel = formatItemStatusLabel(item.status);
-  const partsSectionHtml = renderItemPartsSection(item);
+  const hasParts = parseItemDescriptionAndParts(item.description).parts.length > 0;
+  const isEditingParts = Boolean(itemPartsEditorState && itemPartsEditorState.itemId === safeItemId);
+  const partsSectionHtml = (hasParts || isEditingParts) ? renderItemPartsSection(item) : '';
   const notesHtml = renderItemNotesSection(item);
   const isRenamingItem = itemRenameEditId === safeItemId;
   const savedPhotos = collectItemSavedPhotos(item, loc);
@@ -3804,15 +3843,14 @@ export function renderItemView(itemId) {
               Show in container →
             </button>
           ` : ''}
-          ${loc ? `
-            <button type="button" class="btn btn-secondary btn-sm" onclick="openPrintQrModal(${safeLocId})">
-              ${lucideIcon('printer', '', 15)} QR label
-            </button>
-          ` : ''}
-          <button type="button" class="btn btn-secondary btn-sm" onclick="openConvertItemToBoxModal(${safeItemId})">${lucideIcon('package', '', 14)} Convert to Box</button>
           <button type="button" class="btn btn-secondary btn-sm" onclick="editItemFromView(${safeItemId})">Edit</button>
-          <button type="button" class="btn btn-danger btn-sm" onclick="deleteItemFromView(${safeItemId})">Delete</button>
           <button type="button" class="btn btn-verify btn-sm" id="item-view-verify-btn" onclick="verifyItemFromView(${safeItemId})">✓ Seen today</button>
+          ${renderHeaderMoreMenu('More item actions', [
+      menuItem('package', 'Convert to Box', `openConvertItemToBoxModal(${safeItemId})`),
+      loc ? menuItem('printer', 'Print QR label', `openPrintQrModal(${safeLocId})`) : '',
+      MENU_DIVIDER,
+      menuItem('x', 'Delete item', `deleteItemFromView(${safeItemId})`, true),
+    ])}
         `
   )}
 
@@ -4165,39 +4203,33 @@ export function renderItemView(itemId) {
 
           ${partsSectionHtml}
 
-          <section class="item-detail-card">
-            ${notesHtml || `
-              <span class="detail-section-title">Notes</span>
-              <div class="item-notes-box" style="color: var(--text-muted); display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-                <span>No notes or specs added yet.</span>
-                <div style="display: flex; gap: 0.45rem; flex-wrap: wrap;">
-                  <button type="button" class="btn btn-secondary btn-sm" onclick="editItemFromView(${safeItemId})">Add notes</button>
-                </div>
-              </div>
-            `}
-          </section>
+          ${notesHtml ? `<section class="item-detail-card">${notesHtml}</section>` : ''}
+
+          <div class="item-add-chips" id="item-add-chips-${safeItemId}">
+            <input type="file" id="item-attachment-input-${safeItemId}" multiple accept="image/*,.pdf,.svg,.csv,.txt,.md,.json,.xlsx,.xls,.doc,.docx,.zip" style="display: none;" onchange="handleItemAttachmentUpload(${safeItemId}, event)">
+            ${partsSectionHtml ? '' : `<button type="button" class="item-add-chip" onclick="toggleItemPartsEditor(${safeItemId}, true)">${lucideIcon('plus', '', 13)} Add parts list</button>`}
+            ${notesHtml ? '' : `<button type="button" class="item-add-chip" onclick="editItemFromView(${safeItemId}, { focusId: 'item-description' })">${lucideIcon('plus', '', 13)} Add notes</button>`}
+            <button type="button" class="item-add-chip" id="item-attach-chip-${safeItemId}" onclick="triggerItemAttachmentUpload(${safeItemId})">${lucideIcon('plus', '', 13)} Attach file</button>
+          </div>
         </div>
 
         <div class="item-detail-col">
-          <section class="item-detail-card">
+          <section class="item-detail-card" id="item-attachments-card-${safeItemId}" hidden>
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem;">
               <span class="detail-section-title" style="margin-bottom: 0;">Datasheets, Charts &amp; Files</span>
-              <div>
-                <input type="file" id="item-attachment-input-${safeItemId}" multiple accept="image/*,.pdf,.svg,.csv,.txt,.md,.json,.xlsx,.xls,.doc,.docx,.zip" style="display: none;" onchange="handleItemAttachmentUpload(${safeItemId}, event)">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="triggerItemAttachmentUpload(${safeItemId})">+ Add PDF / chart / file</button>
-              </div>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="triggerItemAttachmentUpload(${safeItemId})">+ Add PDF / chart / file</button>
             </div>
             <div id="item-attachments-list-${safeItemId}" class="item-attachments-list">
               <p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">Loading files...</p>
             </div>
           </section>
 
-          <section class="item-detail-card">
-            <span class="detail-section-title">Activity History</span>
+          <details class="item-detail-card item-history-details" id="item-history-details-${safeItemId}">
+            <summary class="detail-section-title item-history-summary">Activity History</summary>
             <div id="item-audit-history-${safeItemId}" class="item-audit-list">
               <p class="right-col-empty">Loading history…</p>
             </div>
-          </section>
+          </details>
         </div>
       </div>
     </div>
@@ -4964,10 +4996,10 @@ export async function saveItemRename(itemId) {
   }
 }
 
-export function editItemFromView(itemId) {
+export function editItemFromView(itemId, options = {}) {
   const item = state.items.find(i => i.id === itemId);
   if (!item) return;
-  openAddItemModal(item.location_id, item);
+  openAddItemModal(item.location_id, item, options);
 }
 
 export async function deleteItemFromView(itemId) {

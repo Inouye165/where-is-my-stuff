@@ -87,18 +87,18 @@
 ## Phase 7: "Simple by Default, Powerful on Demand" UX Audit Backlog
 - [x] **Scan with Camera Modal (`#drawer-rapid-entry-modal`) & Drawer Scan Clutter**:
   - [x] Refactored into 2-step progressive disclosure (Step 1: Phone Camera vs. Upload Photo + compact location pill; Step 2: 1-line expandable part rows, auto-scan, smart save-mode visibility, and collapsed Advanced options).
-- [ ] **1. Add / Edit Item Modal (`#add-item-modal`)**:
-  - [ ] Show only *Item Name*, *compact Location pill (`[Change]`)*, *Qty*, and *Photo* upfront; collapse *Unit*, *Category*, *Brand/Model*, *Search keywords*, and *Notes* behind `+ More details ▾` (auto-expanded on edit when populated).
-- [ ] **2. Add Space / Container / Drawer Modal (`#add-storage-modal`)**:
-  - [ ] Lock/hide the 3-way type switcher when launched from a specific context, replace parent dropdown with a compact `in <Location> [Change]` pill, show *Name + Photo* upfront, and move *Auto-create drawers / grid*, *Notes*, and *Second context photo* behind optional toggles.
-- [ ] **3. Room View & Storage Container View Action Bars (`views.js`)**:
-  - [ ] Consolidate stacked/duplicate action bars to 1 primary CTA + 1 secondary CTA in the header bar, moving *Design grid*, *Edit*, *Change/Crop photo*, *Print QR*, *Move*, and *Delete* into a clean `⋯` menu.
-- [ ] **4. Interactive Grid Designer Toolbar (`grid-designer.js`)**:
-  - [ ] Show only *Rows × Cols*, interactive visual grid, and *Save Grid* upfront; group layout templates (*3×3*, *Dresser*, *Organizer*), *Fill empty*, *Auto-name*, and *Default slot type* under `Templates & tools ▾`, and reveal merge/split controls contextually on cell selection.
-- [ ] **5. Photo Crop & Straighten Editor (`#photo-editor-modal`)**:
-  - [ ] Default to drag-crop handles + *Rotate 90°* + *Use Photo*; collapse *Fine tilt (−0.1°/+0.1°)*, *Width/Height scale*, and *4-Corner Perspective Straighten* under `Adjust & Perspective ▾`.
-- [ ] **6. Item Detail Page (`renderItemView` in `views.js`)**:
-  - [ ] Hide empty optional cards (*Parts List*, *Notes*, *Datasheets & Reference Files*) behind compact `+ Add parts list` / `+ Add notes` / `+ Attach file` chips, collapse *Activity History* by default, and move *QR label* + *Delete* into a `⋯` menu.
-- [ ] **7. Global `+ Add` Action Sheet (`#add-action-sheet`)**:
-  - [ ] Trim overlapping storage cards down to 3 clear choices (*Scan with Camera*, *Add Item Manually*, *New Space or Container*) with automatic context pre-selection from the active view.
+- [x] **1. Add / Edit Item Modal (`#add-item-modal`)**:
+  - [x] Show only *Item Name*, *compact Location pill (`[Change]`)*, *Qty*, and *Photo* upfront; collapse *Unit*, *Category*, *Brand/Model*, *Search keywords*, and *Notes* behind `+ More details ▾` (auto-expanded on edit when populated).
+- [x] **2. Add Space / Container / Drawer Modal (`#add-storage-modal`)**:
+  - [x] Lock/hide the 3-way type switcher when launched from a specific context, replace parent dropdown with a compact `in <Location> [Change]` pill, show *Name + Photo* upfront, and move *Auto-create drawers / grid*, *Notes*, and *Second context photo* behind optional toggles.
+- [x] **3. Room View & Storage Container View Action Bars (`views.js`)**:
+  - [x] Consolidate stacked/duplicate action bars to 1 primary CTA + 1 secondary CTA in the header bar, moving *Design grid*, *Edit*, *Change/Crop photo*, *Print QR*, *Move*, and *Delete* into a clean `⋯` menu.
+- [x] **4. Interactive Grid Designer Toolbar (`grid-designer.js`)**:
+  - [x] Show only *Rows × Cols*, interactive visual grid, and *Save Grid* upfront; group layout templates (*3×3*, *Dresser*, *Organizer*), *Fill empty*, *Auto-name*, and *Default slot type* under `Templates & tools ▾`, and reveal merge/split controls contextually on cell selection.
+- [x] **5. Photo Crop & Straighten Editor (`#photo-editor-modal`)**:
+  - [x] Default to drag-crop handles + *Rotate 90°* + *Use Photo*; collapse *Fine tilt (−0.1°/+0.1°)*, *Width/Height scale*, and *4-Corner Perspective Straighten* under `Adjust & Perspective ▾`.
+- [x] **6. Item Detail Page (`renderItemView` in `views.js`)**:
+  - [x] Hide empty optional cards (*Parts List*, *Notes*, *Datasheets & Reference Files*) behind compact `+ Add parts list` / `+ Add notes` / `+ Attach file` chips, collapse *Activity History* by default, and move *QR label* + *Delete* into a `⋯` menu.
+- [x] **7. Global `+ Add` Action Sheet (`#add-action-sheet`)**:
+  - [x] Trim overlapping storage cards down to 3 clear choices (*Scan with Camera*, *Add Item Manually*, *New Space or Container*) with automatic context pre-selection from the active view.
 

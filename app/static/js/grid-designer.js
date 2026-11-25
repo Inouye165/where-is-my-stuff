@@ -637,25 +637,32 @@ export function renderInlineGridDesignerHtml() {
           </label>
         </div>
 
-        <div class="gd-presets-group">
-          <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('3x3')">3×3</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('4x4')">4×4</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('dresser_3_2')">Dresser (3 + 2×2)</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('organizer_split')">Parts Organizer</button>
-        </div>
+        <details class="gd-tools-details" id="gd-tools-details">
+          <summary class="btn btn-secondary btn-sm gd-tools-summary">Templates &amp; tools ▾</summary>
+          <div class="gd-tools-panel">
+            <div class="gd-presets-group">
+              <span class="gd-tools-label">Templates</span>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('3x3')">3×3</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('4x4')">4×4</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('dresser_3_2')">Dresser (3 + 2×2)</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('organizer_split')">Parts Organizer</button>
+            </div>
 
-        <div class="gd-mode-group">
-          <select id="gd-default-type" class="gd-type-select" onchange="setDesignerDefaultType(this.value)" aria-label="Default slot type" title="Type for new &amp; auto-named slots">
-            ${Object.entries(SLOT_TYPE_LABELS).map(([val, label]) => `
-              <option value="${val}" ${designer.defaultType === val ? 'selected' : ''}>${label}</option>
-            `).join('')}
-          </select>
-          <button type="button" id="gd-multi-toggle" class="btn btn-secondary btn-sm ${designer.multiSelectMode ? 'active' : ''}" aria-pressed="${designer.multiSelectMode ? 'true' : 'false'}" onclick="toggleDesignerMultiSelect()">
-            Select multiple
-          </button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="fillAllEmptyDesignerCells()">Fill empty</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="autoNameAllDesignerSlots()">Auto-name</button>
-        </div>
+            <div class="gd-mode-group">
+              <span class="gd-tools-label">Tools</span>
+              <select id="gd-default-type" class="gd-type-select" onchange="setDesignerDefaultType(this.value)" aria-label="Default slot type" title="Type for new &amp; auto-named slots">
+                ${Object.entries(SLOT_TYPE_LABELS).map(([val, label]) => `
+                  <option value="${val}" ${designer.defaultType === val ? 'selected' : ''}>${label}</option>
+                `).join('')}
+              </select>
+              <button type="button" id="gd-multi-toggle" class="btn btn-secondary btn-sm ${designer.multiSelectMode ? 'active' : ''}" aria-pressed="${designer.multiSelectMode ? 'true' : 'false'}" onclick="toggleDesignerMultiSelect()">
+                Select multiple
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="fillAllEmptyDesignerCells()">Fill empty</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="autoNameAllDesignerSlots()">Auto-name</button>
+            </div>
+          </div>
+        </details>
       </div>
 
       <div id="gd-inspector" class="gd-inspector"></div>
@@ -903,6 +910,7 @@ export function applyGridPreset(presetName) {
 export function toggleDesignerMultiSelect() {
   designer.multiSelectMode = !designer.multiSelectMode;
   syncDesignerControls();
+  renderDesignerCanvas();
 }
 
 export function toggleRowSectionBreak(rowNum) {
@@ -1265,7 +1273,7 @@ function renderDesignerCanvas() {
   if (designer.selectedKeys.size === 0) {
     inspectorEl.innerHTML = `
       <div class="gd-inspector-hint">
-        Tap a drawer to rename or resize it. Use <strong>Select multiple</strong> (or Shift+Click) to combine drawers into a larger one, or click <strong>—</strong> next to a row number to add a section divider.
+        Tap a drawer to rename, resize, or combine it with neighbours. Click <strong>—</strong> next to a row number to add a section divider.
       </div>
     `;
   } else if (designer.selectedKeys.size === 1) {
@@ -1317,6 +1325,9 @@ function renderDesignerCanvas() {
               <button type="button" class="btn btn-secondary btn-sm" onclick="resizeSelectedDesignerSlot('row', 1)">+</button>
             </div>
             ${isMerged ? `<button type="button" class="btn btn-secondary btn-sm" onclick="splitSelectedDesignerSlot()">Split</button>` : ''}
+            ${designer.multiSelectMode
+              ? `<span class="gd-inspector-inline-hint">Tap more drawers to combine</span>`
+              : `<button type="button" class="btn btn-secondary btn-sm" onclick="toggleDesignerMultiSelect()">Combine with others…</button>`}
             <button type="button" class="btn btn-danger btn-sm" onclick="removeSelectedDesignerSlot()">Remove</button>
           </div>
         </div>

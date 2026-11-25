@@ -249,7 +249,7 @@ def test_consumer_ux_navigation_and_jargon_free_markup():
     assert "Add to Inventory" in html
     assert "Scan with Camera" in html
     assert "Add Item Manually" in html
-    assert "Add Location or Container" in html
+    assert "New Space or Container" in html
     for slot in ("Spaces", "Items", "More"):
         assert slot in html, f"Missing navigation slot '{slot}' in index.html"
     assert "In Use" not in html
