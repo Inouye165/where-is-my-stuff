@@ -2,9 +2,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
 import secrets
-from typing import List, Optional
+from typing import Any, List, Optional, cast
 from fastapi import status
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from app.core.exceptions import AppError, BadRequestError, NotFoundError
 from app.core.network import build_qr_png, resolve_effective_base_url
@@ -64,7 +65,7 @@ class UnitSetupService:
             unit_id=rec.unit_id,
             unit_name=rec.unit_name,
             current_drawer_index=rec.current_drawer_index,
-            unit_creating=bool(rec.unit_creating),
+            unit_creating=rec.unit_creating,
         )
 
     @staticmethod
@@ -90,10 +91,10 @@ class UnitSetupService:
         token = secrets.token_urlsafe(24)
 
         self._prune_expired(db, now)
-        active_count = int(db.execute(select(func.count(UnitSetupSessionRecord.token))).scalar() or 0)
+        active_count = db.execute(select(func.count(UnitSetupSessionRecord.token))).scalar() or 0
         if active_count >= self.MAX_SESSIONS:
             self._prune_expired(db, now, include_recently_expired=True)
-            active_count = int(db.execute(select(func.count(UnitSetupSessionRecord.token))).scalar() or 0)
+            active_count = db.execute(select(func.count(UnitSetupSessionRecord.token))).scalar() or 0
         if active_count >= self.MAX_SESSIONS:
             raise AppError(
                 "Too many active unit setup sessions. Please wait and try again.",
@@ -222,14 +223,17 @@ class UnitSetupService:
         data: UnitSetupCreateUnitRequest,
     ) -> UnitSetupSessionStatusResponse:
         self.require_active_session(db, token)
-        reserved = db.execute(
-            update(UnitSetupSessionRecord)
-            .where(
-                UnitSetupSessionRecord.token == token,
-                UnitSetupSessionRecord.unit_id.is_(None),
-                UnitSetupSessionRecord.unit_creating.is_(False),
-            )
-            .values(unit_creating=True)
+        reserved = cast(
+            CursorResult[Any],
+            db.execute(
+                update(UnitSetupSessionRecord)
+                .where(
+                    UnitSetupSessionRecord.token == token,
+                    UnitSetupSessionRecord.unit_id.is_(None),
+                    UnitSetupSessionRecord.unit_creating.is_(False),
+                )
+                .values(unit_creating=True)
+            ),
         )
         if reserved.rowcount != 1:
             raise BadRequestError("A storage unit has already been created for this setup session.")
