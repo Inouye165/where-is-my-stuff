@@ -18,6 +18,9 @@ _CAPTURE_SESSION_PATH_RE = re.compile(
 _UNIT_SETUP_SESSION_PATH_RE = re.compile(
     r"^/api/v1/unit-setup/sessions/[A-Za-z0-9_\-]+(?:/(?:qr|connect|unit|progress))?$"
 )
+_LABEL_SCAN_SESSION_PATH_RE = re.compile(
+    r"^/api/v1/label-scan/sessions/[A-Za-z0-9_\-]+(?:/(?:qr|upload))?$"
+)
 _PUBLIC_API_PATHS = {
     "/api/v1/health",
     "/api/v1/auth/status",
@@ -114,6 +117,8 @@ def is_public_or_qr_scoped_path(method: str, path: str) -> bool:
     if _CAPTURE_SESSION_PATH_RE.match(path):
         return True
     if _UNIT_SETUP_SESSION_PATH_RE.match(path):
+        return True
+    if _LABEL_SCAN_SESSION_PATH_RE.match(path):
         return True
     return False
 

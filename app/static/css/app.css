@@ -11014,3 +11014,447 @@ textarea {
 .app-workspace.is-view-fit-width .needs-home-view {
   max-width: none !important;
 }
+
+/* ==========================================================================
+   Auto-Label Compartments from Photo Modal (.lscan-*)
+   ========================================================================== */
+.lscan-modal-card {
+  width: min(94vw, 820px);
+}
+
+.lscan-busy-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
+  padding: 2.5rem 1rem;
+  text-align: center;
+}
+
+.lscan-busy-text {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.lscan-grid-setup-bar,
+.lscan-grid-pill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  margin-bottom: 0.9rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-subtle);
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.lscan-dim-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lscan-dim-label input {
+  width: 64px;
+  padding: 0.3rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-input);
+  color: var(--text-primary);
+}
+
+.lscan-qr-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.2rem;
+  padding: 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-subtle);
+}
+
+.lscan-qr-img {
+  width: 176px;
+  height: 176px;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+}
+
+.lscan-qr-copy {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.lscan-qr-copy strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.lscan-qr-copy p {
+  margin: 0 0 0.6rem;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.lscan-url-hint {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.lscan-desktop-fallback {
+  margin-top: 0.9rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.lscan-canvas-frame {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 0.5rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: #060a13;
+  overflow: auto;
+  max-height: 58vh;
+}
+
+#lscan-align-canvas {
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.lscan-align-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.lscan-align-step-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.lscan-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.lscan-zoom-group .btn.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #0b1120;
+}
+
+.lscan-align-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.lscan-align-hint {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.lscan-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.85rem;
+}
+
+.lscan-pill {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  border-radius: var(--radius-full);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lscan-pill.active {
+  border-color: var(--accent-primary);
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+
+.lscan-pill.is-green.active {
+  border-color: var(--success-500);
+  background: var(--success-bg);
+  color: var(--success-500);
+}
+
+.lscan-pill.is-yellow.active {
+  border-color: var(--amber-500);
+  background: var(--amber-tile-hover);
+  color: var(--amber-text);
+}
+
+.lscan-pill.is-red.active {
+  border-color: var(--danger-500);
+  background: var(--danger-bg);
+  color: var(--danger-500);
+}
+
+.lscan-zones-panel {
+  margin-bottom: 0.9rem;
+  padding: 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: var(--danger-bg);
+}
+
+.lscan-zones-hdr {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.65rem;
+}
+
+.lscan-zones-hdr strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--danger-500);
+}
+
+.lscan-zones-hdr span {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.lscan-zones-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.lscan-zone-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  flex: 1 1 260px;
+}
+
+.lscan-zone-chip.is-active {
+  border-color: var(--accent-primary);
+}
+
+.lscan-zone-chip strong {
+  display: block;
+  font-size: 0.86rem;
+  color: var(--text-primary);
+}
+
+.lscan-zone-chip span {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.lscan-zone-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.lscan-rows-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  max-height: 44vh;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+}
+
+.lscan-row {
+  display: grid;
+  grid-template-columns: auto 84px minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.6rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+}
+
+.lscan-row.tier-green {
+  border-left: 4px solid var(--success-500);
+}
+
+.lscan-row.tier-yellow {
+  border-left: 4px solid var(--amber-500);
+  background: var(--amber-tile-bg);
+}
+
+.lscan-row.tier-red {
+  border-left: 4px solid var(--danger-500);
+  background: rgba(239, 68, 68, 0.07);
+}
+
+.lscan-thumb-btn {
+  display: block;
+  width: 84px;
+  height: 54px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+  cursor: zoom-in;
+}
+
+.lscan-thumb-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.lscan-thumb-empty {
+  width: 84px;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px dashed var(--border-subtle);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.lscan-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.4rem;
+}
+
+.lscan-coord {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 0.14rem 0.42rem;
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--text-primary);
+}
+
+.lscan-badge {
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 0.14rem 0.48rem;
+  border-radius: var(--radius-full);
+}
+
+.lscan-badge.is-green {
+  background: var(--success-bg);
+  color: var(--success-500);
+}
+
+.lscan-badge.is-yellow {
+  background: var(--amber-tile-hover);
+  color: var(--amber-text);
+}
+
+.lscan-badge.is-red {
+  background: var(--danger-bg);
+  color: var(--danger-500);
+}
+
+.lscan-badge.is-empty {
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+}
+
+.lscan-existing,
+.lscan-reason {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.lscan-row-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 0.45rem;
+}
+
+.lscan-name-input,
+.lscan-desc-input {
+  width: 100%;
+  padding: 0.38rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.lscan-options-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.lscan-option-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.lscan-empty-filter {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+@media (max-width: 640px) {
+  .lscan-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .lscan-row-thumb {
+    grid-column: 1 / -1;
+  }
+  .lscan-row-inputs {
+    grid-template-columns: 1fr;
+  }
+}

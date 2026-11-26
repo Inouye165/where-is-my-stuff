@@ -1608,6 +1608,7 @@ export function renderStorageUnitView(unitId) {
       menuItem('plus', 'Add drawer', `openAddStorageModal(${safeUnitId}, 'drawer')`),
       menuItem('package', 'Add a Box / Kit', `openGroupIntoBoxModal(${safeUnitId}, { createOnly: true })`),
       isEditingGrid ? '' : menuItem('grid', hasGrid ? 'Edit drawer grid' : 'Design drawer / shelf grid', `openInlineGridDesigner(${safeUnitId})`),
+      menuItem('qrCode', 'Auto-label compartments from photo', `openLabelScanModal(${safeUnitId})`),
       MENU_DIVIDER,
       menuItem('camera', photo ? 'Change photo' : 'Add photo', `openQuickPhotoModal({ kind: 'bin', id: ${safeUnitId}, title: '${photo ? 'Replace photo' : 'Add a photo'}' })`),
       photo ? menuItem('scissors', 'Crop photo', `editExistingPhoto({ kind: 'bin', id: ${safeUnitId}, photoUrl: '${escapeJsStr(photo)}', title: 'Crop' })`) : '',
@@ -1729,6 +1730,11 @@ export function renderStorageUnitView(unitId) {
               <div class="unit-grid-chassis-hdr">
                 <span class="unit-grid-chassis-title">${lucideIcon('grid', '', 14)} Drawer layout</span>
                 <div class="unit-grid-chassis-right">
+                  ${(drawers.length >= 12 || (Number(unit.grid_rows) * Number(unit.grid_cols) >= 12)) ? `
+                    <button type="button" class="btn btn-secondary btn-xs" onclick="openLabelScanModal(${safeUnitId})" title="Auto-label compartments from one photo via QR or upload">
+                      ${lucideIcon('qrCode', '', 13)} Auto-label
+                    </button>
+                  ` : ''}
                   <div class="unit-grid-zoom-controls" role="group" aria-label="Grid zoom">
                     <button type="button" class="unit-zoom-btn ${zoomMode === 'fit' ? 'active' : ''}" data-zoom-mode="fit" onclick="setUnitGridZoom(${safeUnitId}, 'fit')" title="Zoom out to see full organizer">
                       ${lucideIcon('maximize', '', 12)} <span id="unit-zoom-fit-label-${safeUnitId}">View all</span>

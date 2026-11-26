@@ -107,7 +107,7 @@ class RequestContextMiddleware:
                     resp_headers["Content-Security-Policy"] = (
                         "default-src 'none'; style-src 'unsafe-inline'; sandbox"
                     )
-                elif lower_path in ("/capture.html", "/setup.html"):
+                elif lower_path in ("/capture.html", "/setup.html", "/label-capture.html"):
                     resp_headers["Content-Security-Policy"] = (
                         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
                         "img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; "

@@ -12,6 +12,8 @@ _LOC_FIND_IMAGES_RE = re.compile(r"^/api/v1/locations/\d+/find-item-images$")
 _LOC_PHOTOS_RE = re.compile(r"^/api/v1/locations/\d+/photos(?:/attach)?$")
 _ITEM_ATTACHMENTS_RE = re.compile(r"^/api/v1/items/\d+/attachments(?:/from-photos-pdf)?$")
 _CAPTURE_UPLOAD_RE = re.compile(r"^/api/v1/photos/capture-sessions/[A-Za-z0-9_\-]+/upload$")
+_LABEL_SCAN_UPLOAD_RE = re.compile(r"^/api/v1/label-scan/sessions/[A-Za-z0-9_\-]+/upload$")
+_LABEL_SCAN_ANALYZE_RE = re.compile(r"^/api/v1/label-scan/sessions/[A-Za-z0-9_\-]+/analyze$")
 
 
 class SlidingWindowRateLimiter:
@@ -77,7 +79,7 @@ def match_rate_limit_bucket(method: str, path: str) -> Optional[Tuple[str, int]]
         return None
     if path == "/api/v1/auth/login":
         return ("auth", settings.RATE_LIMIT_AUTH_PER_MIN)
-    if path == "/api/v1/search/photo" or _VISION_ANALYZE_RE.match(path):
+    if path == "/api/v1/search/photo" or _VISION_ANALYZE_RE.match(path) or _LABEL_SCAN_ANALYZE_RE.match(path):
         return ("vision", settings.RATE_LIMIT_VISION_PER_MIN)
     if (
         path in ("/api/v1/system/backup", "/api/v1/system/cleanup-unused-crops")
@@ -86,8 +88,15 @@ def match_rate_limit_bucket(method: str, path: str) -> Optional[Tuple[str, int]]
     ):
         return ("system", settings.RATE_LIMIT_SYSTEM_PER_MIN)
     if (
-        path in ("/api/v1/photos/upload", "/api/v1/photos/capture-sessions", "/api/v1/unit-setup/sessions")
+        path
+        in (
+            "/api/v1/photos/upload",
+            "/api/v1/photos/capture-sessions",
+            "/api/v1/unit-setup/sessions",
+            "/api/v1/label-scan/sessions",
+        )
         or _CAPTURE_UPLOAD_RE.match(path)
+        or _LABEL_SCAN_UPLOAD_RE.match(path)
         or _LOC_PHOTOS_RE.match(path)
         or _ITEM_ATTACHMENTS_RE.match(path)
     ):

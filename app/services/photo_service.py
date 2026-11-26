@@ -93,7 +93,12 @@ class PhotoService:
             raise BadRequestError("Resolved path escapes upload root directory.")
         return candidate
 
-    def process_and_save(self, file: UploadFile) -> dict[str, Any]:
+    def process_and_save(
+        self,
+        file: UploadFile,
+        max_dimension: Optional[int] = None,
+        jpeg_quality: int = 82,
+    ) -> dict[str, Any]:
         settings.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
         settings.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
         filename = file.filename or ""
@@ -139,7 +144,8 @@ class PhotoService:
         try:
             with Image.open(io.BytesIO(raw_bytes)) as opened:
                 transposed = ImageOps.exif_transpose(opened)
-                max_dim = settings.MAX_IMAGE_DIMENSION
+                max_dim = int(max_dimension) if max_dimension and max_dimension > 0 else settings.MAX_IMAGE_DIMENSION
+                clamped_quality = max(50, min(95, int(jpeg_quality)))
 
                 save_image = transposed.copy()
                 if save_image.width > max_dim or save_image.height > max_dim:
@@ -150,9 +156,9 @@ class PhotoService:
 
                 save_kwargs: dict[str, Any] = {}
                 if pil_save_format == "JPEG":
-                    save_kwargs = {"quality": 82, "optimize": True}
+                    save_kwargs = {"quality": clamped_quality, "optimize": True}
                 elif pil_save_format == "WEBP":
-                    save_kwargs = {"quality": 82}
+                    save_kwargs = {"quality": clamped_quality}
 
                 save_image.save(tmp_orig, format=pil_save_format, **save_kwargs)
 
@@ -217,7 +223,15 @@ class PhotoService:
             return None
 
         cropped = img.crop(box)
+        return self.save_pil_crop(cropped)
+
+    def save_pil_crop(self, cropped: Image.Image) -> Optional[str]:
+        """Atomically save a PIL image crop as an ai_crop JPEG + WebP thumbnail."""
+        if cropped is None or cropped.width < 12 or cropped.height < 12:
+            return None
         if cropped.mode in ("RGBA", "P", "LA"):
+            cropped = cropped.convert("RGB")
+        elif cropped.mode not in ("RGB", "L"):
             cropped = cropped.convert("RGB")
 
         settings.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)

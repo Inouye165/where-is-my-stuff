@@ -30,3 +30,18 @@ class UnitSetupSessionRecord(Base):
     unit_creating: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class LabelScanSessionRecord(Base):
+    __tablename__ = "label_scan_sessions"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    container_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    container_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="waiting_for_photo")
+    overview_photo_path: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    active_zone_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    closeup_photos_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    results_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

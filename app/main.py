@@ -6,7 +6,7 @@ import anyio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.api import auth, items, locations, photos, search, system, unit_setup
+from app.api import auth, items, label_scan, locations, photos, search, system, unit_setup
 from app.core.config import settings
 from app.core.database import engine
 from app.core.exceptions import NotFoundError, register_exception_handlers
@@ -111,6 +111,7 @@ def create_app() -> FastAPI:
     application.include_router(photos.router, prefix="/api/v1")
     application.include_router(search.router, prefix="/api/v1")
     application.include_router(unit_setup.router, prefix="/api/v1")
+    application.include_router(label_scan.router, prefix="/api/v1")
 
     application.mount("/uploads", uploads_mount, name="uploads")
 

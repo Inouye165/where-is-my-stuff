@@ -143,6 +143,16 @@ def _migration_008_persistent_sessions(conn: Connection) -> None:
     )
 
 
+def _migration_009_label_scan_sessions(conn: Connection) -> None:
+    Base.metadata.create_all(bind=conn)
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_label_scan_sessions_expires_at ON label_scan_sessions (expires_at)")
+    )
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_label_scan_sessions_container_id ON label_scan_sessions (container_id)")
+    )
+
+
 MIGRATIONS: List[MigrationStep] = [
     (1, "001_initial_schema", _migration_001_initial_schema),
     (2, "002_performance_indexes", _migration_002_performance_indexes),
@@ -152,6 +162,7 @@ MIGRATIONS: List[MigrationStep] = [
     (6, "006_location_label", _migration_006_location_label),
     (7, "007_grid_slot_unique_index", _migration_007_grid_slot_unique_index),
     (8, "008_persistent_sessions", _migration_008_persistent_sessions),
+    (9, "009_label_scan_sessions", _migration_009_label_scan_sessions),
 ]
 
 

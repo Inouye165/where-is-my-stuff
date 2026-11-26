@@ -68,6 +68,7 @@ class Settings(BaseModel):
 
     MAX_IMAGE_UPLOAD_SIZE_MB: int = Field(default_factory=lambda: _env_int("MAX_IMAGE_UPLOAD_SIZE_MB", 15))
     MAX_IMAGE_DIMENSION: int = Field(default_factory=lambda: _env_int("MAX_IMAGE_DIMENSION", 1600))
+    MAX_LABEL_SCAN_DIMENSION: int = Field(default_factory=lambda: _env_int("MAX_LABEL_SCAN_DIMENSION", 4096))
     THUMBNAIL_MAX_DIMENSION: int = Field(default_factory=lambda: _env_int("THUMBNAIL_MAX_DIMENSION", 400))
     MAX_IMAGE_PIXELS: int = Field(default_factory=lambda: _env_int("MAX_IMAGE_PIXELS", 36000000))
 
