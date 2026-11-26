@@ -3326,3 +3326,183 @@ def test_convert_item_to_box_keeps_photo_reference_registered(client, db_session
     assert resp.status_code == 201
     assert photo_service._inflight_refs.get(up["original_path"], 0) == 0
     assert photo_service.cleanup_unreferenced_photo(db_session, up["original_path"]) is False
+
+
+def test_unit_quick_search_in_page_highlight_and_grid_zoom():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_dir = (Path(__file__).resolve().parent.parent / "app" / "static" / "js").as_posix()
+    script = f"""
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    globalThis.requestAnimationFrame = (fn) => fn && fn();
+    globalThis.window = {{
+      location: {{ origin: 'http://localhost', hash: '#/unit/10', pathname: '/' }},
+      innerHeight: 900,
+      addEventListener() {{}},
+      history: {{ pushState() {{}}, replaceState() {{}} }},
+    }};
+    globalThis.history = globalThis.window.history;
+
+    function makeEl(id = '') {{
+      const classes = new Set();
+      return {{
+        id,
+        value: '',
+        innerHTML: '',
+        textContent: '',
+        style: {{}},
+        dataset: {{}},
+        scrollWidth: 1200,
+        scrollHeight: 1600,
+        clientWidth: 900,
+        scrolled: null,
+        classList: {{
+          add: (...c) => c.forEach(x => classes.add(x)),
+          remove: (...c) => c.forEach(x => classes.delete(x)),
+          toggle: (c, force) => (force === undefined ? (classes.has(c) ? classes.delete(c) : classes.add(c)) : (force ? classes.add(c) : classes.delete(c))),
+          contains: (c) => classes.has(c),
+        }},
+        scrollIntoView(opts) {{ this.scrolled = opts; }},
+        getBoundingClientRect() {{ return {{ top: 240 }}; }},
+      }};
+    }}
+
+    const elements = {{
+      'app-workspace': makeEl('app-workspace'),
+      'unit-quick-search-results': makeEl('unit-quick-search-results'),
+      'unit-quick-search-clear': makeEl('unit-quick-search-clear'),
+      'cgrid-wrap-10': makeEl('cgrid-wrap-10'),
+      'cgrid-board-10': makeEl('cgrid-board-10'),
+      'unit-zoom-fit-label-10': makeEl('unit-zoom-fit-label-10'),
+      'drawer-card-102': makeEl('drawer-card-102'),
+      'home-search-panel': makeEl('home-search-panel'),
+    }};
+    elements['drawer-card-102'].classList.add('cgrid-slot');
+
+    globalThis.document = {{
+      title: '',
+      getElementById: (id) => elements[id] || null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+    }};
+
+    const stateMod = await import('file://{js_dir}/state.js');
+    const viewsMod = await import('file://{js_dir}/views.js');
+    const routerMod = await import('file://{js_dir}/router.js');
+
+    const unit = {{
+      id: 10,
+      name: 'Yellow storage organizer',
+      location_type: 'container',
+      parent_id: 1,
+      grid_rows: 16,
+      grid_cols: 8,
+      total_item_count: 2,
+      children: [
+        {{ id: 101, name: 'RPI 2040 Mini-Zero', label: 'A1', location_type: 'drawer', parent_id: 10, grid_row: 1, grid_col: 1, grid_row_span: 1, grid_col_span: 1, total_item_count: 1, children: [] }},
+        {{
+          id: 102,
+          name: 'ESP32 BATCH A',
+          label: 'M2',
+          location_type: 'drawer',
+          parent_id: 10,
+          grid_row: 12,
+          grid_col: 4,
+          grid_row_span: 1,
+          grid_col_span: 1,
+          total_item_count: 1,
+          children: [
+            {{ id: 103, name: 'Sub Box', label: 'SB9', location_type: 'box', parent_id: 102, total_item_count: 1, children: [] }}
+          ],
+        }},
+      ],
+    }};
+    const room = {{ id: 1, name: 'Office', location_type: 'room', parent_id: null, children: [unit] }};
+    stateMod.state.locations = [room];
+    stateMod.indexLocations();
+    stateMod.state.items = [
+      {{ id: 501, name: 'ESP32-S3 DevKit', location_id: 103 }}
+    ];
+
+    // 1. Unit quick search finds by label, coordinate, and nested box label
+    const byLabel = viewsMod.searchUnitContainerLabels(unit, 'M2');
+    if (!byLabel.length || byLabel[0].loc.id !== 102 || byLabel[0].coord !== 'D12') {{
+      throw new Error('Expected M2 label match for drawer 102 at D12: ' + JSON.stringify(byLabel));
+    }}
+    const byNested = viewsMod.searchUnitContainerLabels(unit, 'SB9');
+    if (!byNested.length || byNested[0].loc.id !== 103 || byNested[0].targetDrawerId !== 102) {{
+      throw new Error('Expected nested box SB9 to resolve targetDrawerId 102: ' + JSON.stringify(byNested));
+    }}
+
+    // 2. Render unit view includes quick search input and zoom controls
+    stateMod.state.currentView = 'unit';
+    stateMod.state.currentLocationId = 10;
+    viewsMod.renderStorageUnitView(10);
+    const html = elements['app-workspace'].innerHTML;
+    if (!html.includes('unit-quick-search-input') || !html.includes('View all') || !html.includes('Width') || !html.includes('50%')) {{
+      throw new Error('Unit view missing quick search or zoom controls');
+    }}
+
+    // 3. In-page locateDrawerInUnit highlights and scrolls into view without re-rendering
+    const beforeHtml = elements['app-workspace'].innerHTML;
+    routerMod.locateDrawerInUnit(10, 103);
+    if (elements['app-workspace'].innerHTML !== beforeHtml) {{
+      throw new Error('locateDrawerInUnit should not re-render when already on unit page');
+    }}
+    const card = elements['drawer-card-102'];
+    if (!card.classList.contains('spotlight-highlight') || !card.classList.contains('is-highlighted')) {{
+      throw new Error('Expected drawer-card-102 to be highlighted');
+    }}
+    if (!card.scrolled || card.scrolled.block !== 'center' || card.scrolled.inline !== 'center') {{
+      throw new Error('Expected scrollIntoView centered on both axes: ' + JSON.stringify(card.scrolled));
+    }}
+
+    // 4. Zoom out and Fit all apply zoom and is-zoomed-out class
+    viewsMod.setUnitGridZoom(10, '0.5');
+    if (elements['cgrid-board-10'].style.zoom !== '0.5' || !elements['cgrid-wrap-10'].classList.contains('is-zoomed-out')) {{
+      throw new Error('Expected 50% zoom to apply zoom=0.5 and is-zoomed-out');
+    }}
+    viewsMod.setUnitGridZoom(10, 'fit');
+    const fitZoom = parseFloat(elements['cgrid-board-10'].style.zoom);
+    if (!(fitZoom > 0.2 && fitZoom < 0.85)) {{
+      throw new Error('Expected fit zoom to scale down large 8x16 board, got ' + fitZoom);
+    }}
+
+    // 5. Home search includes Locate link for drawer inside unit
+    stateMod.state.homeSearchQuery = 'M2';
+    stateMod.state.homeSearchResults = [];
+    viewsMod.renderHomeSearchPanel();
+    const homeHtml = elements['home-search-panel'].innerHTML;
+    if (!homeHtml.includes('locateDrawerInUnit(10, 102)')) {{
+      throw new Error('Expected home search panel to include locateDrawerInUnit link');
+    }}
+
+    // 6. Uniform 2x2 row bands collapse into a single row header, while mixed 2x2 + 1x1 keeps separate rows
+    const gridMod = await import('file://{js_dir}/grid-designer.js');
+    const uniformBands = gridMod.computeUniformRowBands(2, 4, [
+      {{ grid_row: 1, grid_col: 1, grid_row_span: 2, grid_col_span: 2 }},
+      {{ grid_row: 1, grid_col: 3, grid_row_span: 2, grid_col_span: 2 }},
+    ]);
+    if (uniformBands.length !== 1 || uniformBands[0].label !== '1–2') {{
+      throw new Error('Expected uniform 2x2 row to collapse into 1–2: ' + JSON.stringify(uniformBands));
+    }}
+    const mixedBands = gridMod.computeUniformRowBands(2, 4, [
+      {{ grid_row: 1, grid_col: 1, grid_row_span: 2, grid_col_span: 2 }},
+      {{ grid_row: 1, grid_col: 3, grid_row_span: 1, grid_col_span: 1 }},
+      {{ grid_row: 2, grid_col: 3, grid_row_span: 1, grid_col_span: 1 }},
+    ]);
+    if (mixedBands.length !== 2 || mixedBands[0].label !== '1' || mixedBands[1].label !== '2') {{
+      throw new Error('Expected mixed 2x2 + 1x1 rows to stay separate 1 and 2: ' + JSON.stringify(mixedBands));
+    }}
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Frontend unit quick search / zoom test failed:\n{proc.stderr}"
+

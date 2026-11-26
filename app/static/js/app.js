@@ -114,9 +114,11 @@ import {
   openInlineGridDesigner,
   removeSelectedDesignerSlot,
   resizeSelectedDesignerSlot,
+  redoGridDesigner,
   saveGridDesigner,
   setDesignerDefaultType,
   splitSelectedDesignerSlot,
+  undoGridDesigner,
   toggleDesignerMultiSelect,
   toggleRowSectionBreak,
   updateGridDesignerDimensions,
@@ -184,8 +186,11 @@ import {
 import {
   adjustDrawerItemQty,
   adjustItemQty,
+  applyGlobalViewOptions,
+  applyUnitGridZoom,
   clearAllCatalogFilters,
   clearHomeSearch,
+  clearUnitQuickSearch,
   closeUnitMoreMenu,
   deleteContainerFromMenu,
   deleteSpaceFromMenu,
@@ -201,6 +206,8 @@ import {
   handleItemsSearchInput,
   handleSubFilterChange,
   handleUnitMoreKeydown,
+  handleUnitQuickSearchInput,
+  handleUnitQuickSearchKeydown,
   HOME_SEARCH_HINTS,
   openAddItemWithPrefill,
   openHomeCameraSnap,
@@ -216,11 +223,15 @@ import {
   deleteDrawerFromMenu,
   dismissQuickAddFeedback,
   quickAddDrawerItems,
+  resetGlobalViewOptions,
   saveInlineItemRename,
   setDrawerItemsViewMode,
+  setGlobalViewMode,
   startInlineItemRename,
+  stepGlobalZoom,
   toggleDrawerPhotosStrip,
   toggleGenericReviewMode,
+  toggleGlobalViewMode,
   toggleQuickAddMoreMenu,
   quickMoveContainerToRoom,
   removeDrawerItem,
@@ -228,6 +239,8 @@ import {
   saveItemRename,
   scanPhoneForLocation,
   selectCategory,
+  selectUnitQuickSearchResult,
+  setUnitGridZoom,
   setHomePage,
   stepOverallPhotoViewer,
   toggleOverallPhotoEditMode,
@@ -366,11 +379,29 @@ function initKeyboardAndRouter() {
       }
     }
 
+    if ((e.ctrlKey || e.metaKey) && !isInputFocused() && state.currentView === 'unit') {
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undoGridDesigner();
+        return;
+      }
+      if (k === 'y' || (k === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redoGridDesigner();
+        return;
+      }
+    }
+
     if ((e.key === '/' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) && !isInputFocused()) {
       e.preventDefault();
+      const unitQuickInput = document.getElementById('unit-quick-search-input');
       const homeInput = document.getElementById('home-search-input');
       const itemsInput = document.getElementById('items-search-input');
-      if (homeInput) {
+      if (unitQuickInput) {
+        unitQuickInput.focus();
+        unitQuickInput.select();
+      } else if (homeInput) {
         homeInput.focus();
         homeInput.select();
       } else if (itemsInput) {
@@ -405,6 +436,8 @@ function initKeyboardAndRouter() {
         if (!isInputFocused()) {
           renderCurrentWorkspace();
         }
+      } else if (state.globalView?.mode === 'fit-all' || state.globalView?.mode === 'fit-width' || (state.currentView === 'unit' && state.currentLocationId && state.unitGridZoom?.[state.currentLocationId] === 'fit')) {
+        applyGlobalViewOptions();
       }
     }, 120);
   });
@@ -775,6 +808,8 @@ if (typeof window !== 'undefined') {
     updateSelectedDesignerSlotField: updateSelectedDesignerSlotField,
     designerClearSelection: designerClearSelection,
     saveGridDesigner: saveGridDesigner,
+    undoGridDesigner: undoGridDesigner,
+    redoGridDesigner: redoGridDesigner,
     updateDrawerBatchPreview: updateDrawerBatchPreview,
     handleStoragePhotoChange: handleStoragePhotoChange,
     handleStorageDelete: handleStorageDelete,
@@ -851,6 +886,16 @@ if (typeof window !== 'undefined') {
     handleHomeSearchInput: handleHomeSearchInput,
     handleHomePhotoSearch: handleHomePhotoSearch,
     clearHomeSearch: clearHomeSearch,
+    handleUnitQuickSearchInput: handleUnitQuickSearchInput,
+    handleUnitQuickSearchKeydown: handleUnitQuickSearchKeydown,
+    clearUnitQuickSearch: clearUnitQuickSearch,
+    selectUnitQuickSearchResult: selectUnitQuickSearchResult,
+    setUnitGridZoom: setUnitGridZoom,
+    applyGlobalViewOptions: applyGlobalViewOptions,
+    stepGlobalZoom: stepGlobalZoom,
+    setGlobalViewMode: setGlobalViewMode,
+    toggleGlobalViewMode: toggleGlobalViewMode,
+    resetGlobalViewOptions: resetGlobalViewOptions,
     openHomeCameraSnap: openHomeCameraSnap,
     setHomePage: setHomePage,
     skipNeedsHomeContainer: skipNeedsHomeContainer,

@@ -43,6 +43,7 @@ import {
 } from './mobile-views.js';
 import {
   handleGlobalBack,
+  locateDrawerInUnit,
   navToDrawer,
   navToHome,
   navToItem,
@@ -686,14 +687,34 @@ export function renderHomeSearchPanel() {
   }
 
   const matchingItems = Array.isArray(state.homeSearchResults) ? state.homeSearchResults : [];
-  const locWords = query ? query.toLowerCase().split(/\s+/).filter(w => w.length > 1) : [];
+  const queryLow = query.toLowerCase();
+  const locWords = query ? queryLow.split(/\s+/).filter(w => w.length > 0) : [];
   const matchingLocations = locWords.length > 0
-    ? Array.from(state.locationMap.values()).filter(loc => {
-      if (isUnknownPlaceholder(loc)) return false;
-      const nameLow = (loc.name || '').toLowerCase();
-      const labelLow = (loc.label || '').toLowerCase();
-      return locWords.some(tok => nameLow.includes(tok) || (labelLow && labelLow.includes(tok)));
-    })
+    ? Array.from(state.locationMap.values())
+      .map(loc => {
+        if (isUnknownPlaceholder(loc)) return null;
+        const nameLow = (loc.name || '').toLowerCase();
+        const labelLow = (loc.label || '').toLowerCase();
+        const coord = (Number(loc.grid_row) >= 1 && Number(loc.grid_col) >= 1)
+          ? formatSlotCoord(loc.grid_row, loc.grid_col, loc.grid_row_span || 1, loc.grid_col_span || 1).toLowerCase()
+          : '';
+        const matched = locWords.every(tok =>
+          nameLow.includes(tok) || (labelLow && labelLow.includes(tok)) || (coord && coord.includes(tok))
+        );
+        if (!matched) return null;
+        let score = 0;
+        if (labelLow && labelLow === queryLow) score += 100;
+        else if (labelLow && labelLow.startsWith(queryLow)) score += 70;
+        else if (labelLow && labelLow.includes(queryLow)) score += 50;
+        if (coord && coord === queryLow) score += 90;
+        if (nameLow === queryLow) score += 80;
+        else if (nameLow.startsWith(queryLow)) score += 40;
+        else score += 10;
+        return { loc, score };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score)
+      .map(entry => entry.loc)
     : [];
 
   const photoHeader = hasPhoto
@@ -744,7 +765,7 @@ export function renderHomeSearchPanel() {
           </button>
         `;
   }).join('')}
-      ${matchingLocations.slice(0, 5).map(loc => {
+      ${matchingLocations.slice(0, 8).map(loc => {
     const ltype = getLocType(loc);
     const safeLocId = Number(loc.id);
     const clickAction =
@@ -753,16 +774,30 @@ export function renderHomeSearchPanel() {
         : ltype === 'container'
           ? `navToStorageUnit(${safeLocId}, true)`
           : `navToDrawer(${safeLocId}, true)`;
+    const hier = getLocationHierarchy(safeLocId);
+    const parentUnitId = (hier.unit && Number(hier.unit.id) !== safeLocId) ? Number(hier.unit.id) : null;
     const placeStr = formatHumanPath(loc.full_path).replace(/\s*›\s*/g, ' > ');
     return `
-          <button type="button" class="search-result-row" onclick="${clickAction}">
-            <span class="search-result-thumb">${lucideIcon(getRoomIconName(loc), '', 20)}</span>
-            <span class="search-result-info">
-              <span class="search-result-name">${loc.label ? `<span class="box-label-badge">${escapeHtml(loc.label)}</span> ` : ''}${escapeHtml(loc.name)}</span>
-              <span class="search-result-place">${escapeHtml(placeStr)}</span>
-            </span>
-            <span class="drawer-badge-count">${pluralize(loc.total_item_count || 0, 'item')}</span>
-          </button>
+          <div class="search-result-row-wrap">
+            <button type="button" class="search-result-row" onclick="${clickAction}">
+              <span class="search-result-thumb">${lucideIcon(getRoomIconName(loc), '', 20)}</span>
+              <span class="search-result-info">
+                <span class="search-result-name">${loc.label ? `<span class="box-label-badge">${escapeHtml(loc.label)}</span> ` : ''}${escapeHtml(loc.name)}</span>
+                <span class="search-result-place">${escapeHtml(placeStr)}</span>
+              </span>
+              <span class="drawer-badge-count">${pluralize(loc.total_item_count || 0, 'item')}</span>
+            </button>
+            ${parentUnitId ? `
+              <button
+                type="button"
+                class="btn btn-secondary btn-xs search-locate-btn"
+                onclick="event.stopPropagation(); locateDrawerInUnit(${parentUnitId}, ${safeLocId})"
+                title="Highlight in organizer"
+              >
+                ${lucideIcon('crosshair', '', 13)} Locate
+              </button>
+            ` : ''}
+          </div>
         `;
   }).join('')}
     </div>
@@ -1542,6 +1577,10 @@ export function renderStorageUnitView(unitId) {
   const moveChoices = isUnassigned ? getQuickMoveRoomChoices() : [];
   const hasGrid = Number(unit.grid_rows) > 0 && Number(unit.grid_cols) > 0;
   const isEditingGrid = isInlineGridEditing(safeUnitId);
+  const zoomMode = (state.unitGridZoom && state.unitGridZoom[safeUnitId]) || '1';
+  if (Number(state.currentLocationId) !== safeUnitId) {
+    state.unitQuickSearchQuery = '';
+  }
   const unplacedDrawers = hasGrid
     ? drawers.filter(d => !(Number(d.grid_row) >= 1 && Number(d.grid_col) >= 1))
     : drawers;
@@ -1585,8 +1624,8 @@ export function renderStorageUnitView(unitId) {
         </div>
       </div>
 
-      <div class="unit-scroll-region" id="unit-scroll-region">
-        <div class="unit-scroll-inner">
+      <div class="unit-header-band">
+        <div class="unit-band-inner unit-header-inner">
           <div class="place-hero-card unit-hero-card">
             <div class="place-hero-left">
               ${photo
@@ -1648,6 +1687,39 @@ export function renderStorageUnitView(unitId) {
             </div>
           </div>
 
+          ${!isEditingGrid && drawers.length > 0 ? `
+            <div class="unit-quick-search-wrap" id="unit-quick-search-wrap">
+              <div class="unit-quick-search-bar">
+                ${lucideIcon('search', 'unit-quick-search-icon', 16)}
+                <input
+                  type="text"
+                  id="unit-quick-search-input"
+                  class="unit-quick-search-input"
+                  placeholder="Quick find container label, drawer, or coordinate (e.g. A1, M2, ESP32)..."
+                  value="${escapeHtml(state.unitQuickSearchQuery || '')}"
+                  autocomplete="off"
+                  oninput="handleUnitQuickSearchInput(event, ${safeUnitId})"
+                  onkeydown="handleUnitQuickSearchKeydown(event, ${safeUnitId})"
+                >
+                <button
+                  type="button"
+                  id="unit-quick-search-clear"
+                  class="unit-quick-search-clear"
+                  style="display: ${(state.unitQuickSearchQuery || '').trim() ? 'inline-flex' : 'none'};"
+                  onclick="clearUnitQuickSearch(${safeUnitId})"
+                  aria-label="Clear quick search"
+                >
+                  ${lucideIcon('x', '', 14)}
+                </button>
+              </div>
+              <div id="unit-quick-search-results" class="unit-quick-search-results"></div>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+
+      <div class="unit-scroll-region" id="unit-scroll-region">
+        <div class="unit-scroll-inner">
           ${isEditingGrid ? `
             <div class="unit-grid-section" id="storage-drawers-container">
               ${renderInlineGridDesignerHtml()}
@@ -1656,9 +1728,20 @@ export function renderStorageUnitView(unitId) {
             <div class="unit-grid-section unit-grid-chassis" id="storage-drawers-container">
               <div class="unit-grid-chassis-hdr">
                 <span class="unit-grid-chassis-title">${lucideIcon('grid', '', 14)} Drawer layout</span>
-                <div class="unit-grid-legend" aria-hidden="true">
-                  <span class="unit-legend-item"><i class="unit-legend-dot is-filled"></i>Filled (${populatedDrawerCount})</span>
-                  ${emptyDrawerCount > 0 ? `<span class="unit-legend-item"><i class="unit-legend-dot is-empty-drawer"></i>Empty (${emptyDrawerCount})</span>` : ''}
+                <div class="unit-grid-chassis-right">
+                  <div class="unit-grid-zoom-controls" role="group" aria-label="Grid zoom">
+                    <button type="button" class="unit-zoom-btn ${zoomMode === 'fit' ? 'active' : ''}" data-zoom-mode="fit" onclick="setUnitGridZoom(${safeUnitId}, 'fit')" title="Zoom out to see full organizer">
+                      ${lucideIcon('maximize', '', 12)} <span id="unit-zoom-fit-label-${safeUnitId}">View all</span>
+                    </button>
+                    <button type="button" class="unit-zoom-btn ${zoomMode === 'width' ? 'active' : ''}" data-zoom-mode="width" onclick="setUnitGridZoom(${safeUnitId}, 'width')" title="Fit grid to full width">Width</button>
+                    <button type="button" class="unit-zoom-btn ${zoomMode === '0.5' ? 'active' : ''}" data-zoom-mode="0.5" onclick="setUnitGridZoom(${safeUnitId}, '0.5')" title="50% zoom">50%</button>
+                    <button type="button" class="unit-zoom-btn ${zoomMode === '0.75' ? 'active' : ''}" data-zoom-mode="0.75" onclick="setUnitGridZoom(${safeUnitId}, '0.75')" title="75% zoom">75%</button>
+                    <button type="button" class="unit-zoom-btn ${zoomMode === '1' ? 'active' : ''}" data-zoom-mode="1" onclick="setUnitGridZoom(${safeUnitId}, '1')" title="100% normal view">100%</button>
+                  </div>
+                  <div class="unit-grid-legend" aria-hidden="true">
+                    <span class="unit-legend-item"><i class="unit-legend-dot is-filled"></i>Filled (${populatedDrawerCount})</span>
+                    ${emptyDrawerCount > 0 ? `<span class="unit-legend-item"><i class="unit-legend-dot is-empty-drawer"></i>Empty (${emptyDrawerCount})</span>` : ''}
+                  </div>
                 </div>
               </div>
               ${renderContainerGridHtml(unit, { highlightDrawerId: state.spotlightDrawerId })}
@@ -1722,14 +1805,347 @@ export function renderStorageUnitView(unitId) {
 
   if (isEditingGrid) {
     mountInlineGridDesigner();
+  } else if (hasGrid) {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => applyUnitGridZoom(safeUnitId));
+    } else {
+      applyUnitGridZoom(safeUnitId);
+    }
+  }
+
+  if ((state.unitQuickSearchQuery || '').trim()) {
+    renderUnitQuickSearchResults(safeUnitId);
   }
 
   if (state.spotlightDrawerId) {
     setTimeout(() => {
       const el = document.querySelector('.spotlight-highlight');
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
     }, 100);
   }
+}
+
+export function searchUnitContainerLabels(unit, query) {
+  if (!unit) return [];
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return [];
+  const words = q.split(/\s+/).filter(Boolean);
+  const results = [];
+
+  function walk(node, directDrawerId = null) {
+    const children = (node?.children || []).filter(c => !isUnknownPlaceholder(c));
+    for (const child of children) {
+      const topDrawerId = directDrawerId || Number(child.id);
+      const hasCoord = Number(child.grid_row) >= 1 && Number(child.grid_col) >= 1;
+      const coord = hasCoord
+        ? formatSlotCoord(child.grid_row, child.grid_col, child.grid_row_span || 1, child.grid_col_span || 1)
+        : '';
+      const coordLow = coord.toLowerCase();
+      const nameLow = (child.name || '').toLowerCase();
+      const labelLow = (child.label || '').toLowerCase();
+      const subtreeItems = getSubtreeItems(child.id);
+      const matchedItem = subtreeItems.find(it => {
+        const itName = (it.name || '').toLowerCase();
+        return words.every(w => itName.includes(w));
+      });
+
+      const locMatched = words.every(w =>
+        nameLow.includes(w) || (labelLow && labelLow.includes(w)) || (coordLow && coordLow.includes(w))
+      );
+
+      if (locMatched || matchedItem) {
+        let score = 0;
+        if (labelLow && labelLow === q) score += 120;
+        else if (labelLow && labelLow.startsWith(q)) score += 90;
+        else if (labelLow && labelLow.includes(q)) score += 70;
+        if (coordLow && coordLow === q) score += 110;
+        else if (coordLow && coordLow.startsWith(q)) score += 80;
+        if (nameLow === q) score += 100;
+        else if (nameLow.startsWith(q)) score += 60;
+        else if (locMatched) score += 30;
+        if (matchedItem) score += 15;
+
+        results.push({
+          loc: child,
+          coord,
+          targetDrawerId: topDrawerId,
+          matchedItemName: !locMatched && matchedItem ? matchedItem.name : '',
+          itemCount: subtreeItems.length || Number(child.total_item_count || 0),
+          score,
+        });
+      }
+      walk(child, topDrawerId);
+    }
+  }
+
+  walk(unit, null);
+  results.sort((a, b) => b.score - a.score || (a.loc.name || '').localeCompare(b.loc.name || ''));
+  return results;
+}
+
+export function renderUnitQuickSearchResults(unitId) {
+  const panel = document.getElementById('unit-quick-search-results');
+  if (!panel) return;
+  const query = (state.unitQuickSearchQuery || '').trim();
+  if (!query) {
+    panel.classList.remove('open');
+    panel.innerHTML = '';
+    return;
+  }
+
+  const unit = state.locationMap.get(Number(unitId));
+  const matches = searchUnitContainerLabels(unit, query);
+  panel.classList.add('open');
+
+  if (matches.length === 0) {
+    panel.innerHTML = `<div class="unit-quick-search-empty">No container or label matching "${escapeHtml(query)}" in ${escapeHtml(unit?.name || 'this organizer')}.</div>`;
+    return;
+  }
+
+  panel.innerHTML = matches.slice(0, 12).map((m, idx) => {
+    const safeLocId = Number(m.loc.id);
+    const safeTargetDrawerId = Number(m.targetDrawerId);
+    const safeUnitId = Number(unitId);
+    const isBox = ['box', 'kit'].includes(getLocType(m.loc));
+    return `
+      <div class="unit-quick-result-row ${idx === 0 ? 'is-top-match' : ''}" data-target-drawer-id="${safeTargetDrawerId}">
+        <button
+          type="button"
+          class="unit-quick-result-main"
+          onclick="selectUnitQuickSearchResult(${safeUnitId}, ${safeTargetDrawerId})"
+          title="Move into view and highlight in organizer"
+        >
+          ${m.coord ? `<span class="unit-quick-coord">${escapeHtml(m.coord)}</span>` : `<span class="unit-quick-coord is-icon">${lucideIcon(isBox ? 'package' : 'archive', '', 13)}</span>`}
+          ${m.loc.label ? `<span class="box-label-badge">${escapeHtml(m.loc.label)}</span>` : ''}
+          <span class="unit-quick-name">${escapeHtml(toSentenceCase(m.loc.name))}</span>
+          ${m.matchedItemName ? `<span class="unit-quick-item-hint">· contains ${escapeHtml(m.matchedItemName)}</span>` : ''}
+          <span class="unit-quick-count">${pluralize(m.itemCount, 'item')}</span>
+        </button>
+        <button
+          type="button"
+          class="btn btn-secondary btn-xs unit-quick-open-btn"
+          onclick="event.stopPropagation(); navToDrawer(${safeLocId}, true)"
+          title="Open ${escapeHtml(m.loc.name)}"
+        >
+          Open ${lucideIcon('arrowRight', '', 12)}
+        </button>
+      </div>
+    `;
+  }).join('');
+}
+
+export function handleUnitQuickSearchInput(e, unitId) {
+  const val = e?.target?.value || '';
+  state.unitQuickSearchQuery = val;
+  const clearBtn = document.getElementById('unit-quick-search-clear');
+  if (clearBtn) clearBtn.style.display = val.trim() ? 'inline-flex' : 'none';
+  renderUnitQuickSearchResults(unitId);
+}
+
+export function handleUnitQuickSearchKeydown(e, unitId) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    clearUnitQuickSearch(unitId);
+    return;
+  }
+  if (e.key === 'Enter') {
+    const unit = state.locationMap.get(Number(unitId));
+    const matches = searchUnitContainerLabels(unit, state.unitQuickSearchQuery);
+    if (matches.length > 0) {
+      e.preventDefault();
+      selectUnitQuickSearchResult(unitId, matches[0].targetDrawerId);
+    }
+  }
+}
+
+export function selectUnitQuickSearchResult(unitId, targetDrawerId) {
+  locateDrawerInUnit(Number(unitId), Number(targetDrawerId));
+  const panel = document.getElementById('unit-quick-search-results');
+  if (panel) panel.classList.remove('open');
+}
+
+export function clearUnitQuickSearch(unitId) {
+  state.unitQuickSearchQuery = '';
+  const input = document.getElementById('unit-quick-search-input');
+  if (input) {
+    input.value = '';
+    input.focus();
+  }
+  const clearBtn = document.getElementById('unit-quick-search-clear');
+  if (clearBtn) clearBtn.style.display = 'none';
+  renderUnitQuickSearchResults(unitId);
+}
+
+export function setUnitGridZoom(unitId, mode) {
+  const safeId = Number(unitId);
+  if (!state.unitGridZoom) state.unitGridZoom = {};
+  state.unitGridZoom[safeId] = mode || '1';
+  if (mode === 'fit') {
+    state.globalView = { mode: 'fit-all', zoom: 1 };
+  } else if (mode === 'width') {
+    state.globalView = { mode: 'fit-width', zoom: 1 };
+  } else {
+    const z = parseFloat(mode);
+    state.globalView = { mode: 'zoom', zoom: Number.isFinite(z) && z > 0 ? z : 1 };
+  }
+  saveJsonStorage('wims_global_view', state.globalView);
+  applyUnitGridZoom(safeId);
+  syncRailViewControls();
+}
+
+export function applyUnitGridZoom(unitId) {
+  const safeId = Number(unitId);
+  const gv = state.globalView || { mode: 'zoom', zoom: 1 };
+  let mode = state.unitGridZoom?.[safeId];
+  if (!mode) {
+    mode = gv.mode === 'fit-all' ? 'fit' : gv.mode === 'fit-width' ? 'width' : String(gv.zoom || 1);
+  }
+  const wrap = document.getElementById(`cgrid-wrap-${safeId}`);
+  const board = document.getElementById(`cgrid-board-${safeId}`);
+  const fitLabel = document.getElementById(`unit-zoom-fit-label-${safeId}`);
+  const workspace = document.getElementById('app-workspace');
+
+  document.querySelectorAll('.unit-zoom-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.zoomMode === mode);
+  });
+
+  if (workspace) {
+    workspace.classList.toggle('is-view-fit-width', mode === 'width' || gv.mode === 'fit-width');
+  }
+
+  if (!wrap || !board) return;
+
+  let scale = 1;
+  if (mode === 'fit') {
+    board.style.zoom = '1';
+    const naturalW = board.scrollWidth || 1;
+    const naturalH = board.scrollHeight || 1;
+    const availW = wrap.clientWidth || naturalW;
+    const rectTop = wrap.getBoundingClientRect ? wrap.getBoundingClientRect().top : 260;
+    const winH = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 800;
+    const availH = Math.max(240, winH - rectTop - 52);
+    scale = Math.max(0.2, Math.min(1, availW / naturalW, availH / naturalH));
+    scale = Math.round(scale * 100) / 100;
+    board.style.zoom = String(scale);
+    if (fitLabel) fitLabel.textContent = `View all (${Math.round(scale * 100)}%)`;
+  } else if (mode === 'width') {
+    board.style.zoom = '1';
+    const naturalW = board.scrollWidth || 1;
+    const availW = wrap.clientWidth || naturalW;
+    scale = Math.max(0.3, Math.min(1, availW / naturalW));
+    scale = Math.round(scale * 100) / 100;
+    board.style.zoom = scale === 1 ? '' : String(scale);
+    if (fitLabel) fitLabel.textContent = 'View all';
+  } else {
+    const parsed = parseFloat(mode);
+    scale = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    board.style.zoom = scale === 1 ? '' : String(scale);
+    if (fitLabel) fitLabel.textContent = 'View all';
+  }
+
+  wrap.classList.toggle('is-zoomed-out', scale < 0.85);
+}
+
+const GLOBAL_ZOOM_STEPS = [0.5, 0.65, 0.75, 0.85, 1, 1.15, 1.25];
+
+function syncRailViewControls(effectiveScale = null) {
+  if (typeof document === 'undefined') return;
+  const gv = state.globalView || { mode: 'zoom', zoom: 1 };
+  const readout = document.getElementById('rail-zoom-readout');
+  const fitWBtn = document.getElementById('rail-view-fit-width');
+  const fitABtn = document.getElementById('rail-view-fit-all');
+  const resetBtn = document.getElementById('rail-view-reset-btn');
+  const pct = Math.round((effectiveScale ?? gv.zoom ?? 1) * 100);
+  if (readout) {
+    readout.textContent = `${pct}%`;
+  }
+  if (fitWBtn) fitWBtn.classList.toggle('active', gv.mode === 'fit-width');
+  if (fitABtn) fitABtn.classList.toggle('active', gv.mode === 'fit-all');
+  if (resetBtn) {
+    const isDefault = gv.mode === 'zoom' && Math.abs((gv.zoom || 1) - 1) < 0.01;
+    resetBtn.style.display = isDefault ? 'none' : 'inline-flex';
+  }
+}
+
+export function applyGlobalViewOptions() {
+  if (typeof document === 'undefined') return;
+  const workspace = document.getElementById('app-workspace');
+  if (!workspace) return;
+  const gv = state.globalView || { mode: 'zoom', zoom: 1 };
+  const isUnitGrid = state.currentView === 'unit' && state.currentLocationId && document.getElementById(`cgrid-board-${state.currentLocationId}`);
+
+  workspace.classList.toggle('is-view-fit-width', gv.mode === 'fit-width');
+
+  if (isUnitGrid) {
+    workspace.style.zoom = '';
+    const unitId = Number(state.currentLocationId);
+    if (!state.unitGridZoom) state.unitGridZoom = {};
+    state.unitGridZoom[unitId] = gv.mode === 'fit-all' ? 'fit' : gv.mode === 'fit-width' ? 'width' : String(gv.zoom || 1);
+    applyUnitGridZoom(unitId);
+    const board = document.getElementById(`cgrid-board-${unitId}`);
+    const eff = board?.style?.zoom ? parseFloat(board.style.zoom) : 1;
+    syncRailViewControls(eff);
+    return;
+  }
+
+  if (gv.mode === 'fit-all') {
+    workspace.style.zoom = '1';
+    const naturalW = workspace.scrollWidth || workspace.clientWidth || 1;
+    const naturalH = workspace.scrollHeight || workspace.clientHeight || 1;
+    const availW = workspace.clientWidth || naturalW;
+    const availH = workspace.clientHeight || naturalH;
+    const scale = Math.round(Math.max(0.45, Math.min(1, availW / naturalW, availH / naturalH)) * 100) / 100;
+    workspace.style.zoom = scale === 1 ? '' : String(scale);
+    syncRailViewControls(scale);
+  } else if (gv.mode === 'fit-width') {
+    workspace.style.zoom = '';
+    syncRailViewControls(1);
+  } else {
+    const z = Number(gv.zoom) || 1;
+    workspace.style.zoom = z === 1 ? '' : String(z);
+    syncRailViewControls(z);
+  }
+}
+
+export function stepGlobalZoom(delta) {
+  const gv = state.globalView || { mode: 'zoom', zoom: 1 };
+  const current = Number(gv.zoom) || 1;
+  let idx = GLOBAL_ZOOM_STEPS.findIndex(s => Math.abs(s - current) < 0.02);
+  if (idx === -1) {
+    idx = GLOBAL_ZOOM_STEPS.reduce((best, val, i) =>
+      Math.abs(val - current) < Math.abs(GLOBAL_ZOOM_STEPS[best] - current) ? i : best, 0);
+  }
+  const nextIdx = Math.max(0, Math.min(GLOBAL_ZOOM_STEPS.length - 1, idx + (delta > 0 ? 1 : -1)));
+  state.globalView = { mode: 'zoom', zoom: GLOBAL_ZOOM_STEPS[nextIdx] };
+  saveJsonStorage('wims_global_view', state.globalView);
+  applyGlobalViewOptions();
+}
+
+export function setGlobalViewMode(val) {
+  const z = parseFloat(val);
+  state.globalView = { mode: 'zoom', zoom: Number.isFinite(z) && z > 0 ? z : 1 };
+  saveJsonStorage('wims_global_view', state.globalView);
+  applyGlobalViewOptions();
+}
+
+export function toggleGlobalViewMode(mode) {
+  const gv = state.globalView || { mode: 'zoom', zoom: 1 };
+  if (gv.mode === mode) {
+    state.globalView = { mode: 'zoom', zoom: 1 };
+  } else {
+    state.globalView = { mode, zoom: gv.zoom || 1 };
+  }
+  saveJsonStorage('wims_global_view', state.globalView);
+  applyGlobalViewOptions();
+}
+
+export function resetGlobalViewOptions() {
+  state.globalView = { mode: 'zoom', zoom: 1 };
+  if (state.currentView === 'unit' && state.currentLocationId && state.unitGridZoom) {
+    state.unitGridZoom[Number(state.currentLocationId)] = '1';
+  }
+  saveJsonStorage('wims_global_view', state.globalView);
+  applyGlobalViewOptions();
 }
 
 function renderDrawerCard(drawer) {

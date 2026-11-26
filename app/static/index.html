@@ -63,6 +63,28 @@
       </nav>
 
       <div class="rail-footer">
+        <div class="rail-view-controls" aria-label="View options">
+          <div class="rail-view-hdr">
+            <span class="rail-view-label">View</span>
+            <button type="button" class="rail-view-reset" id="rail-view-reset-btn" onclick="resetGlobalViewOptions()" title="Reset view to 100%" style="display: none;">Reset</button>
+          </div>
+          <div class="rail-zoom-stepper" role="group" aria-label="Zoom level">
+            <button type="button" class="rail-zoom-step-btn" onclick="stepGlobalZoom(-1)" title="Zoom out" aria-label="Zoom out">−</button>
+            <button type="button" class="rail-zoom-readout" id="rail-zoom-readout" onclick="resetGlobalViewOptions()" title="Click to reset zoom to 100%">100%</button>
+            <button type="button" class="rail-zoom-step-btn" onclick="stepGlobalZoom(1)" title="Zoom in" aria-label="Zoom in">+</button>
+          </div>
+          <div class="rail-view-modes" role="group" aria-label="Fit options">
+            <button type="button" class="rail-view-mode-btn" id="rail-view-fit-width" onclick="toggleGlobalViewMode('fit-width')" title="Fit content to full width">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 8l4 4-4 4"></path><path d="M7 8l-4 4 4 4"></path><line x1="3" y1="12" x2="21" y2="12"></line></svg>
+              <span class="rail-view-mode-text">Width</span>
+            </button>
+            <button type="button" class="rail-view-mode-btn" id="rail-view-fit-all" onclick="toggleGlobalViewMode('fit-all')" title="Zoom to view all">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+              <span class="rail-view-mode-text">View all</span>
+            </button>
+          </div>
+        </div>
+
         <button id="rail-nav-more" class="rail-link" onclick="openMoreModal()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="1"></circle>

@@ -166,6 +166,40 @@ export function cssRowForDataRow(r, sectionBreaks) {
   return 1 + r + breaksBefore;
 }
 
+export function computeUniformRowBands(rows, cols, slots, sectionBreaks = []) {
+  const bands = [];
+  let r = 1;
+  while (r <= rows) {
+    const covering = [];
+    let coveredCols = 0;
+    for (const s of slots) {
+      const r0 = Number(s.grid_row);
+      const rs = Math.max(1, Number(s.grid_row_span) || 1);
+      const cs = Math.max(1, Number(s.grid_col_span) || 1);
+      if (r0 <= r && r < r0 + rs) {
+        covering.push(s);
+        coveredCols += cs;
+      }
+    }
+    const firstSpan = covering.length > 0 ? Math.max(1, Number(covering[0].grid_row_span) || 1) : 1;
+    const allSameBand = firstSpan > 1
+      && coveredCols === cols
+      && r + firstSpan - 1 <= rows
+      && covering.every(s => Number(s.grid_row) === r && Math.max(1, Number(s.grid_row_span) || 1) === firstSpan)
+      && !sectionBreaks.some(b => b >= r && b < r + firstSpan - 1);
+
+    if (allSameBand) {
+      const endRow = r + firstSpan - 1;
+      bands.push({ startRow: r, endRow, span: firstSpan, label: `${r}–${endRow}` });
+      r = endRow + 1;
+    } else {
+      bands.push({ startRow: r, endRow: r, span: 1, label: `${r}` });
+      r += 1;
+    }
+  }
+  return bands;
+}
+
 /**
  * Shared read-only / navigable grid renderer used on:
  *  - Container view (renderStorageUnitView)
@@ -208,7 +242,7 @@ export function renderContainerGridHtml(unit, options = {}) {
   const rowTracks = ['auto']; // header row
   for (let r = 1; r <= rows; r++) {
     rowTracks.push(
-      diagram ? 'minmax(14px, 1fr)' : compact ? 'minmax(32px, auto)' : isSingleCol ? 'auto' : 'minmax(74px, auto)'
+      diagram ? 'minmax(14px, 1fr)' : compact ? 'minmax(32px, auto)' : isSingleCol ? 'auto' : '92px'
     );
     if (sectionBreaks.includes(r)) {
       rowTracks.push(diagram ? '4px' : compact ? '8px' : '14px');
@@ -220,11 +254,17 @@ export function renderContainerGridHtml(unit, options = {}) {
     return `<div class="cgrid-col-hdr" style="grid-row: 1; grid-column: ${c + 1};">${escapeHtml(colToLetter(c))}</div>`;
   }).join('');
 
+  const rowBands = computeUniformRowBands(rows, cols, placed, sectionBreaks);
   let rowHdrHtml = '';
+  for (const band of rowBands) {
+    const startCssR = cssRowForDataRow(band.startRow, sectionBreaks);
+    const endCssR = cssRowForDataRow(band.endRow, sectionBreaks) + 1;
+    rowHdrHtml += `<div class="cgrid-row-hdr ${band.span > 1 ? 'is-merged-row' : ''}" style="grid-row: ${startCssR} / ${endCssR}; grid-column: 1;">${escapeHtml(band.label)}</div>`;
+  }
+
   let dividerHtml = '';
   for (let r = 1; r <= rows; r++) {
     const cssR = cssRowForDataRow(r, sectionBreaks);
-    rowHdrHtml += `<div class="cgrid-row-hdr" style="grid-row: ${cssR}; grid-column: 1;">${r}</div>`;
     if (sectionBreaks.includes(r)) {
       dividerHtml += `
         <div class="cgrid-section-divider" style="grid-row: ${cssR + 1}; grid-column: 1 / ${cols + 2};" title="Section divider">
@@ -513,9 +553,13 @@ export function renderContainerGridHtml(unit, options = {}) {
     requestAnimationFrame(syncAllSlotCarousels);
   }
 
+  const wrapIdAttr = (!compact && !diagram && safeUnitId) ? `id="cgrid-wrap-${safeUnitId}"` : '';
+  const boardIdAttr = (!compact && !diagram && safeUnitId) ? `id="cgrid-board-${safeUnitId}"` : '';
+
   return `
-    <div class="cgrid-wrap ${compact ? 'is-compact' : ''} ${diagram ? 'is-diagram' : ''} ${isSingleCol ? 'is-single-col' : ''}">
+    <div ${wrapIdAttr} class="cgrid-wrap ${compact ? 'is-compact' : ''} ${diagram ? 'is-diagram' : ''} ${isSingleCol ? 'is-single-col' : ''}">
       <div
+        ${boardIdAttr}
         class="cgrid-board"
         style="grid-template-columns: ${diagram ? '16px' : compact ? '24px' : '28px'} repeat(${cols}, minmax(${minColWidth}, 1fr)); grid-template-rows: ${rowTracks.join(' ')};"
       >
@@ -547,7 +591,71 @@ const designer = {
   nextTempId: 1,
   draggedTempId: null,
   initialSnapshot: '',
+  undoStack: [],
+  redoStack: [],
 };
+
+function snapshotDesignerState() {
+  return {
+    rows: designer.rows,
+    cols: designer.cols,
+    sectionBreaks: [...designer.sectionBreaks],
+    slots: designer.slots.map(s => ({
+      ...s,
+      merge_from_ids: [...(s.merge_from_ids || [])],
+    })),
+    selectedKeys: Array.from(designer.selectedKeys),
+  };
+}
+
+function restoreDesignerSnapshot(snap) {
+  if (!snap) return;
+  designer.rows = snap.rows;
+  designer.cols = snap.cols;
+  designer.sectionBreaks = [...snap.sectionBreaks];
+  designer.slots = snap.slots.map(s => ({
+    ...s,
+    merge_from_ids: [...(s.merge_from_ids || [])],
+  }));
+  designer.selectedKeys = new Set(snap.selectedKeys || []);
+}
+
+function pushDesignerHistory() {
+  designer.undoStack.push(snapshotDesignerState());
+  if (designer.undoStack.length > 50) designer.undoStack.shift();
+  designer.redoStack = [];
+}
+
+function updateUndoRedoButtons() {
+  if (typeof document === 'undefined') return;
+  const undoBtn = document.getElementById('gd-undo-btn');
+  const redoBtn = document.getElementById('gd-redo-btn');
+  const saveBtn = document.getElementById('gd-sidebar-save-btn');
+  const topSaveBtn = document.getElementById('gd-save-btn');
+  if (undoBtn) undoBtn.disabled = designer.undoStack.length === 0;
+  if (redoBtn) redoBtn.disabled = designer.redoStack.length === 0;
+  const dirty = isGridDesignerDirty();
+  if (saveBtn) saveBtn.classList.toggle('is-dirty', dirty);
+  if (topSaveBtn) topSaveBtn.classList.toggle('is-dirty', dirty);
+}
+
+export function undoGridDesigner() {
+  if (designer.undoStack.length === 0) return;
+  designer.redoStack.push(snapshotDesignerState());
+  const prev = designer.undoStack.pop();
+  restoreDesignerSnapshot(prev);
+  syncDesignerControls();
+  renderDesignerCanvas();
+}
+
+export function redoGridDesigner() {
+  if (designer.redoStack.length === 0) return;
+  designer.undoStack.push(snapshotDesignerState());
+  const next = designer.redoStack.pop();
+  restoreDesignerSnapshot(next);
+  syncDesignerControls();
+  renderDesignerCanvas();
+}
 
 const SLOT_TYPE_LABELS = {
   drawer: 'Drawer',
@@ -625,48 +733,67 @@ export function renderInlineGridDesignerHtml() {
         </div>
       </div>
 
-      <div class="gd-toolbar">
-        <div class="gd-dims-group">
-          <label class="gd-dim-field">
-            <span>Rows</span>
-            <input type="number" id="gd-rows-input" min="1" max="26" value="${designer.rows}" onchange="updateGridDesignerDimensions()">
-          </label>
-          <label class="gd-dim-field">
-            <span>Cols</span>
-            <input type="number" id="gd-cols-input" min="1" max="26" value="${designer.cols}" onchange="updateGridDesignerDimensions()">
-          </label>
-        </div>
+      <div class="gd-workspace">
+        <div id="gd-canvas-wrap" class="gd-canvas-wrap"></div>
 
-        <details class="gd-tools-details" id="gd-tools-details">
-          <summary class="btn btn-secondary btn-sm gd-tools-summary">Templates &amp; tools ▾</summary>
-          <div class="gd-tools-panel">
-            <div class="gd-presets-group">
-              <span class="gd-tools-label">Templates</span>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('3x3')">3×3</button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('4x4')">4×4</button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('dresser_3_2')">Dresser (3 + 2×2)</button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('organizer_split')">Parts Organizer</button>
+        <aside class="gd-sidebar" aria-label="Grid editing tools">
+          <div class="gd-sidebar-actions">
+            <div class="gd-sidebar-save-row">
+              <button type="button" class="btn btn-primary btn-sm gd-sidebar-save-btn" id="gd-sidebar-save-btn" onclick="saveGridDesigner()">Save Grid</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="cancelInlineGridDesigner()">Cancel</button>
+            </div>
+            <div class="gd-sidebar-history-row">
+              <button type="button" class="btn btn-secondary btn-xs" id="gd-undo-btn" onclick="undoGridDesigner()" disabled title="Undo (Ctrl+Z)">↶ Undo</button>
+              <button type="button" class="btn btn-secondary btn-xs" id="gd-redo-btn" onclick="redoGridDesigner()" disabled title="Redo (Ctrl+Y)">↷ Redo</button>
+            </div>
+          </div>
+
+          <div id="gd-inspector" class="gd-inspector"></div>
+
+          <div class="gd-toolbar">
+            <div class="gd-dims-group">
+              <label class="gd-dim-field">
+                <span>Rows</span>
+                <input type="number" id="gd-rows-input" min="1" max="26" value="${designer.rows}" onchange="updateGridDesignerDimensions()">
+              </label>
+              <label class="gd-dim-field">
+                <span>Cols</span>
+                <input type="number" id="gd-cols-input" min="1" max="26" value="${designer.cols}" onchange="updateGridDesignerDimensions()">
+              </label>
             </div>
 
             <div class="gd-mode-group">
-              <span class="gd-tools-label">Tools</span>
-              <select id="gd-default-type" class="gd-type-select" onchange="setDesignerDefaultType(this.value)" aria-label="Default slot type" title="Type for new &amp; auto-named slots">
-                ${Object.entries(SLOT_TYPE_LABELS).map(([val, label]) => `
-                  <option value="${val}" ${designer.defaultType === val ? 'selected' : ''}>${label}</option>
-                `).join('')}
-              </select>
               <button type="button" id="gd-multi-toggle" class="btn btn-secondary btn-sm ${designer.multiSelectMode ? 'active' : ''}" aria-pressed="${designer.multiSelectMode ? 'true' : 'false'}" onclick="toggleDesignerMultiSelect()">
                 Select multiple
               </button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="fillAllEmptyDesignerCells()">Fill empty</button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="autoNameAllDesignerSlots()">Auto-name</button>
             </div>
-          </div>
-        </details>
-      </div>
 
-      <div id="gd-inspector" class="gd-inspector"></div>
-      <div id="gd-canvas-wrap" class="gd-canvas-wrap"></div>
+            <details class="gd-tools-details" id="gd-tools-details">
+              <summary class="btn btn-secondary btn-sm gd-tools-summary">Templates &amp; tools ▾</summary>
+              <div class="gd-tools-panel">
+                <div class="gd-presets-group">
+                  <span class="gd-tools-label">Templates</span>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('3x3')">3×3</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('4x4')">4×4</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('dresser_3_2')">Dresser (3 + 2×2)</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="applyGridPreset('organizer_split')">Parts Organizer</button>
+                </div>
+
+                <div class="gd-mode-group">
+                  <span class="gd-tools-label">Tools</span>
+                  <select id="gd-default-type" class="gd-type-select" onchange="setDesignerDefaultType(this.value)" aria-label="Default slot type" title="Type for new &amp; auto-named slots">
+                    ${Object.entries(SLOT_TYPE_LABELS).map(([val, label]) => `
+                      <option value="${val}" ${designer.defaultType === val ? 'selected' : ''}>${label}</option>
+                    `).join('')}
+                  </select>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="fillAllEmptyDesignerCells()">Fill empty</button>
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="autoNameAllDesignerSlots()">Auto-name</button>
+                </div>
+              </div>
+            </details>
+          </div>
+        </aside>
+      </div>
     </div>
   `;
 }
@@ -737,6 +864,8 @@ function initDesignerState(unitId, initialRows = null, initialCols = null) {
     fillEmptyCellsInDesigner();
   }
   designer.initialSnapshot = serializeDesignerState();
+  designer.undoStack = [];
+  designer.redoStack = [];
   return true;
 }
 
@@ -783,9 +912,11 @@ function syncDesignerControls() {
     multiBtn.classList.toggle('active', designer.multiSelectMode);
     multiBtn.setAttribute('aria-pressed', designer.multiSelectMode ? 'true' : 'false');
   }
+  updateUndoRedoButtons();
 }
 
 export function updateGridDesignerDimensions() {
+  pushDesignerHistory();
   const rowsVal = Math.max(1, Math.min(26, parseInt(document.getElementById('gd-rows-input')?.value, 10) || 1));
   const colsVal = Math.max(1, Math.min(26, parseInt(document.getElementById('gd-cols-input')?.value, 10) || 1));
   designer.rows = rowsVal;
@@ -806,6 +937,7 @@ export function updateGridDesignerDimensions() {
 }
 
 export function applyGridPreset(presetName) {
+  pushDesignerHistory();
   const existingQueue = designer.slots.filter(s => s.id !== null);
   const takeExisting = (fallbackName) => {
     const prev = existingQueue.shift();
@@ -916,6 +1048,7 @@ export function toggleDesignerMultiSelect() {
 export function toggleRowSectionBreak(rowNum) {
   const r = Number(rowNum);
   if (r < 1 || r >= designer.rows) return;
+  pushDesignerHistory();
   if (designer.sectionBreaks.includes(r)) {
     designer.sectionBreaks = designer.sectionBreaks.filter(b => b !== r);
   } else {
@@ -948,6 +1081,7 @@ export function setDesignerDefaultType(nextType) {
 }
 
 export function autoNameAllDesignerSlots() {
+  pushDesignerHistory();
   const label = SLOT_TYPE_LABELS[designer.defaultType] || 'Drawer';
   const sorted = [...designer.slots].sort((a, b) => (a.grid_row - b.grid_row) || (a.grid_col - b.grid_col));
   sorted.forEach((slot, idx) => {
@@ -958,12 +1092,14 @@ export function autoNameAllDesignerSlots() {
 }
 
 export function fillAllEmptyDesignerCells() {
+  pushDesignerHistory();
   fillEmptyCellsInDesigner();
   designer.selectedKeys.clear();
   renderDesignerCanvas();
 }
 
 export function addDrawerAtEmptyCell(r, c) {
+  pushDesignerHistory();
   const newSlot = {
     tempId: makeTempId(),
     id: null,
@@ -986,6 +1122,7 @@ export function combineSelectedDesignerCells() {
     showToast('Select 2 or more adjacent drawers or cells to combine.', 'info');
     return;
   }
+  pushDesignerHistory();
 
   const selectedSlots = [];
   let minR = Infinity;
@@ -1088,6 +1225,7 @@ export function resizeSelectedDesignerSlot(axis, delta) {
     }
   }
 
+  pushDesignerHistory();
   slot.grid_row_span = nextRowSpan;
   slot.grid_col_span = nextColSpan;
   if (/^[A-Z]\d+(–[A-Z]\d+)?$/.test(slot.name)) {
@@ -1101,6 +1239,8 @@ export function splitSelectedDesignerSlot() {
   const [key] = Array.from(designer.selectedKeys);
   const slot = designer.slots.find(s => s.tempId === key);
   if (!slot || (slot.grid_row_span <= 1 && slot.grid_col_span <= 1)) return;
+
+  pushDesignerHistory();
 
   designer.slots = designer.slots.filter(s => s.tempId !== slot.tempId);
   let first = true;
@@ -1132,6 +1272,7 @@ export function splitSelectedDesignerSlot() {
 
 export function removeSelectedDesignerSlot() {
   if (designer.selectedKeys.size === 0) return;
+  pushDesignerHistory();
   const toDelete = new Set(designer.selectedKeys);
   designer.slots = designer.slots.filter(s => !toDelete.has(s.tempId));
   designer.selectedKeys.clear();
@@ -1165,7 +1306,7 @@ function renderDesignerCanvas() {
 
   const rowTracks = ['auto'];
   for (let r = 1; r <= designer.rows; r++) {
-    rowTracks.push('minmax(54px, auto)');
+    rowTracks.push('68px');
     if (breaks.includes(r)) rowTracks.push('14px');
   }
 
@@ -1174,25 +1315,31 @@ function renderDesignerCanvas() {
     return `<div class="cgrid-col-hdr" style="grid-row: 1; grid-column: ${c + 1};">${escapeHtml(colToLetter(c))}</div>`;
   }).join('');
 
+  const rowBands = computeUniformRowBands(designer.rows, designer.cols, designer.slots, breaks);
   let rowHdrs = '';
-  let dividers = '';
-  for (let r = 1; r <= designer.rows; r++) {
-    const cssR = cssRowForDataRow(r, breaks);
-    const hasBreak = breaks.includes(r);
+  for (const band of rowBands) {
+    const startCssR = cssRowForDataRow(band.startRow, breaks);
+    const endCssR = cssRowForDataRow(band.endRow, breaks) + 1;
+    const hasBreak = breaks.includes(band.endRow);
     rowHdrs += `
-      <div class="cgrid-row-hdr is-editable" style="grid-row: ${cssR}; grid-column: 1;">
-        <span>${r}</span>
-        ${r < designer.rows ? `
+      <div class="cgrid-row-hdr is-editable ${band.span > 1 ? 'is-merged-row' : ''}" style="grid-row: ${startCssR} / ${endCssR}; grid-column: 1;">
+        <span>${escapeHtml(band.label)}</span>
+        ${band.endRow < designer.rows ? `
           <button
             type="button"
             class="gd-break-btn ${hasBreak ? 'active' : ''}"
-            onclick="toggleRowSectionBreak(${r})"
-            title="${hasBreak ? 'Remove section divider below row ' + r : 'Add section divider below row ' + r}"
+            onclick="toggleRowSectionBreak(${band.endRow})"
+            title="${hasBreak ? 'Remove section divider below row ' + band.label : 'Add section divider below row ' + band.label}"
           >—</button>
         ` : ''}
       </div>
     `;
-    if (hasBreak) {
+  }
+
+  let dividers = '';
+  for (let r = 1; r <= designer.rows; r++) {
+    const cssR = cssRowForDataRow(r, breaks);
+    if (breaks.includes(r)) {
       dividers += `
         <div class="cgrid-section-divider is-designer" style="grid-row: ${cssR + 1}; grid-column: 1 / ${designer.cols + 2};">
           <span>Section Divider</span>
@@ -1344,6 +1491,7 @@ function renderDesignerCanvas() {
       </div>
     `;
   }
+  updateUndoRedoButtons();
 }
 
 export function designerClearSelection() {
@@ -1418,6 +1566,8 @@ export function handleDesignerDropOnSlot(event, targetTempId) {
     return;
   }
 
+  pushDesignerHistory();
+
   for (const other of designer.slots) {
     if (other.tempId === src.tempId || other.tempId === dst.tempId) continue;
     const otherRect = { r: other.grid_row, c: other.grid_col, rs: other.grid_row_span, cs: other.grid_col_span };
@@ -1464,6 +1614,7 @@ export function handleDesignerDropOnEmpty(event, targetRow, targetCol) {
     }
   }
 
+  pushDesignerHistory();
   src.grid_row = newRect.r;
   src.grid_col = newRect.c;
   refreshAutoCoordName(src);

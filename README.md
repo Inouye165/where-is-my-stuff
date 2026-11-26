@@ -37,7 +37,9 @@ By default, WIMS binds to `0.0.0.0:8000`:
 
 ## Key Capabilities
 
-- **Hierarchical Spaces & Container Grid Designer**: Organize spaces, shelves, containers, bins, drawers, compartments, and cubbies to arbitrary depth. Model multi-drawer cabinets visually with customizable `rows × columns` grids, merged multi-span drawers, section dividers, and click-to-locate highlighting.
+- **Hierarchical Spaces & Container Grid Designer**: Organize spaces, shelves, containers, bins, drawers, compartments, and cubbies to arbitrary depth. Model multi-drawer cabinets visually with customizable `rows × columns` grids, fixed-proportion cells, merged multi-span drawers (with automatic merged row headers for uniform rows), section dividers, drag-and-drop bin moves/swaps, and a sticky editor sidebar with **Save Grid**, **Cancel**, and **Undo / Redo** (`Ctrl+Z` / `Ctrl+Y`).
+- **Quick Container-Label Search & In-Page Locate**: Search drawers, nested boxes, labels (e.g. `M2`), and grid coordinates (e.g. `A1`, `D12`) from Home Search or directly inside any organizer/container page (`/` or `Ctrl+K`), with one-click links to open a drawer or scroll it into view and highlight it right on the organizer grid.
+- **Global View & Zoom Controls**: Built-in left-rail **View** controls across all pages—zoom stepper (`50%`–`125%`), **Width** (full-width expansion / fit-width grid scaling), and **View all** (auto-scale to fit the viewport)—synced with the organizer grid's zoom bar and persisted in `localStorage`.
 - **Dual-Photo Context & Perspective Editor**:
   - **Context Photo (`context_photo`)**: Wide shot showing where a container or shelf sits.
   - **Container Gallery (`container_photo` + `LocationPhoto`)**: Exterior and interior shots of bins and drawers.

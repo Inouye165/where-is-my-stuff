@@ -11,6 +11,11 @@ function runGuarded(fn) {
     fn();
     committedHash = window.location.hash || '';
     if (committedHash) saveLastRoute(committedHash);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => window.applyGlobalViewOptions?.());
+    } else {
+      window.applyGlobalViewOptions?.();
+    }
   };
   if (!isGridDirty()) {
     run();
@@ -236,23 +241,59 @@ export function navToItem(itemId, recordHistory = true) {
   });
 }
 
+function clearActiveSpotlight() {
+  state.spotlightDrawerId = null;
+  if (typeof document === 'undefined') return;
+  document.querySelectorAll('.spotlight-highlight').forEach(el => {
+    el.classList.remove('spotlight-highlight', 'is-highlighted');
+  });
+  document.querySelectorAll('.spotlight-badge, .cgrid-here-badge').forEach(el => el.remove());
+}
+
+function resolveUnitChildDrawerId(unitId, targetLocId) {
+  let curr = state.locationMap.get(Number(targetLocId));
+  const visited = new Set();
+  while (curr && curr.parent_id && !visited.has(curr.id)) {
+    visited.add(curr.id);
+    if (Number(curr.parent_id) === Number(unitId)) {
+      return Number(curr.id);
+    }
+    curr = state.locationMap.get(Number(curr.parent_id));
+  }
+  return Number(targetLocId);
+}
+
 export function locateDrawerInUnit(unitId, drawerId) {
-  let resolvedUnitId = unitId;
+  let resolvedUnitId = unitId ? Number(unitId) : null;
   if (!resolvedUnitId && drawerId) {
-    const d = state.locationMap.get(drawerId);
-    if (d && d.parent_id) resolvedUnitId = d.parent_id;
+    const d = state.locationMap.get(Number(drawerId));
+    if (d && d.parent_id) resolvedUnitId = Number(d.parent_id);
   }
   if (!resolvedUnitId) return;
 
-  navToStorageUnit(resolvedUnitId, true, drawerId);
+  const targetDrawerId = resolveUnitChildDrawerId(resolvedUnitId, drawerId);
+  const alreadyOnUnit = state.currentView === 'unit' && Number(state.currentLocationId) === resolvedUnitId;
+
+  if (alreadyOnUnit && typeof document !== 'undefined') {
+    clearActiveSpotlight();
+    state.spotlightDrawerId = targetDrawerId;
+    const el = document.getElementById(`drawer-card-${targetDrawerId}`);
+    if (el) {
+      el.classList.add('spotlight-highlight');
+      if (el.classList.contains('cgrid-slot')) {
+        el.classList.add('is-highlighted');
+      }
+      el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    }
+  } else {
+    navToStorageUnit(resolvedUnitId, true, targetDrawerId);
+  }
 
   clearTimeout(state.spotlightTimer);
   state.spotlightTimer = setTimeout(() => {
-    if (state.currentView !== 'unit' || Number(state.currentLocationId) !== Number(resolvedUnitId)) return;
-    state.spotlightDrawerId = null;
-    document.querySelector('.drawer-card.spotlight-highlight')?.classList.remove('spotlight-highlight');
-    document.querySelector('.spotlight-badge')?.remove();
-  }, 8000);
+    if (state.currentView !== 'unit' || Number(state.currentLocationId) !== resolvedUnitId) return;
+    clearActiveSpotlight();
+  }, 10000);
 }
 
 export function handleGlobalBack() {
