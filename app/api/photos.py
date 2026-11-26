@@ -7,6 +7,7 @@ from app.schemas.system import (
     CaptureSessionCreateResponse,
     CaptureSessionStatusResponse,
     PhotoUploadResponse,
+    VisionProvidersResponse,
 )
 from app.services.capture_session_service import capture_session_service
 from app.services.photo_service import photo_service
@@ -15,9 +16,10 @@ from app.services.vision_service import vision_service
 router = APIRouter(prefix="/photos", tags=["Photos"])
 
 
-@router.get("/vision-providers")
-async def get_vision_providers() -> dict:
-    return await vision_service.get_provider_status()
+@router.get("/vision-providers", response_model=VisionProvidersResponse)
+async def get_vision_providers() -> VisionProvidersResponse:
+    data = await vision_service.get_provider_status()
+    return VisionProvidersResponse(**data)
 
 
 @router.post("/upload", response_model=PhotoUploadResponse)
@@ -34,8 +36,10 @@ def upload_photo(file: UploadFile = File(...)) -> PhotoUploadResponse:
 def create_capture_session(
     request: Request,
     payload: Optional[CaptureSessionCreate] = Body(default=None),
+    db: Session = Depends(get_db),
 ) -> CaptureSessionCreateResponse:
     data = capture_session_service.create_session(
+        db=db,
         label=payload.label if payload else None,
         host_header=request.headers.get("host"),
         base_url_param=payload.base_url if payload else None,
@@ -45,8 +49,8 @@ def create_capture_session(
 
 
 @router.get("/capture-sessions/{token}", response_model=CaptureSessionStatusResponse)
-def get_capture_session(token: str) -> CaptureSessionStatusResponse:
-    sess = capture_session_service.get_session(token)
+def get_capture_session(token: str, db: Session = Depends(get_db)) -> CaptureSessionStatusResponse:
+    sess = capture_session_service.get_session(db=db, token=token)
     photos_list = [PhotoUploadResponse(**p) for p in sess.photos]
     return CaptureSessionStatusResponse(
         token=sess.token,
@@ -63,8 +67,10 @@ def get_capture_session_qr(
     token: str,
     request: Request,
     base_url: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
 ) -> Response:
     png_bytes = capture_session_service.generate_qr_png(
+        db=db,
         token=token,
         host_header=request.headers.get("host"),
         base_url_param=base_url,

@@ -1,10 +1,43 @@
 from io import BytesIO
 import os
+import re
 import socket
 from typing import Optional
 from urllib.parse import urlsplit
 import qrcode
 from app.core.config import settings
+from app.core.exceptions import BadRequestError
+
+_SCHEME_PREFIX_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+
+
+def validate_http_url(raw_url: str, *, allow_scheme_less: bool = False) -> str:
+    """Validate that a URL is a clean http/https URL without credentials or control characters."""
+    if not isinstance(raw_url, str):
+        raise BadRequestError("Invalid URL.")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw_url):
+        raise BadRequestError("Invalid URL.")
+    val = raw_url.strip()
+    if not val or any(ch.isspace() for ch in val):
+        raise BadRequestError("Invalid URL.")
+    if "://" not in val:
+        if not allow_scheme_less or _SCHEME_PREFIX_RE.match(val):
+            raise BadRequestError("URL must use http:// or https://.")
+        val = f"http://{val}"
+
+    try:
+        parsed = urlsplit(val)
+        port = parsed.port
+    except ValueError as exc:
+        raise BadRequestError("Invalid URL.") from exc
+
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+        raise BadRequestError("URL must use http:// or https:// with a valid host.")
+    if parsed.username is not None or parsed.password is not None:
+        raise BadRequestError("URL must not contain embedded credentials.")
+    if port is not None and not (1 <= port <= 65535):
+        raise BadRequestError("Invalid URL port.")
+    return val.rstrip("/")
 
 def get_lan_ip() -> str:
     """
@@ -34,17 +67,11 @@ def resolve_effective_base_url(host_header: Optional[str] = None, base_url_param
     4. Fallback to http://<LAN_IP>:<PORT>.
     """
     if base_url_param and base_url_param.strip():
-        val = base_url_param.strip().replace("\r", "").replace("\n", "").rstrip("/")
-        if not val.startswith("http://") and not val.startswith("https://"):
-            val = f"http://{val}"
-        return val
+        return validate_http_url(base_url_param, allow_scheme_less=True)
 
     public_override = os.environ.get("PUBLIC_BASE_URL") or settings.PUBLIC_BASE_URL
     if public_override:
-        val = public_override.strip().replace("\r", "").replace("\n", "").rstrip("/")
-        if not val.startswith("http://") and not val.startswith("https://"):
-            val = f"http://{val}"
-        return val
+        return validate_http_url(public_override, allow_scheme_less=True)
 
     lan_ip = get_lan_ip()
     port = settings.PORT

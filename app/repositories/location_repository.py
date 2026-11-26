@@ -18,6 +18,14 @@ class LocationRepository:
         return list(db.execute(stmt).scalars().all())
 
     @staticmethod
+    def list_by_ids(db: Session, ids: Iterable[int]) -> List[Location]:
+        id_list = [int(i) for i in set(ids)]
+        if not id_list:
+            return []
+        stmt = select(Location).where(Location.id.in_(id_list)).order_by(Location.id.asc())
+        return list(db.execute(stmt).scalars().all())
+
+    @staticmethod
     def get_direct_item_counts(db: Session) -> Dict[int, int]:
         stmt = (
             select(Item.location_id, func.count(Item.id))
@@ -25,6 +33,36 @@ class LocationRepository:
             .group_by(Item.location_id)
         )
         return {int(loc_id): int(cnt) for loc_id, cnt in db.execute(stmt).all() if loc_id is not None}
+
+    @staticmethod
+    def get_direct_item_counts_for(db: Session, location_ids: Iterable[int]) -> Dict[int, int]:
+        id_list = [int(i) for i in set(location_ids)]
+        if not id_list:
+            return {}
+        stmt = (
+            select(Item.location_id, func.count(Item.id))
+            .where(Item.location_id.in_(id_list))
+            .group_by(Item.location_id)
+        )
+        return {int(loc_id): int(cnt) for loc_id, cnt in db.execute(stmt).all() if loc_id is not None}
+
+    @staticmethod
+    def get_ancestor_ids(db: Session, seed_ids: Iterable[int]) -> Set[int]:
+        seeds = [int(i) for i in set(seed_ids)]
+        if not seeds:
+            return set()
+
+        base_cte = (
+            select(Location.id, Location.parent_id)
+            .where(Location.id.in_(seeds))
+            .cte(name="location_ancestors", recursive=True)
+        )
+        recursive_part = select(Location.id, Location.parent_id).join(
+            base_cte, Location.id == base_cte.c.parent_id
+        )
+        cte = base_cte.union(recursive_part)
+        rows = db.execute(select(cte.c.id)).scalars().all()
+        return {int(r) for r in rows}
 
     @staticmethod
     def get_descendant_ids(db: Session, seed_ids: Iterable[int]) -> Set[int]:

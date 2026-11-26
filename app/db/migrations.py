@@ -1,6 +1,10 @@
+from contextlib import contextmanager
 from datetime import datetime, timezone
+import os
+from pathlib import Path
 import threading
-from typing import Callable, List, Tuple
+import time
+from typing import Callable, Iterator, List, Optional, Tuple
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection, Engine
 from app.core.database import Base
@@ -109,6 +113,36 @@ def _migration_006_location_label(conn: Connection) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_locations_label ON locations (label)"))
 
 
+def _migration_007_grid_slot_unique_index(conn: Connection) -> None:
+    inspector = inspect(conn)
+    if "locations" not in inspector.get_table_names():
+        return
+    # Skip creating the unique index if legacy rows already contain duplicate grid coords.
+    dup = conn.execute(
+        text(
+            "SELECT 1 FROM locations "
+            "WHERE parent_id IS NOT NULL AND grid_row IS NOT NULL AND grid_col IS NOT NULL "
+            "GROUP BY parent_id, grid_row, grid_col HAVING COUNT(*) > 1 LIMIT 1"
+        )
+    ).fetchone()
+    if dup is None:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_locations_parent_grid_pos "
+                "ON locations (parent_id, grid_row, grid_col) "
+                "WHERE parent_id IS NOT NULL AND grid_row IS NOT NULL AND grid_col IS NOT NULL"
+            )
+        )
+
+
+def _migration_008_persistent_sessions(conn: Connection) -> None:
+    Base.metadata.create_all(bind=conn)
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_capture_sessions_expires_at ON capture_sessions (expires_at)"))
+    conn.execute(
+        text("CREATE INDEX IF NOT EXISTS ix_unit_setup_sessions_expires_at ON unit_setup_sessions (expires_at)")
+    )
+
+
 MIGRATIONS: List[MigrationStep] = [
     (1, "001_initial_schema", _migration_001_initial_schema),
     (2, "002_performance_indexes", _migration_002_performance_indexes),
@@ -116,6 +150,8 @@ MIGRATIONS: List[MigrationStep] = [
     (4, "004_location_photos", _migration_004_location_photos),
     (5, "005_item_attachments", _migration_005_item_attachments),
     (6, "006_location_label", _migration_006_location_label),
+    (7, "007_grid_slot_unique_index", _migration_007_grid_slot_unique_index),
+    (8, "008_persistent_sessions", _migration_008_persistent_sessions),
 ]
 
 
@@ -145,9 +181,45 @@ def get_current_schema_version(engine: Engine) -> int:
 _MIGRATION_LOCK = threading.Lock()
 
 
+@contextmanager
+def _cross_process_migration_lock(engine: Engine, timeout_seconds: float = 60.0) -> Iterator[None]:
+    """Acquire an exclusive lock file for file-backed SQLite databases across worker processes."""
+    lock_path: Optional[Path] = None
+    if engine.dialect.name == "sqlite" and engine.url.database and engine.url.database != ":memory:":
+        lock_path = Path(f"{engine.url.database}.migrate.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                os.write(fd, str(os.getpid()).encode("ascii"))
+                os.close(fd)
+                break
+            except FileExistsError:
+                try:
+                    if lock_path.exists() and (time.time() - lock_path.stat().st_mtime) > timeout_seconds:
+                        lock_path.unlink(missing_ok=True)
+                        continue
+                except OSError:
+                    pass
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for migration lock: {lock_path}")
+                time.sleep(0.05)
+
+    try:
+        yield
+    finally:
+        if lock_path is not None:
+            lock_path.unlink(missing_ok=True)
+
+
 def run_migrations(engine: Engine) -> int:
-    with _MIGRATION_LOCK:
+    with _MIGRATION_LOCK, _cross_process_migration_lock(engine):
         with engine.begin() as conn:
+            if engine.dialect.name == "sqlite":
+                conn.execute(text("BEGIN IMMEDIATE"))
+            elif engine.dialect.name == "postgresql":
+                conn.execute(text("SELECT pg_advisory_xact_lock(79194421)"))
             _ensure_migrations_table(conn)
             conn.execute(text("DELETE FROM schema_migrations WHERE version < 0"))
             applied_rows = conn.execute(text("SELECT version FROM schema_migrations")).fetchall()

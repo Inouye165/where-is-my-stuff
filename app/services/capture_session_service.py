@@ -1,15 +1,28 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import json
 import secrets
-from threading import Lock
-from typing import Dict, List, Optional
+from typing import List, Optional
 from fastapi import UploadFile, status
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 from app.core.exceptions import AppError, NotFoundError
 from app.core.network import build_qr_png, resolve_effective_base_url
+from app.models.session import CaptureSessionRecord
 from app.repositories.location_repository import location_repository
 from app.services.location_service import location_service
 from app.services.photo_service import photo_service
+
+
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def _db_ts(db: Session, dt: datetime) -> datetime:
+    utc_dt = _as_utc(dt)
+    if db.get_bind().dialect.name == "sqlite":
+        return utc_dt.replace(tzinfo=None)
+    return utc_dt
 
 
 @dataclass
@@ -24,25 +37,36 @@ class CaptureSession:
 
 
 class CaptureSessionService:
-    """In-memory store for short-lived mobile camera QR handoff sessions."""
+    """Database-backed store for short-lived mobile camera QR handoff sessions."""
 
     TTL_SECONDS = 600
+    MAX_SESSIONS = 500
 
-    def __init__(self) -> None:
-        self._sessions: Dict[str, CaptureSession] = {}
-        self._lock = Lock()
+    @staticmethod
+    def _to_snapshot(rec: CaptureSessionRecord) -> CaptureSession:
+        try:
+            raw_photos = json.loads(rec.photos_json or "[]")
+            photos = [dict(p) for p in raw_photos if isinstance(p, dict)]
+        except (ValueError, TypeError):
+            photos = []
+        return CaptureSession(
+            token=rec.token,
+            label=rec.label,
+            created_at=_as_utc(rec.created_at),
+            expires_at=_as_utc(rec.expires_at),
+            location_id=rec.location_id,
+            status=rec.status,
+            photos=photos,
+        )
 
-    def _prune_expired(self, now: datetime) -> None:
-        stale_cutoff = now - timedelta(minutes=30)
-        expired_tokens = [
-            tok for tok, sess in self._sessions.items()
-            if sess.expires_at < stale_cutoff
-        ]
-        for tok in expired_tokens:
-            del self._sessions[tok]
+    @staticmethod
+    def _prune_expired(db: Session, now: datetime, include_recently_expired: bool = False) -> None:
+        cutoff = now if include_recently_expired else (now - timedelta(minutes=30))
+        db.execute(delete(CaptureSessionRecord).where(CaptureSessionRecord.expires_at < _db_ts(db, cutoff)))
 
     def create_session(
         self,
+        db: Session,
         label: Optional[str] = None,
         host_header: Optional[str] = None,
         base_url_param: Optional[str] = None,
@@ -52,15 +76,29 @@ class CaptureSessionService:
         token = secrets.token_urlsafe(24)
         clean_label = (label or "Photo").strip()[:80] or "Photo"
 
-        with self._lock:
-            self._prune_expired(now)
-            self._sessions[token] = CaptureSession(
-                token=token,
-                label=clean_label,
-                created_at=now,
-                expires_at=now + timedelta(seconds=self.TTL_SECONDS),
-                location_id=location_id,
+        self._prune_expired(db, now)
+        active_count = int(db.execute(select(func.count(CaptureSessionRecord.token))).scalar() or 0)
+        if active_count >= self.MAX_SESSIONS:
+            self._prune_expired(db, now, include_recently_expired=True)
+            active_count = int(db.execute(select(func.count(CaptureSessionRecord.token))).scalar() or 0)
+        if active_count >= self.MAX_SESSIONS:
+            raise AppError(
+                "Too many active capture sessions. Please wait and try again.",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                error_code="too_many_sessions",
             )
+
+        rec = CaptureSessionRecord(
+            token=token,
+            label=clean_label,
+            location_id=location_id,
+            status="pending",
+            photos_json="[]",
+            created_at=_db_ts(db, now),
+            expires_at=_db_ts(db, now + timedelta(seconds=self.TTL_SECONDS)),
+        )
+        db.add(rec)
+        db.flush()
 
         effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
         capture_url = f"{effective_base}/capture.html?token={token}"
@@ -73,29 +111,17 @@ class CaptureSessionService:
             "qr_url": f"/api/v1/photos/capture-sessions/{token}/qr",
         }
 
-    @staticmethod
-    def _snapshot(sess: CaptureSession) -> CaptureSession:
-        return CaptureSession(
-            token=sess.token,
-            label=sess.label,
-            created_at=sess.created_at,
-            expires_at=sess.expires_at,
-            location_id=sess.location_id,
-            status=sess.status,
-            photos=[dict(p) for p in sess.photos],
-        )
+    def get_session(self, db: Session, token: str) -> CaptureSession:
+        rec = db.get(CaptureSessionRecord, token)
+        if not rec:
+            raise NotFoundError("Capture session not found.")
+        if datetime.now(timezone.utc) > _as_utc(rec.expires_at) and rec.status == "pending":
+            rec.status = "expired"
+            db.flush()
+        return self._to_snapshot(rec)
 
-    def get_session(self, token: str) -> CaptureSession:
-        with self._lock:
-            sess = self._sessions.get(token)
-            if not sess:
-                raise NotFoundError("Capture session not found.")
-            if datetime.now(timezone.utc) > sess.expires_at and sess.status == "pending":
-                sess.status = "expired"
-            return self._snapshot(sess)
-
-    def require_active_session(self, token: str) -> CaptureSession:
-        sess = self.get_session(token)
+    def require_active_session(self, db: Session, token: str) -> CaptureSession:
+        sess = self.get_session(db, token)
         if sess.status == "expired" or datetime.now(timezone.utc) > sess.expires_at:
             raise AppError(
                 "Capture session has expired. Please scan a new QR code.",
@@ -104,24 +130,28 @@ class CaptureSessionService:
             )
         return sess
 
-    def mark_uploaded(self, token: str, photo_result: dict) -> CaptureSession:
-        with self._lock:
-            sess = self._sessions.get(token)
-            if not sess:
-                raise NotFoundError("Capture session not found.")
-            if datetime.now(timezone.utc) > sess.expires_at:
-                sess.status = "expired"
-                raise AppError(
-                    "Capture session has expired. Please scan a new QR code.",
-                    status_code=status.HTTP_410_GONE,
-                    error_code="session_expired",
-                )
-            sess.status = "uploaded"
-            sess.photos.append(dict(photo_result))
-            return self._snapshot(sess)
+    def mark_uploaded(self, db: Session, token: str, photo_result: dict) -> CaptureSession:
+        rec = db.get(CaptureSessionRecord, token)
+        if not rec:
+            raise NotFoundError("Capture session not found.")
+        if datetime.now(timezone.utc) > _as_utc(rec.expires_at):
+            rec.status = "expired"
+            db.flush()
+            raise AppError(
+                "Capture session has expired. Please scan a new QR code.",
+                status_code=status.HTTP_410_GONE,
+                error_code="session_expired",
+            )
+        snap = self._to_snapshot(rec)
+        photos = list(snap.photos)
+        photos.append(dict(photo_result))
+        rec.photos_json = json.dumps(photos)
+        rec.status = "uploaded"
+        db.flush()
+        return self._to_snapshot(rec)
 
     def process_upload(self, db: Session, token: str, file: UploadFile) -> dict:
-        sess = self.require_active_session(token)
+        sess = self.require_active_session(db, token)
         result = photo_service.process_and_save(file)
         photo_service.schedule_rollback_cleanup(db, result["original_path"], result.get("thumbnail_path"))
 
@@ -138,7 +168,7 @@ class CaptureSessionService:
             db.commit()
 
         try:
-            self.mark_uploaded(token, result)
+            self.mark_uploaded(db, token, result)
         except Exception:
             if attached_photo_id is not None and sess.location_id is not None:
                 location_service.delete_photo(db, sess.location_id, attached_photo_id)
@@ -152,15 +182,15 @@ class CaptureSessionService:
 
     def generate_qr_png(
         self,
+        db: Session,
         token: str,
         host_header: Optional[str] = None,
         base_url_param: Optional[str] = None,
     ) -> bytes:
-        self.require_active_session(token)
+        self.require_active_session(db, token)
         effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
         capture_url = f"{effective_base}/capture.html?token={token}"
         return build_qr_png(capture_url)
 
 
 capture_session_service = CaptureSessionService()
-

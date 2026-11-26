@@ -1,13 +1,10 @@
 from typing import List, Optional, Union
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
-from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.network import get_lan_ip, resolve_effective_base_url
-from app.core.exceptions import NotFoundError
-from app.services.photo_service import photo_service
-from app.schemas.item import ItemRead, ItemUpdate, VisionAnalysisResponse
+from app.schemas.item import ItemRead, VisionAnalysisResponse
 from app.schemas.location import (
     GridSlotEnsureRequest,
     GridSlotMoveRequest,
@@ -20,8 +17,8 @@ from app.schemas.location import (
     LocationTree,
     LocationUpdate,
 )
-from app.schemas.system import NetworkInfoResponse
-from app.services.image_lookup_service import find_and_import_images_batch, is_crop_or_missing_photo
+from app.schemas.system import FindLocationItemImagesResponse, NetworkInfoResponse
+from app.services.image_lookup_service import find_and_import_images_batch, import_images_for_location
 from app.services.inventory_service import inventory_service
 from app.services.location_service import location_service
 
@@ -145,51 +142,20 @@ async def analyze_drawer_photo(
     )
 
 
-@router.post("/{location_id}/find-item-images")
+@router.post("/{location_id}/find-item-images", response_model=FindLocationItemImagesResponse)
 async def find_location_item_images(
     location_id: int,
     force: bool = Query(default=False),
     include_crops: bool = Query(default=True),
     db: Session = Depends(get_db),
-) -> dict:
-    def _collect_candidates() -> list[dict]:
-        location_service.get_read_by_id(db, location_id)
-        loc_items = inventory_service.list_items_for_location(db, location_id)
-        return [
-            {
-                "id": it.id,
-                "name": it.name,
-                "serial_or_part_number": it.serial_or_part_number,
-                "category": it.category,
-            }
-            for it in loc_items
-            if force or (is_crop_or_missing_photo(it.item_photo) if include_crops else not it.item_photo)
-        ]
-
-    candidates = await run_in_threadpool(_collect_candidates)
-    if not candidates:
-        return {"status": "ok", "checked_count": 0, "updated_count": 0}
-
-    resolved = await find_and_import_images_batch(candidates)
-
-    def _apply_photos() -> int:
-        count = 0
-        for item_id, saved_path in resolved.items():
-            try:
-                inventory_service.update(db, item_id, ItemUpdate(item_photo=saved_path))
-            except NotFoundError:
-                photo_service.delete_upload_url(saved_path)
-                continue
-            count += 1
-        return count
-
-    updated_count = await run_in_threadpool(_apply_photos)
-
-    return {
-        "status": "ok",
-        "checked_count": len(candidates),
-        "updated_count": updated_count,
-    }
+) -> FindLocationItemImagesResponse:
+    return await import_images_for_location(
+        db.get_bind(),
+        location_id,
+        force=force,
+        include_crops=include_crops,
+        batch_lookup_fn=find_and_import_images_batch,
+    )
 
 
 @router.get("/{location_id}", response_model=LocationRead)

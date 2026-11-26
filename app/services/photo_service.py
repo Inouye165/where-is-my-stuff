@@ -1,4 +1,5 @@
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -6,6 +7,7 @@ import threading
 import time
 from typing import Any, Optional
 import uuid
+import zipfile
 from fastapi import UploadFile
 from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy import event, func, select
@@ -23,6 +25,10 @@ ALLOWED_DOC_EXTENSIONS = {
     ".pdf", ".svg", ".csv", ".txt", ".md", ".json", ".xlsx", ".xls", ".doc", ".docx", ".zip"
 }
 READ_CHUNK_SIZE = 64 * 1024
+MAX_ZIP_ENTRIES = 1000
+MAX_ZIP_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 
 
 class PhotoService:
@@ -174,82 +180,107 @@ class PhotoService:
             "filename": orig_filename,
         }
 
-    def crop_and_save(self, source_path: Path, bbox: list[float], coord_mode: str = "auto") -> Optional[str]:
-        """Crop a [x1, y1, x2, y2] region (0-1, 0-1000, or pixels) from source_path and save it."""
-        if not source_path or not source_path.exists() or not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+    def _crop_from_image(self, img: Image.Image, bbox: list[float], coord_mode: str = "auto") -> Optional[str]:
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
             return None
         try:
             coords = [float(c) for c in bbox]
         except (TypeError, ValueError):
             return None
 
+        w, h = img.size
+        if w < 16 or h < 16:
+            return None
+
+        x1, y1, x2, y2 = coords
+        if coord_mode == "pixels":
+            pass
+        elif coord_mode == "norm_1" or (coord_mode == "auto" and max(coords) <= 1.0):
+            x1, y1, x2, y2 = x1 * w, y1 * h, x2 * w, y2 * h
+        elif coord_mode == "norm_1000" or (coord_mode == "auto" and max(coords) <= 1000.0):
+            x1, y1, x2, y2 = (x1 / 1000.0) * w, (y1 / 1000.0) * h, (x2 / 1000.0) * w, (y2 / 1000.0) * h
+
+        left, right = min(x1, x2), max(x1, x2)
+        top, bottom = min(y1, y2), max(y1, y2)
+        if (right - left) < 12 or (bottom - top) < 12:
+            return None
+
+        pad_x = max(8.0, (right - left) * 0.06)
+        pad_y = max(8.0, (bottom - top) * 0.06)
+        box = (
+            max(0, int(round(left - pad_x))),
+            max(0, int(round(top - pad_y))),
+            min(w, int(round(right + pad_x))),
+            min(h, int(round(bottom + pad_y))),
+        )
+        if box[2] - box[0] < 12 or box[3] - box[1] < 12:
+            return None
+
+        cropped = img.crop(box)
+        if cropped.mode in ("RGBA", "P", "LA"):
+            cropped = cropped.convert("RGB")
+
+        settings.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
+        settings.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+        unique_id = uuid.uuid4().hex
+        # "_crop_" marks AI crops so they can later be replaced by a real product photo.
+        orig_filename = f"ai_crop_{unique_id}.jpg"
+        thumb_filename = f"ai_crop_{unique_id}_thumb.webp"
+        orig_path = settings.ORIGINALS_DIR / orig_filename
+        thumb_path = settings.THUMBNAILS_DIR / thumb_filename
+        tmp_orig = settings.ORIGINALS_DIR / f".{orig_filename}.tmp"
+        tmp_thumb = settings.THUMBNAILS_DIR / f".{thumb_filename}.tmp"
+
+        try:
+            cropped.save(tmp_orig, format="JPEG", quality=85, optimize=True)
+            thumb_img = cropped.copy()
+            thumb_img.thumbnail(
+                (settings.THUMBNAIL_MAX_DIMENSION, settings.THUMBNAIL_MAX_DIMENSION),
+                Image.Resampling.LANCZOS,
+            )
+            thumb_img.save(tmp_thumb, format="WEBP", quality=82)
+            os.replace(tmp_orig, orig_path)
+            os.replace(tmp_thumb, thumb_path)
+        except Exception:
+            tmp_orig.unlink(missing_ok=True)
+            tmp_thumb.unlink(missing_ok=True)
+            orig_path.unlink(missing_ok=True)
+            thumb_path.unlink(missing_ok=True)
+            return None
+
+        return f"/uploads/originals/{orig_filename}"
+
+    def crop_and_save(self, source_path: Path, bbox: list[float], coord_mode: str = "auto") -> Optional[str]:
+        """Crop a [x1, y1, x2, y2] region (0-1, 0-1000, or pixels) from source_path and save it."""
+        if not source_path or not source_path.exists():
+            return None
         try:
             with Image.open(source_path) as opened:
                 img = ImageOps.exif_transpose(opened)
-                w, h = img.size
-                if w < 16 or h < 16:
-                    return None
-
-                x1, y1, x2, y2 = coords
-                if coord_mode == "pixels":
-                    pass
-                elif coord_mode == "norm_1" or (coord_mode == "auto" and max(coords) <= 1.0):
-                    x1, y1, x2, y2 = x1 * w, y1 * h, x2 * w, y2 * h
-                elif coord_mode == "norm_1000" or (coord_mode == "auto" and max(coords) <= 1000.0):
-                    x1, y1, x2, y2 = (x1 / 1000.0) * w, (y1 / 1000.0) * h, (x2 / 1000.0) * w, (y2 / 1000.0) * h
-
-                left, right = min(x1, x2), max(x1, x2)
-                top, bottom = min(y1, y2), max(y1, y2)
-                if (right - left) < 12 or (bottom - top) < 12:
-                    return None
-
-                pad_x = max(8.0, (right - left) * 0.06)
-                pad_y = max(8.0, (bottom - top) * 0.06)
-                box = (
-                    max(0, int(round(left - pad_x))),
-                    max(0, int(round(top - pad_y))),
-                    min(w, int(round(right + pad_x))),
-                    min(h, int(round(bottom + pad_y))),
-                )
-                if box[2] - box[0] < 12 or box[3] - box[1] < 12:
-                    return None
-
-                cropped = img.crop(box)
-                if cropped.mode in ("RGBA", "P", "LA"):
-                    cropped = cropped.convert("RGB")
-
-                settings.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
-                settings.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
-                unique_id = uuid.uuid4().hex
-                # "_crop_" marks AI crops so they can later be replaced by a real product photo.
-                orig_filename = f"ai_crop_{unique_id}.jpg"
-                thumb_filename = f"ai_crop_{unique_id}_thumb.webp"
-                orig_path = settings.ORIGINALS_DIR / orig_filename
-                thumb_path = settings.THUMBNAILS_DIR / thumb_filename
-                tmp_orig = settings.ORIGINALS_DIR / f".{orig_filename}.tmp"
-                tmp_thumb = settings.THUMBNAILS_DIR / f".{thumb_filename}.tmp"
-
-                try:
-                    cropped.save(tmp_orig, format="JPEG", quality=85, optimize=True)
-                    thumb_img = cropped.copy()
-                    thumb_img.thumbnail(
-                        (settings.THUMBNAIL_MAX_DIMENSION, settings.THUMBNAIL_MAX_DIMENSION),
-                        Image.Resampling.LANCZOS,
-                    )
-                    thumb_img.save(tmp_thumb, format="WEBP", quality=82)
-                    os.replace(tmp_orig, orig_path)
-                    os.replace(tmp_thumb, thumb_path)
-                except Exception:
-                    tmp_orig.unlink(missing_ok=True)
-                    tmp_thumb.unlink(missing_ok=True)
-                    orig_path.unlink(missing_ok=True)
-                    thumb_path.unlink(missing_ok=True)
-                    return None
-
-                return f"/uploads/originals/{orig_filename}"
+                return self._crop_from_image(img, bbox, coord_mode=coord_mode)
         except Exception as exc:
             logger.warning("Failed to crop bounding box from %s: %s", source_path, exc)
             return None
+
+    def crop_many_and_save(
+        self,
+        source_path: Path,
+        bboxes: list[Optional[list[float]]],
+        coord_mode: str = "auto",
+    ) -> list[Optional[str]]:
+        """Open and orient source_path once, then crop all bounding boxes in memory."""
+        if not source_path or not source_path.exists() or not bboxes:
+            return [None for _ in bboxes]
+        try:
+            with Image.open(source_path) as opened:
+                img = ImageOps.exif_transpose(opened)
+                return [
+                    self._crop_from_image(img, bbox, coord_mode=coord_mode) if bbox is not None else None
+                    for bbox in bboxes
+                ]
+        except Exception as exc:
+            logger.warning("Failed to batch-crop bounding boxes from %s: %s", source_path, exc)
+            return [None for _ in bboxes]
 
     def delete_upload_url(self, file_url: Optional[str]) -> bool:
         if not file_url or not file_url.startswith("/uploads/"):
@@ -312,6 +343,50 @@ class PhotoService:
             if url and url.startswith("/uploads/"):
                 rollback_files.add(url)
 
+    @staticmethod
+    def _validate_document_bytes(ext: str, raw: bytes) -> None:
+        if ext == ".pdf":
+            if not raw.startswith(b"%PDF-"):
+                raise BadRequestError("Uploaded file is not a valid PDF document.")
+            return
+
+        if ext in {".zip", ".docx", ".xlsx"}:
+            if not any(raw.startswith(sig) for sig in _ZIP_MAGICS):
+                raise BadRequestError(f"Uploaded file is not a valid {ext.upper().lstrip('.')} archive.")
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                    infos = zf.infolist()
+                    if len(infos) > MAX_ZIP_ENTRIES:
+                        raise BadRequestError("Archive contains too many entries.")
+                    if sum(info.file_size for info in infos) > MAX_ZIP_UNCOMPRESSED_BYTES:
+                        raise BadRequestError("Archive uncompressed size exceeds allowed limit.")
+            except BadRequestError:
+                raise
+            except (zipfile.BadZipFile, OSError) as exc:
+                raise BadRequestError(f"Corrupted or invalid {ext.upper().lstrip('.')} archive.") from exc
+            return
+
+        if ext in {".doc", ".xls"}:
+            if not raw.startswith(_OLE2_MAGIC):
+                raise BadRequestError(f"Uploaded file is not a valid {ext.upper().lstrip('.')} document.")
+            return
+
+        if ext in {".json", ".svg", ".txt", ".md", ".csv"}:
+            if b"\x00" in raw:
+                raise BadRequestError("Text attachment contains invalid binary null bytes.")
+            try:
+                decoded = raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise BadRequestError("Text attachment must be valid UTF-8.") from exc
+            if ext == ".json":
+                try:
+                    json.loads(decoded)
+                except json.JSONDecodeError as exc:
+                    raise BadRequestError("Uploaded JSON file is not valid JSON.") from exc
+            elif ext == ".svg":
+                if "<svg" not in decoded.lower():
+                    raise BadRequestError("Uploaded SVG file does not contain an <svg> element.")
+
     def process_and_save_attachment(self, file: UploadFile) -> dict[str, Any]:
         if not file or not file.filename:
             raise BadRequestError("No file provided.")
@@ -339,6 +414,7 @@ class PhotoService:
         raw = self._read_upload_bounded(file)
         if not raw:
             raise BadRequestError("Uploaded file is empty.")
+        self._validate_document_bytes(ext, raw)
 
         settings.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
         file_id = uuid.uuid4().hex

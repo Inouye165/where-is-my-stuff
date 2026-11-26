@@ -7,9 +7,29 @@ from typing import Any, Dict, List, Optional
 import anyio
 import httpx
 from app.core.config import settings
+from app.core.exceptions import BadRequestError
 from app.core.logging_config import logger
 from app.schemas.item import DetectedItem, VisionAnalysisResponse
 from app.services.photo_service import photo_service
+
+_GEMINI_MODEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-]{0,127}$")
+_GENERIC_MODEL_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:/\-]{0,127}$")
+
+
+def _validate_model_name(model: str, provider: str) -> str:
+    cleaned = model.strip()
+    if (
+        not cleaned
+        or len(cleaned) > 128
+        or ".." in cleaned
+        or any(ch in cleaned for ch in ("?", "#", "%", "@", "\\"))
+        or any(ch.isspace() for ch in cleaned)
+    ):
+        raise BadRequestError("Invalid vision model identifier.")
+    pattern = _GEMINI_MODEL_RE if provider == "gemini" else _GENERIC_MODEL_RE
+    if not pattern.match(cleaned):
+        raise BadRequestError("Invalid vision model identifier.")
+    return cleaned
 
 _VISION_PROMPT = (
     "Analyze this photo of an open storage drawer, bin, tool tray, compartmented assortment container/kit (open or closed lid), or a printed inventory list / packing list / lid chart. "
@@ -290,23 +310,47 @@ class VisionService:
                 message=f"Local model ({model}) detected {len(detected)} item(s).",
             )
 
-    async def _analyze_with_gemini(
-        self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None,
-        mime_type: str = "image/jpeg",
-    ) -> VisionAnalysisResponse:
-        prompt = _build_vision_prompt(expected_count)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        payload = {
+    @staticmethod
+    def _build_gemini_payload(prompt: str, b64_data: str, mime_type: str) -> dict[str, Any]:
+        return {
             "contents": [
                 {
                     "parts": [
                         {"text": prompt},
-                        {"inline_data": {"mime_type": mime_type, "data": b64_data}},
+                        {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": b64_data}},
                     ]
                 }
             ],
             "generationConfig": {"response_mime_type": "application/json"},
         }
+
+    @staticmethod
+    def _build_openai_payload(prompt: str, model: str, b64_data: str, mime_type: str) -> dict[str, Any]:
+        return {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type or 'image/jpeg'};base64,{b64_data}"},
+                        },
+                    ],
+                }
+            ],
+            "response_format": {"type": "json_object"},
+        }
+
+    async def _analyze_with_gemini(
+        self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None,
+        mime_type: str = "image/jpeg",
+    ) -> VisionAnalysisResponse:
+        safe_model = _validate_model_name(model, "gemini")
+        prompt = _build_vision_prompt(expected_count)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:generateContent"
+        payload = self._build_gemini_payload(prompt, b64_data, mime_type)
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(url, json=payload, headers={"x-goog-api-key": api_key})
             if resp.status_code != 200:
@@ -315,7 +359,7 @@ class VisionService:
                     items=[],
                     has_vision_api=True,
                     provider_used="gemini",
-                    model_used=model,
+                    model_used=safe_model,
                     message=f"Gemini vision returned HTTP {resp.status_code}. Verify your GEMINI_API_KEY.",
                 )
             resp_data = resp.json()
@@ -330,27 +374,16 @@ class VisionService:
                 suggested_category=group_cat,
                 has_vision_api=True,
                 provider_used="gemini",
-                model_used=model,
-                message=f"Gemini ({model}) detected {len(detected)} item(s).",
+                model_used=safe_model,
+                message=f"Gemini ({safe_model}) detected {len(detected)} item(s).",
             )
 
     async def _analyze_with_openai(
         self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None,
         mime_type: str = "image/jpeg",
     ) -> VisionAnalysisResponse:
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": _build_vision_prompt(expected_count)},
-                        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_data}"}},
-                    ],
-                }
-            ],
-            "response_format": {"type": "json_object"},
-        }
+        safe_model = _validate_model_name(model, "openai")
+        payload = self._build_openai_payload(_build_vision_prompt(expected_count), safe_model, b64_data, mime_type)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
@@ -360,7 +393,7 @@ class VisionService:
                     items=[],
                     has_vision_api=True,
                     provider_used="openai",
-                    model_used=model,
+                    model_used=safe_model,
                     message=f"OpenAI vision returned HTTP {resp.status_code}. Verify your OPENAI_API_KEY.",
                 )
             resp_data = resp.json()
@@ -375,8 +408,8 @@ class VisionService:
                 suggested_category=group_cat,
                 has_vision_api=True,
                 provider_used="openai",
-                model_used=model,
-                message=f"OpenAI ({model}) detected {len(detected)} item(s).",
+                model_used=safe_model,
+                message=f"OpenAI ({safe_model}) detected {len(detected)} item(s).",
             )
 
     async def analyze_image(
@@ -408,6 +441,14 @@ class VisionService:
         if not selected or selected == "auto":
             selected = "gemini" if gemini_key else ("openai" if openai_key else "local")
 
+        target_model: Optional[str] = None
+        if selected == "gemini":
+            target_model = _validate_model_name(model or settings.GEMINI_VISION_MODEL, "gemini")
+        elif selected == "openai":
+            target_model = _validate_model_name(model or settings.OPENAI_VISION_MODEL, "openai")
+        else:
+            target_model = _validate_model_name(self._effective_ollama_model(model), "local")
+
         try:
             if selected == "gemini":
                 if not gemini_key:
@@ -419,8 +460,7 @@ class VisionService:
                         message="GEMINI_API_KEY is not configured. Add it to .env or switch to Local Model (Ollama).",
                     )
                 result = await self._analyze_with_gemini(
-                    b64_data, model or settings.GEMINI_VISION_MODEL, gemini_key, expected_count=expected_count,
-                    mime_type=mime_type,
+                    b64_data, target_model, gemini_key, expected_count=expected_count, mime_type=mime_type,
                 )
             elif selected == "openai":
                 if not openai_key:
@@ -432,13 +472,11 @@ class VisionService:
                         message="OPENAI_API_KEY is not configured. Add it to .env or switch to Local Model (Ollama).",
                     )
                 result = await self._analyze_with_openai(
-                    b64_data, model or settings.OPENAI_VISION_MODEL, openai_key, expected_count=expected_count,
-                    mime_type=mime_type,
+                    b64_data, target_model, openai_key, expected_count=expected_count, mime_type=mime_type,
                 )
             else:
                 # Default: local (Ollama)
-                ollama_model = self._effective_ollama_model(model)
-                result = await self._analyze_with_ollama(b64_data, ollama_model, expected_count=expected_count)
+                result = await self._analyze_with_ollama(b64_data, target_model, expected_count=expected_count)
 
             if result.status == "success" and result.items and image_path and image_path.exists():
                 def _crop_all() -> int:
@@ -452,14 +490,16 @@ class VisionService:
                             batch_mode = "pixels"
                         else:
                             batch_mode = "norm_1000"
+                    crops = photo_service.crop_many_and_save(
+                        image_path,
+                        [it.bbox for it in result.items],
+                        coord_mode=batch_mode,
+                    )
                     cropped_count = 0
-                    for item in result.items:
-                        if item.bbox:
-                            item.crop_photo_path = photo_service.crop_and_save(
-                                image_path, item.bbox, coord_mode=batch_mode
-                            )
-                            if item.crop_photo_path:
-                                cropped_count += 1
+                    for item, crop_path in zip(result.items, crops):
+                        item.crop_photo_path = crop_path
+                        if crop_path:
+                            cropped_count += 1
                     return cropped_count
 
                 cropped_count = await anyio.to_thread.run_sync(_crop_all)
@@ -470,6 +510,8 @@ class VisionService:
                     cropped_count,
                 )
             return result
+        except BadRequestError:
+            raise
         except (httpx.RequestError, httpx.TimeoutException, ConnectionError, OSError) as exc:
             logger.warning("Vision analysis (%s) connection failed: %s", selected, exc)
             return VisionAnalysisResponse(
@@ -523,19 +565,9 @@ class VisionService:
 
         if gemini_key:
             try:
-                model = settings.GEMINI_VISION_MODEL
+                model = _validate_model_name(settings.GEMINI_VISION_MODEL, "gemini")
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-                payload = {
-                    "contents": [
-                        {
-                            "parts": [
-                                {"text": prompt},
-                                {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": b64_data}},
-                            ]
-                        }
-                    ],
-                    "generationConfig": {"response_mime_type": "application/json"},
-                }
+                payload = self._build_gemini_payload(prompt, b64_data, mime_type or "image/jpeg")
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     resp = await client.post(url, json=payload, headers={"x-goog-api-key": gemini_key})
                 if resp.status_code == 200:
@@ -543,24 +575,15 @@ class VisionService:
                     query = str(_extract_json_object(text_content).get("query", "")).strip()
                     if query:
                         return query, has_vision_api
-            except Exception:
-                pass
+                else:
+                    logger.warning("Vision search query (gemini) returned HTTP %s", resp.status_code)
+            except Exception as exc:
+                logger.warning("Vision search query extraction (gemini) failed: %s", exc)
 
         if openai_key:
             try:
-                payload = {
-                    "model": settings.OPENAI_VISION_MODEL,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {"type": "image_url", "image_url": {"url": f"data:{mime_type or 'image/jpeg'};base64,{b64_data}"}},
-                            ],
-                        }
-                    ],
-                    "response_format": {"type": "json_object"},
-                }
+                model = _validate_model_name(settings.OPENAI_VISION_MODEL, "openai")
+                payload = self._build_openai_payload(prompt, model, b64_data, mime_type or "image/jpeg")
                 headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
                 async with httpx.AsyncClient(timeout=15.0) as client:
                     resp = await client.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
@@ -569,8 +592,10 @@ class VisionService:
                     query = str(_extract_json_object(text_content).get("query", "")).strip()
                     if query:
                         return query, has_vision_api
-            except Exception:
-                pass
+                else:
+                    logger.warning("Vision search query (openai) returned HTTP %s", resp.status_code)
+            except Exception as exc:
+                logger.warning("Vision search query extraction (openai) failed: %s", exc)
 
         return "", has_vision_api
 

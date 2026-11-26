@@ -2648,6 +2648,9 @@ export async function openMoreModal(onThemeSync) {
     window.syncThemeButtons();
   }
   document.getElementById('more-modal')?.classList.add('open');
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('wims:more-opened'));
+  }
   const lanUrl = await fetchNetworkInfo();
   const lanEl = document.getElementById('more-lan-url');
   if (lanEl) lanEl.textContent = lanUrl;

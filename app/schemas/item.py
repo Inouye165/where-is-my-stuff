@@ -128,6 +128,14 @@ class ItemRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ItemPageResponse(BaseModel):
+    items: List[ItemRead] = Field(default_factory=list)
+    total: int
+    limit: int
+    next_cursor: Optional[str] = None
+    has_more: bool = False
+
+
 class ItemAttachmentRead(BaseModel):
     id: int
     item_id: int
@@ -177,6 +185,12 @@ class DetectedItem(BaseModel):
     brief_specs: Optional[str] = None
     bbox: Optional[List[float]] = None
     crop_photo_path: Optional[str] = None
+
+
+class FindItemImageResponse(BaseModel):
+    status: str = "ok"
+    item_photo: str
+    item: ItemRead
 
 
 class VisionAnalysisResponse(BaseModel):

@@ -207,12 +207,14 @@ def test_live_photo_enrichment_and_progress_updates(client):
     assert done.json()["status"] == "completed"
 
 
-def test_unit_setup_session_expiration(client):
-    from app.services.unit_setup_service import unit_setup_service
+def test_unit_setup_session_expiration(client, db_session):
+    from app.models.session import UnitSetupSessionRecord
 
     sess = client.post("/api/v1/unit-setup/sessions", json={}).json()
     token = sess["token"]
-    unit_setup_service._sessions[token].expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+    rec = db_session.get(UnitSetupSessionRecord, token)
+    rec.expires_at = (datetime.now(timezone.utc) - timedelta(seconds=10)).replace(tzinfo=None)
+    db_session.commit()
 
     get_resp = client.get(f"/api/v1/unit-setup/sessions/{token}")
     assert get_resp.status_code == 200

@@ -72,7 +72,7 @@ def test_capture_session_lifecycle(client):
     assert done_data["photo"]["original_path"] == uploaded["original_path"]
 
 
-def test_capture_session_not_found_and_expired(client):
+def test_capture_session_not_found_and_expired(client, db_session):
     assert client.get("/api/v1/photos/capture-sessions/missing-token").status_code == 404
     assert client.get("/api/v1/photos/capture-sessions/missing-token/qr").status_code == 404
 
@@ -85,11 +85,13 @@ def test_capture_session_not_found_and_expired(client):
     ).status_code == 404
 
     from datetime import datetime, timedelta, timezone
-    from app.services.capture_session_service import capture_session_service
+    from app.models.session import CaptureSessionRecord
 
     created = client.post("/api/v1/photos/capture-sessions", json={}).json()
     token = created["token"]
-    capture_session_service._sessions[token].expires_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    rec = db_session.get(CaptureSessionRecord, token)
+    rec.expires_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).replace(tzinfo=None)
+    db_session.commit()
 
     expired_status = client.get(f"/api/v1/photos/capture-sessions/{token}")
     assert expired_status.status_code == 200

@@ -84,6 +84,14 @@ export async function apiFetch(url, options = {}) {
 
     if (!response.ok) {
       const errBody = await response.json().catch(() => null);
+      if (
+        response.status === 401 &&
+        errBody?.error?.code === 'unauthorized' &&
+        typeof window !== 'undefined' &&
+        typeof window.dispatchEvent === 'function'
+      ) {
+        window.dispatchEvent(new CustomEvent('wims:auth-required'));
+      }
       const httpErr = new Error(extractErrorMessage(errBody, fallbackError));
       httpErr.status = response.status;
       throw httpErr;

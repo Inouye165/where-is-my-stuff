@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -52,4 +52,43 @@ class BackupResponse(BaseModel):
     size_bytes: int
     integrity_ok: bool
     created_at: str
+
+
+class BackupSummary(BaseModel):
+    filename: str
+    size_bytes: int
+    created_at: str
+    includes_uploads: bool
+
+
+class BackupStatusResponse(BaseModel):
+    auto_backup_enabled: bool
+    interval_hours: int
+    retention_count: int
+    latest_backup: Optional[BackupSummary] = None
+    backups: List[BackupSummary] = Field(default_factory=list)
+
+
+class VisionProviderInfo(BaseModel):
+    label: str
+    available: bool
+    model: str
+    base_url: Optional[str] = None
+    installed_models: List[str] = Field(default_factory=list)
+
+
+class VisionProvidersResponse(BaseModel):
+    default_provider: str
+    providers: Dict[str, VisionProviderInfo] = Field(default_factory=dict)
+
+
+class CleanupUnusedCropsResponse(BaseModel):
+    dry_run: bool
+    unused_crops: int
+
+
+class FindLocationItemImagesResponse(BaseModel):
+    status: str = "ok"
+    checked_count: int
+    updated_count: int
 

@@ -2,13 +2,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
 import secrets
-from threading import Lock
-from typing import Dict, List, Optional
+from typing import List, Optional
 from fastapi import status
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 from app.core.exceptions import AppError, BadRequestError, NotFoundError
 from app.core.network import build_qr_png, resolve_effective_base_url
 from app.models.location import Location
+from app.models.session import UnitSetupSessionRecord
 from app.repositories.location_repository import location_repository
 from app.schemas.location import LocationPhotoRead, LocationRead
 from app.schemas.unit_setup import (
@@ -18,6 +19,17 @@ from app.schemas.unit_setup import (
     UnitSetupSessionStatusResponse,
 )
 from app.services.location_service import location_service
+
+
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def _db_ts(db: Session, dt: datetime) -> datetime:
+    utc_dt = _as_utc(dt)
+    if db.get_bind().dialect.name == "sqlite":
+        return utc_dt.replace(tzinfo=None)
+    return utc_dt
 
 
 @dataclass
@@ -35,36 +47,30 @@ class UnitSetupSession:
 
 
 class UnitSetupService:
-    """In-memory coordinator for guided desktop <-> mobile storage unit setup sessions."""
+    """Database-backed coordinator for guided desktop <-> mobile storage unit setup sessions."""
 
     TTL_SECONDS = 1800
-
-    def __init__(self) -> None:
-        self._sessions: Dict[str, UnitSetupSession] = {}
-        self._lock = Lock()
-
-    def _prune_expired(self, now: datetime) -> None:
-        stale_cutoff = now - timedelta(minutes=30)
-        expired_tokens = [
-            tok for tok, sess in self._sessions.items()
-            if sess.expires_at < stale_cutoff
-        ]
-        for tok in expired_tokens:
-            del self._sessions[tok]
+    MAX_SESSIONS = 500
 
     @staticmethod
-    def _snapshot(sess: UnitSetupSession) -> UnitSetupSession:
+    def _to_snapshot(rec: UnitSetupSessionRecord) -> UnitSetupSession:
         return UnitSetupSession(
-            token=sess.token,
-            room_id=sess.room_id,
-            room_name=sess.room_name,
-            created_at=sess.created_at,
-            expires_at=sess.expires_at,
-            status=sess.status,
-            unit_id=sess.unit_id,
-            unit_name=sess.unit_name,
-            current_drawer_index=sess.current_drawer_index,
+            token=rec.token,
+            room_id=rec.room_id,
+            room_name=rec.room_name,
+            created_at=_as_utc(rec.created_at),
+            expires_at=_as_utc(rec.expires_at),
+            status=rec.status,
+            unit_id=rec.unit_id,
+            unit_name=rec.unit_name,
+            current_drawer_index=rec.current_drawer_index,
+            unit_creating=bool(rec.unit_creating),
         )
+
+    @staticmethod
+    def _prune_expired(db: Session, now: datetime, include_recently_expired: bool = False) -> None:
+        cutoff = now if include_recently_expired else (now - timedelta(minutes=30))
+        db.execute(delete(UnitSetupSessionRecord).where(UnitSetupSessionRecord.expires_at < _db_ts(db, cutoff)))
 
     def create_session(
         self,
@@ -83,15 +89,30 @@ class UnitSetupService:
         now = datetime.now(timezone.utc)
         token = secrets.token_urlsafe(24)
 
-        with self._lock:
-            self._prune_expired(now)
-            self._sessions[token] = UnitSetupSession(
-                token=token,
-                room_id=room_id,
-                room_name=room_name,
-                created_at=now,
-                expires_at=now + timedelta(seconds=self.TTL_SECONDS),
+        self._prune_expired(db, now)
+        active_count = int(db.execute(select(func.count(UnitSetupSessionRecord.token))).scalar() or 0)
+        if active_count >= self.MAX_SESSIONS:
+            self._prune_expired(db, now, include_recently_expired=True)
+            active_count = int(db.execute(select(func.count(UnitSetupSessionRecord.token))).scalar() or 0)
+        if active_count >= self.MAX_SESSIONS:
+            raise AppError(
+                "Too many active unit setup sessions. Please wait and try again.",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                error_code="too_many_sessions",
             )
+
+        rec = UnitSetupSessionRecord(
+            token=token,
+            room_id=room_id,
+            room_name=room_name,
+            status="waiting_for_phone",
+            current_drawer_index=0,
+            unit_creating=False,
+            created_at=_db_ts(db, now),
+            expires_at=_db_ts(db, now + timedelta(seconds=self.TTL_SECONDS)),
+        )
+        db.add(rec)
+        db.flush()
 
         effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
         mobile_url = f"{effective_base}/setup.html?token={token}"
@@ -105,18 +126,18 @@ class UnitSetupService:
             "qr_url": f"/api/v1/unit-setup/sessions/{token}/qr",
         }
 
-    def get_session(self, token: str) -> UnitSetupSession:
+    def get_session(self, db: Session, token: str) -> UnitSetupSession:
         now = datetime.now(timezone.utc)
-        with self._lock:
-            sess = self._sessions.get(token)
-            if not sess:
-                raise NotFoundError("Unit setup session not found.")
-            if now > sess.expires_at and sess.status != "completed":
-                sess.status = "expired"
-            return self._snapshot(sess)
+        rec = db.get(UnitSetupSessionRecord, token)
+        if not rec:
+            raise NotFoundError("Unit setup session not found.")
+        if now > _as_utc(rec.expires_at) and rec.status != "completed":
+            rec.status = "expired"
+            db.flush()
+        return self._to_snapshot(rec)
 
-    def require_active_session(self, token: str) -> UnitSetupSession:
-        sess = self.get_session(token)
+    def require_active_session(self, db: Session, token: str) -> UnitSetupSession:
+        sess = self.get_session(db, token)
         if sess.status == "expired" or (
             sess.status != "completed" and datetime.now(timezone.utc) > sess.expires_at
         ):
@@ -132,7 +153,9 @@ class UnitSetupService:
         drawers: List[UnitSetupDrawerSummary] = []
 
         if sess.unit_id is not None:
-            snapshot = location_service.build_snapshot(db, include_counts=True, include_photos=True)
+            snapshot = location_service.build_scoped_snapshot(
+                db, [sess.unit_id], include_counts=True, include_photos=True, photos_for_descendants=True
+            )
             unit_loc = snapshot.loc_by_id.get(sess.unit_id)
             if unit_loc is not None:
                 unit_read = snapshot.to_read(unit_loc)
@@ -177,21 +200,20 @@ class UnitSetupService:
         )
 
     def get_session_status(self, db: Session, token: str) -> UnitSetupSessionStatusResponse:
-        sess = self.get_session(token)
+        sess = self.get_session(db, token)
         return self._build_enriched_response(db, sess)
 
     def connect_phone(self, db: Session, token: str) -> UnitSetupSessionStatusResponse:
-        self.require_active_session(token)
+        self.require_active_session(db, token)
         now = datetime.now(timezone.utc)
-        with self._lock:
-            sess = self._sessions.get(token)
-            if not sess:
-                raise NotFoundError("Unit setup session not found.")
-            if sess.status == "waiting_for_phone":
-                sess.status = "creating_unit"
-            sess.expires_at = now + timedelta(seconds=self.TTL_SECONDS)
-            snap = self._snapshot(sess)
-        return self._build_enriched_response(db, snap)
+        rec = db.get(UnitSetupSessionRecord, token)
+        if not rec:
+            raise NotFoundError("Unit setup session not found.")
+        if rec.status == "waiting_for_phone":
+            rec.status = "creating_unit"
+        rec.expires_at = _db_ts(db, now + timedelta(seconds=self.TTL_SECONDS))
+        db.flush()
+        return self._build_enriched_response(db, self._to_snapshot(rec))
 
     def create_unit_for_session(
         self,
@@ -199,32 +221,45 @@ class UnitSetupService:
         token: str,
         data: UnitSetupCreateUnitRequest,
     ) -> UnitSetupSessionStatusResponse:
-        self.require_active_session(token)
-        with self._lock:
-            reserved = self._sessions.get(token)
-            if reserved is None:
-                raise NotFoundError("Unit setup session not found.")
-            if reserved.unit_id is not None or reserved.unit_creating:
-                raise BadRequestError("A storage unit has already been created for this setup session.")
-            reserved.unit_creating = True
-            room_id = reserved.room_id
+        self.require_active_session(db, token)
+        reserved = db.execute(
+            update(UnitSetupSessionRecord)
+            .where(
+                UnitSetupSessionRecord.token == token,
+                UnitSetupSessionRecord.unit_id.is_(None),
+                UnitSetupSessionRecord.unit_creating.is_(False),
+            )
+            .values(unit_creating=True)
+        )
+        if reserved.rowcount != 1:
+            raise BadRequestError("A storage unit has already been created for this setup session.")
+        db.commit()
 
         try:
-            return self._create_unit_reserved(db, token, data, room_id)
-        finally:
-            with self._lock:
-                live = self._sessions.get(token)
-                if live is not None:
-                    live.unit_creating = False
+            return self._create_unit_reserved(db, token, data)
+        except Exception:
+            db.rollback()
+            db.execute(
+                update(UnitSetupSessionRecord)
+                .where(
+                    UnitSetupSessionRecord.token == token,
+                    UnitSetupSessionRecord.unit_id.is_(None),
+                )
+                .values(unit_creating=False)
+            )
+            db.commit()
+            raise
 
     def _create_unit_reserved(
         self,
         db: Session,
         token: str,
         data: UnitSetupCreateUnitRequest,
-        room_id: Optional[int],
     ) -> UnitSetupSessionStatusResponse:
-        sess = self.get_session(token)
+        rec = db.get(UnitSetupSessionRecord, token)
+        if not rec:
+            raise NotFoundError("Unit setup session not found.")
+        room_id = rec.room_id
         if room_id is not None and location_repository.get_by_id(db, room_id) is None:
             raise NotFoundError(f"Room {room_id} no longer exists.")
 
@@ -243,7 +278,7 @@ class UnitSetupService:
             label=clean_label,
             description=data.description.strip() if data.description and data.description.strip() else None,
             location_type=unit_loc_type,
-            parent_id=sess.room_id,
+            parent_id=room_id,
             grid_rows=rows,
             grid_cols=cols,
         )
@@ -271,22 +306,17 @@ class UnitSetupService:
                 )
                 db.add(child)
 
+        now = datetime.now(timezone.utc)
+        rec.unit_id = unit.id
+        rec.unit_name = unit.name
+        rec.status = "capturing_drawers"
+        rec.current_drawer_index = 0
+        rec.unit_creating = False
+        rec.expires_at = _db_ts(db, now + timedelta(seconds=self.TTL_SECONDS))
         db.commit()
         db.refresh(unit)
 
-        now = datetime.now(timezone.utc)
-        with self._lock:
-            live = self._sessions.get(token)
-            if not live:
-                raise NotFoundError("Unit setup session not found.")
-            live.unit_id = unit.id
-            live.unit_name = unit.name
-            live.status = "capturing_drawers"
-            live.current_drawer_index = 0
-            live.expires_at = now + timedelta(seconds=self.TTL_SECONDS)
-            snap = self._snapshot(live)
-
-        return self._build_enriched_response(db, snap)
+        return self._build_enriched_response(db, self._to_snapshot(rec))
 
     def update_progress(
         self,
@@ -294,27 +324,27 @@ class UnitSetupService:
         token: str,
         data: UnitSetupProgressUpdate,
     ) -> UnitSetupSessionStatusResponse:
-        self.require_active_session(token)
+        self.require_active_session(db, token)
         now = datetime.now(timezone.utc)
-        with self._lock:
-            sess = self._sessions.get(token)
-            if not sess:
-                raise NotFoundError("Unit setup session not found.")
-            if data.current_drawer_index is not None:
-                sess.current_drawer_index = data.current_drawer_index
-            if data.status is not None:
-                sess.status = data.status
-            sess.expires_at = now + timedelta(seconds=self.TTL_SECONDS)
-            snap = self._snapshot(sess)
-        return self._build_enriched_response(db, snap)
+        rec = db.get(UnitSetupSessionRecord, token)
+        if not rec:
+            raise NotFoundError("Unit setup session not found.")
+        if data.current_drawer_index is not None:
+            rec.current_drawer_index = data.current_drawer_index
+        if data.status is not None:
+            rec.status = data.status
+        rec.expires_at = _db_ts(db, now + timedelta(seconds=self.TTL_SECONDS))
+        db.flush()
+        return self._build_enriched_response(db, self._to_snapshot(rec))
 
     def generate_qr_png(
         self,
+        db: Session,
         token: str,
         host_header: Optional[str] = None,
         base_url_param: Optional[str] = None,
     ) -> bytes:
-        self.require_active_session(token)
+        self.require_active_session(db, token)
         effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
         mobile_url = f"{effective_base}/setup.html?token={token}"
         return build_qr_png(mobile_url)

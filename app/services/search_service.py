@@ -7,6 +7,7 @@ from fastapi import UploadFile
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.core.database import session_scope
 from app.core.exceptions import BadRequestError, PayloadTooLargeError
 from app.models.item import Item
 from app.repositories.item_repository import item_repository
@@ -71,7 +72,12 @@ _ALL_PRIMARY_BONUS = 5.0
 _CANDIDATE_POOL = 2000
 
 
-def _relevance(item: Item, primary: List[str], synonyms: List[str], matched_location_ids: Set[int]) -> float:
+def _relevance(
+    item: Item,
+    primary: List[str],
+    synonym_patterns: List[re.Pattern[str]],
+    matched_location_ids: Set[int],
+) -> float:
     fields = [((getattr(item, attr) or "").lower(), weight) for attr, weight in _FIELD_WEIGHTS]
     score = 0.0
     primary_hits = 0
@@ -82,8 +88,7 @@ def _relevance(item: Item, primary: List[str], synonyms: List[str], matched_loca
         if tok_score:
             primary_hits += 1
         score += tok_score
-    for tok in synonyms:
-        word_start = re.compile(rf"(?<![a-z0-9]){re.escape(tok)}")
+    for word_start in synonym_patterns:
         score += _SYNONYM_FACTOR * sum(weight for text, weight in fields if word_start.search(text))
     if primary and primary_hits == len(primary):
         score += _ALL_PRIMARY_BONUS
@@ -118,16 +123,18 @@ class SearchService:
         candidates = item_repository.search_items(
             db, tokens=tokens, descendant_location_ids=descendant_loc_ids, limit=max(limit, _CANDIDATE_POOL)
         )
+        synonym_patterns = [re.compile(rf"(?<![a-z0-9]){re.escape(tok)}") for tok in synonyms]
         # Candidates arrive newest-first; sorted() is stable, so ties keep that order.
         ranked = sorted(
             candidates,
-            key=lambda it: _relevance(it, primary, synonyms, descendant_loc_ids),
+            key=lambda it: _relevance(it, primary, synonym_patterns, descendant_loc_ids),
             reverse=True,
         )
         return inventory_service.serialize_many(db, ranked[:limit])
 
     @classmethod
     async def search_by_photo(cls, db: Session, file: UploadFile, limit: int = 20) -> dict:
+        bind = db.get_bind()
         max_bytes = int(settings.MAX_IMAGE_UPLOAD_SIZE_MB) * 1024 * 1024
         raw_bytes = await file.read(max_bytes + 1)
         if not raw_bytes:
@@ -153,11 +160,11 @@ class SearchService:
         if not extracted_query:
             extracted_query = _keywords_from_filename(file.filename)
 
-        items = (
-            await anyio.to_thread.run_sync(cls.search, db, extracted_query, limit)
-            if extracted_query
-            else []
-        )
+        def _run_search() -> List[ItemRead]:
+            with session_scope(bind) as thread_db:
+                return cls.search(thread_db, extracted_query, limit)
+
+        items = await anyio.to_thread.run_sync(_run_search) if extracted_query else []
         return {
             "query": extracted_query,
             "total": len(items),

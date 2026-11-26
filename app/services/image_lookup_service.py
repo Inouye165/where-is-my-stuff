@@ -1,16 +1,20 @@
+import asyncio
 from io import BytesIO
 import ipaddress
 import logging
 import re
 import socket
-from typing import Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Union
 from urllib.parse import urljoin, urlparse
 
 from fastapi import UploadFile
 import anyio
 import httpx
 
-from app.core.exceptions import AppError
+from app.core.database import session_scope
+from app.core.exceptions import AppError, NotFoundError
+from app.schemas.item import FindItemImageResponse, ItemRead, ItemUpdate
+from app.schemas.system import FindLocationItemImagesResponse
 from app.services.photo_service import photo_service
 
 logger = logging.getLogger("wims.image_lookup")
@@ -23,12 +27,28 @@ _ALLOWED_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
 _MAX_REDIRECTS = 3
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+_MAX_BATCH_ITEMS = 50
+_BATCH_CONCURRENCY = 4
 
 
 def is_crop_or_missing_photo(item_photo: Optional[str]) -> bool:
     if not item_photo:
         return True
     return "_crop_" in str(item_photo)
+
+
+def _is_global_ip(ip: Union[ipaddress.IPv4Address, ipaddress.IPv6Address]) -> bool:
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_global
+        and not ip.is_private
+        and not ip.is_loopback
+        and not ip.is_link_local
+        and not ip.is_reserved
+        and not ip.is_multicast
+        and not ip.is_unspecified
+    )
 
 
 def _is_safe_public_https_url(url: str) -> bool:
@@ -38,12 +58,14 @@ def _is_safe_public_https_url(url: str) -> bool:
         return False
     if parsed.scheme != "https" or not parsed.netloc:
         return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
     host = (parsed.hostname or "").strip().lower()
     if not host or host == "localhost" or host.endswith(".local"):
         return False
     try:
         ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        if not _is_global_ip(ip):
             return False
     except ValueError:
         pass
@@ -66,19 +88,23 @@ def _new_client() -> httpx.AsyncClient:
 
 
 def _host_resolves_publicly(host: str) -> bool:
-    """False if the hostname resolves to a private/loopback/link-local address; fails open if DNS is unavailable."""
+    """False if the hostname fails to resolve or resolves to any non-global address (fail closed)."""
     try:
         infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, UnicodeError, OSError):
-        return True
+        return False
+    if not infos:
+        return False
+    saw_valid_ip = False
     for info in infos:
         try:
             ip = ipaddress.ip_address(info[4][0])
         except ValueError:
             continue
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        saw_valid_ip = True
+        if not _is_global_ip(ip):
             return False
-    return True
+    return saw_valid_ip
 
 
 async def _is_fetchable_url(url: str) -> bool:
@@ -292,25 +318,136 @@ async def find_and_import_image(
 async def find_and_import_images_batch(
     items: List[dict],
 ) -> Dict[int, str]:
-    """Resolve and save photos for multiple items, caching identical search URLs in-memory."""
+    """Resolve and save photos for multiple items with bounded concurrency and URL deduplication."""
+    capped_items = items[:_MAX_BATCH_ITEMS]
+    if not capped_items:
+        return {}
+
     results: Dict[int, str] = {}
-    url_to_saved: Dict[str, str] = {}
+    url_to_saved: Dict[str, Optional[str]] = {}
+    url_events: Dict[str, asyncio.Event] = {}
+    query_cache: Dict[tuple[str, Optional[str], Optional[str]], Optional[str]] = {}
+    query_events: Dict[tuple[str, Optional[str], Optional[str]], asyncio.Event] = {}
+    sem = asyncio.Semaphore(_BATCH_CONCURRENCY)
+
+    async def _resolve_one(client: httpx.AsyncClient, item: dict) -> None:
+        item_id = int(item["id"])
+        name = item.get("name") or ""
+        part_number = item.get("serial_or_part_number")
+        category = item.get("category")
+        qkey = (name, part_number, category)
+
+        if qkey not in query_events:
+            evt = asyncio.Event()
+            query_events[qkey] = evt
+            try:
+                async with sem:
+                    query_cache[qkey] = await find_image_url(
+                        client, name=name, part_number=part_number, category=category
+                    )
+            finally:
+                evt.set()
+        else:
+            await query_events[qkey].wait()
+
+        url = query_cache.get(qkey)
+        if not url:
+            return
+
+        if url not in url_events:
+            dl_evt = asyncio.Event()
+            url_events[url] = dl_evt
+            try:
+                async with sem:
+                    url_to_saved[url] = await download_and_save_image(client, url)
+            finally:
+                dl_evt.set()
+        else:
+            await url_events[url].wait()
+
+        saved_path = url_to_saved.get(url)
+        if saved_path:
+            results[item_id] = saved_path
+
     async with _new_client() as client:
-        for item in items:
-            item_id = int(item["id"])
-            url = await find_image_url(
-                client,
-                name=item.get("name") or "",
-                part_number=item.get("serial_or_part_number"),
-                category=item.get("category"),
-            )
-            if not url:
-                continue
-            if url in url_to_saved:
-                results[item_id] = url_to_saved[url]
-                continue
-            saved_path = await download_and_save_image(client, url)
-            if saved_path:
-                url_to_saved[url] = saved_path
-                results[item_id] = saved_path
+        await asyncio.gather(*(_resolve_one(client, item) for item in capped_items))
     return results
+
+
+async def import_image_for_item(bind: Any, item_id: int) -> FindItemImageResponse:
+    from app.services.inventory_service import inventory_service
+
+    def _load_item() -> tuple[str, Optional[str], Optional[str]]:
+        with session_scope(bind) as thread_db:
+            item = inventory_service.get_detail(thread_db, item_id)
+            return item.name, item.serial_or_part_number, item.category
+
+    name, part_number, category = await anyio.to_thread.run_sync(_load_item)
+    saved_path = await find_and_import_image(name=name, part_number=part_number, category=category)
+    if not saved_path:
+        raise NotFoundError(f"No photo found online for '{name}'.")
+
+    def _apply_photo() -> ItemRead:
+        with session_scope(bind) as thread_db:
+            updated = inventory_service.update(thread_db, item_id, ItemUpdate(item_photo=saved_path))
+            return inventory_service.to_read_schema(updated, db=thread_db)
+
+    try:
+        item_read = await anyio.to_thread.run_sync(_apply_photo)
+    except Exception:
+        photo_service.delete_upload_url(saved_path)
+        raise
+    return FindItemImageResponse(status="ok", item_photo=saved_path, item=item_read)
+
+
+async def import_images_for_location(
+    bind: Any,
+    location_id: int,
+    *,
+    force: bool = False,
+    include_crops: bool = True,
+    batch_lookup_fn: Any = None,
+) -> FindLocationItemImagesResponse:
+    from app.services.inventory_service import inventory_service
+    from app.services.location_service import location_service
+
+    def _collect_candidates() -> list[dict]:
+        with session_scope(bind) as thread_db:
+            location_service.get_read_by_id(thread_db, location_id)
+            loc_items = inventory_service.list_items_for_location(thread_db, location_id)
+            return [
+                {
+                    "id": it.id,
+                    "name": it.name,
+                    "serial_or_part_number": it.serial_or_part_number,
+                    "category": it.category,
+                }
+                for it in loc_items
+                if force or (is_crop_or_missing_photo(it.item_photo) if include_crops else not it.item_photo)
+            ]
+
+    candidates = await anyio.to_thread.run_sync(_collect_candidates)
+    if not candidates:
+        return FindLocationItemImagesResponse(status="ok", checked_count=0, updated_count=0)
+
+    lookup_fn = batch_lookup_fn or find_and_import_images_batch
+    resolved = await lookup_fn(candidates)
+
+    def _apply_photos() -> int:
+        count = 0
+        with session_scope(bind) as thread_db:
+            for item_id, saved_path in resolved.items():
+                try:
+                    inventory_service.update(thread_db, item_id, ItemUpdate(item_photo=saved_path))
+                except NotFoundError:
+                    photo_service.delete_upload_url(saved_path)
+                    continue
+                count += 1
+        return count
+
+    updated_count = await anyio.to_thread.run_sync(_apply_photos)
+    return FindLocationItemImagesResponse(
+        status="ok",
+        checked_count=len(candidates),
+        updated_count=updated_count,
+    )

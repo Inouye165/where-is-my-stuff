@@ -36,6 +36,7 @@ export function saveJsonStorage(key, val) {
 
 export const state = {
   items: [],
+  itemsTotal: 0,
   locations: [],
   locationMap: new Map(),
   namedRooms: [],
@@ -562,6 +563,32 @@ function renderBootLoadingState(title, subtitle, showRetry = false) {
   }
 }
 
+async function loadAllItemsPaginated(reqSeq) {
+  const collected = [];
+  let cursor = null;
+  let total = 0;
+
+  for (let pageIdx = 0; pageIdx < 200; pageIdx++) {
+    const qs = cursor
+      ? `/api/v1/items/page?limit=200&cursor=${encodeURIComponent(cursor)}`
+      : '/api/v1/items/page?limit=200';
+    const page = await apiGet(qs, 'Could not load items.');
+    if (reqSeq !== loadAllDataSeq) return null;
+
+    if (Array.isArray(page)) {
+      return { items: page, total: page.length };
+    }
+    const batch = Array.isArray(page?.items) ? page.items : [];
+    collected.push(...batch);
+    total = typeof page?.total === 'number' ? page.total : collected.length;
+    if (!page?.has_more || !page?.next_cursor) {
+      break;
+    }
+    cursor = page.next_cursor;
+  }
+  return { items: collected, total };
+}
+
 export async function loadAllData() {
   const reqSeq = ++loadAllDataSeq;
   if (initialRetryTimer) {
@@ -570,15 +597,16 @@ export async function loadAllData() {
   }
 
   try {
-    const [items, locations] = await Promise.all([
-      apiGet('/api/v1/items?limit=20000', 'Could not load items.'),
+    const [itemPage, locations] = await Promise.all([
+      loadAllItemsPaginated(reqSeq),
       apiGet('/api/v1/locations/tree', 'Could not load rooms and containers.')
     ]);
-    if (reqSeq !== loadAllDataSeq) return;
+    if (reqSeq !== loadAllDataSeq || !itemPage) return;
 
     hasCompletedInitialLoad = true;
     initialRetryCount = 0;
-    state.items = items;
+    state.items = itemPage.items;
+    state.itemsTotal = itemPage.total;
     state.locations = locations;
 
     indexLocations();

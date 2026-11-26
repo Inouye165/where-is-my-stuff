@@ -1,11 +1,11 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
-from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.schemas.audit import AuditVerifyRequest
 from app.schemas.common import ItemSortOrder, ItemStatus
 from app.schemas.item import (
+    FindItemImageResponse,
     ItemAttachmentRead,
     ItemBulkCreate,
     ItemConvertToBoxRequest,
@@ -14,14 +14,13 @@ from app.schemas.item import (
     ItemGroupIntoBoxRequest,
     ItemGroupIntoBoxResponse,
     ItemImagesToPdfRequest,
+    ItemPageResponse,
     ItemRead,
     ItemUpdate,
 )
 from app.schemas.location import LocationRead
-from app.core.exceptions import NotFoundError
-from app.services.image_lookup_service import find_and_import_image
+from app.services.image_lookup_service import import_image_for_item
 from app.services.inventory_service import inventory_service
-from app.services.photo_service import photo_service
 
 router = APIRouter(prefix="/items", tags=["Items"])
 
@@ -58,7 +57,8 @@ def list_items(
     location_id: Optional[int] = Query(default=None, ge=1, description="Filter by direct location ID"),
     item_status: Optional[ItemStatus] = Query(default=None, alias="status", description="Filter by status"),
     sort: ItemSortOrder = Query(default=ItemSortOrder.last_seen_desc, description="Whitelisted sort order"),
-    limit: int = Query(default=100, ge=1, le=20000),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> List[ItemRead]:
     status_val = item_status.value if item_status is not None else None
@@ -69,6 +69,29 @@ def list_items(
         status=status_val,
         sort=sort,
         limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/page", response_model=ItemPageResponse)
+def list_items_page(
+    category: Optional[str] = Query(default=None, max_length=80, description="Filter by category"),
+    location_id: Optional[int] = Query(default=None, ge=1, description="Filter by direct location ID"),
+    item_status: Optional[ItemStatus] = Query(default=None, alias="status", description="Filter by status"),
+    sort: ItemSortOrder = Query(default=ItemSortOrder.last_seen_desc, description="Whitelisted sort order"),
+    limit: int = Query(default=100, ge=1, le=200),
+    cursor: Optional[str] = Query(default=None, max_length=256),
+    db: Session = Depends(get_db),
+) -> ItemPageResponse:
+    status_val = item_status.value if item_status is not None else None
+    return inventory_service.list_items_page(
+        db,
+        category=category,
+        location_id=location_id,
+        status=status_val,
+        sort=sort,
+        limit=limit,
+        cursor=cursor,
     )
 
 
@@ -132,35 +155,9 @@ def delete_item_attachment(item_id: int, attachment_id: int, db: Session = Depen
     return None
 
 
-@router.post("/{item_id}/find-image")
-async def find_and_import_item_image(item_id: int, db: Session = Depends(get_db)) -> dict:
-    item = await run_in_threadpool(inventory_service.get_detail, db, item_id)
-    name = item.name
-    part_number = item.serial_or_part_number
-    category = item.category
-
-    saved_path = await find_and_import_image(
-        name=name,
-        part_number=part_number,
-        category=category,
-    )
-    if not saved_path:
-        raise NotFoundError(f"No photo found online for '{name}'.")
-
-    def _apply_photo() -> dict:
-        updated = inventory_service.update(db, item_id, ItemUpdate(item_photo=saved_path))
-        return inventory_service.to_read_schema(updated, db=db).model_dump(mode="json")
-
-    try:
-        item_read = await run_in_threadpool(_apply_photo)
-    except Exception:
-        photo_service.delete_upload_url(saved_path)
-        raise
-    return {
-        "status": "ok",
-        "item_photo": saved_path,
-        "item": item_read,
-    }
+@router.post("/{item_id}/find-image", response_model=FindItemImageResponse)
+async def find_and_import_item_image(item_id: int, db: Session = Depends(get_db)) -> FindItemImageResponse:
+    return await import_image_for_item(db.get_bind(), item_id)
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -2,8 +2,9 @@
  * WhereIsMyStuff — Modular ES Entrypoint
  * Zero-Scroll 100dvh Home ('Places') • 'What are you looking for?' Search • 'Needs a home' Spatial Flow
  */
-import { onCrossTabSync } from './api.js';
+import { apiGet, apiPost, onCrossTabSync } from './api.js';
 import { scrollSlotCarousel, syncSlotCarousel } from './carousel.js';
+import { initDelegatedEvents, registerActions } from './events.js';
 import {
   cancelGridCellInlineEdit,
   handleCompartmentUploadAndScan,
@@ -15,7 +16,7 @@ import {
   submitGridCellQuickAdd,
   triggerCompartmentUploadAndScan
 } from './compartment-actions.js';
-import { closeAllModals, closeLightbox, closeModal, closeOnScrim, openLightbox } from './dom.js';
+import { closeAllModals, closeLightbox, closeModal, closeOnScrim, openLightbox, showToast } from './dom.js';
 import { closeScanAbortOnScrim, initUnsavedGuard, resolveScanAbortPrompt, resolveUnsavedPrompt } from './unsaved-guard.js';
 import { closeUnitSetupWizard, launchMobileUnitSetup, openUnitSetupWizard } from './unit-setup-wizard.js';
 import { openConvertItemToBoxModal, openMoveBoxModal, submitConvertItemToBox, submitMoveBox } from './box-actions.js';
@@ -543,12 +544,151 @@ function startHintRotation() {
   }, 4200);
 }
 
+function showPinUnlockModal() {
+  if (typeof document === 'undefined' || document.getElementById('wims-pin-unlock-overlay')) {
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.id = 'wims-pin-unlock-overlay';
+  overlay.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:9999', 'display:flex',
+    'align-items:center', 'justify-content:center', 'padding:16px',
+    'background:rgba(15,23,42,0.82)', 'backdrop-filter:blur(4px)'
+  ].join(';');
+
+  const card = document.createElement('form');
+  card.style.cssText = [
+    'width:100%', 'max-width:340px', 'padding:20px', 'border-radius:14px',
+    'background:var(--surface-1, #1e293b)', 'color:var(--text-1, #f8fafc)',
+    'border:1px solid rgba(148,163,184,0.25)', 'box-shadow:0 20px 40px rgba(0,0,0,0.45)'
+  ].join(';');
+
+  const title = document.createElement('h2');
+  title.textContent = 'Enter Access PIN';
+  title.style.cssText = 'margin:0 0 8px 0;font-size:1.1rem;font-weight:700;';
+
+  const sub = document.createElement('p');
+  sub.textContent = 'This WIMS inventory is PIN-protected on the network.';
+  sub.style.cssText = 'margin:0 0 14px 0;font-size:0.875rem;opacity:0.8;';
+
+  const input = document.createElement('input');
+  input.type = 'password';
+  input.autocomplete = 'current-password';
+  input.placeholder = 'Access PIN';
+  input.required = true;
+  input.style.cssText = [
+    'width:100%', 'box-sizing:border-box', 'padding:10px 12px', 'border-radius:8px',
+    'border:1px solid rgba(148,163,184,0.35)', 'background:rgba(15,23,42,0.55)',
+    'color:inherit', 'font-size:1rem', 'margin-bottom:10px'
+  ].join(';');
+
+  const errEl = document.createElement('div');
+  errEl.style.cssText = 'min-height:18px;font-size:0.82rem;color:#f87171;margin-bottom:10px;';
+
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'submit';
+  submitBtn.textContent = 'Unlock';
+  submitBtn.style.cssText = [
+    'width:100%', 'padding:10px 14px', 'border:0', 'border-radius:8px',
+    'background:#0284c7', 'color:#fff', 'font-weight:600', 'cursor:pointer'
+  ].join(';');
+
+  card.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    errEl.textContent = '';
+    submitBtn.disabled = true;
+    try {
+      const resp = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: input.value })
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => null);
+        errEl.textContent = body?.error?.message || 'Invalid PIN.';
+        submitBtn.disabled = false;
+        input.focus();
+        return;
+      }
+      overlay.remove();
+      loadAllData();
+    } catch {
+      errEl.textContent = 'Could not reach server.';
+      submitBtn.disabled = false;
+    }
+  });
+
+  card.append(title, sub, input, errEl, submitBtn);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+  input.focus();
+}
+
+async function refreshBackupStatusUi() {
+  if (typeof document === 'undefined') return;
+  const statusEl = document.getElementById('more-backup-status');
+  const dlLink = document.getElementById('more-backup-download-link');
+  if (!statusEl) return;
+
+  try {
+    const data = await apiGet('/api/v1/system/backups', 'Could not load backup status.');
+    const autoText = data.auto_backup_enabled
+      ? `Auto-backup: every ${data.interval_hours}h (keeps last ${data.retention_count})`
+      : 'Auto-backup: off';
+    if (data.latest_backup) {
+      const mb = (data.latest_backup.size_bytes / (1024 * 1024)).toFixed(2);
+      const when = new Date(data.latest_backup.created_at).toLocaleString();
+      statusEl.textContent = `${autoText} • Last: ${when} (${mb} MB)`;
+      if (dlLink) {
+        dlLink.href = `/api/v1/system/backups/${encodeURIComponent(data.latest_backup.filename)}`;
+        dlLink.textContent = `Download ${data.latest_backup.filename} →`;
+        dlLink.style.display = 'inline-block';
+      }
+    } else {
+      statusEl.textContent = `${autoText} • No backups yet`;
+      if (dlLink) dlLink.style.display = 'none';
+    }
+  } catch {
+    // Non-fatal if server is temporarily unreachable
+  }
+}
+
+async function triggerBackupNow() {
+  const btn = document.getElementById('more-backup-btn');
+  const titleEl = document.getElementById('more-backup-btn-title');
+  if (btn && btn.disabled) return;
+  if (btn) btn.disabled = true;
+  if (titleEl) titleEl.textContent = 'Backing up...';
+
+  try {
+    const res = await apiPost('/api/v1/system/backup?include_uploads=true', undefined, 'Backup failed.', {
+      timeoutMs: 120000
+    });
+    const mb = (res.size_bytes / (1024 * 1024)).toFixed(2);
+    showToast(`Backup saved: ${res.filename} (${mb} MB)`);
+    await refreshBackupStatusUi();
+  } catch (err) {
+    showToast(err?.message || 'Backup failed.', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+    if (titleEl) titleEl.textContent = 'Back Up Inventory Now';
+  }
+}
+
 function bootstrapApp() {
   initTheme();
+  registerActions({ triggerBackupNow });
+  initDelegatedEvents();
   initKeyboardAndRouter();
   initPwaAndWindowModes();
   bindDesktopPhotoIntercepts();
   initUnsavedGuard();
+  if (typeof window !== 'undefined') {
+    window.addEventListener('wims:auth-required', showPinUnlockModal);
+    window.addEventListener('wims:more-opened', () => {
+      void refreshBackupStatusUi();
+    });
+  }
   onCrossTabSync(() => {
     loadAllData();
   });

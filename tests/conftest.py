@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.core.database import Base, get_db
+from app.core.rate_limit import rate_limiter
 from app.db.migrations import run_migrations
 import app.main as main_module
 from app.main import app
@@ -60,11 +61,13 @@ def setup_test_directories():
 
 @pytest.fixture()
 def db_session():
+    rate_limiter.reset()
     run_migrations(test_engine)
     session = TestingSessionLocal()
     try:
         yield session
     finally:
+        rate_limiter.reset()
         session.close()
         with test_engine.begin() as conn:
             conn.execute(text("DROP TABLE IF EXISTS schema_migrations"))

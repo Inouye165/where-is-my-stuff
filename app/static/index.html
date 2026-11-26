@@ -8,17 +8,7 @@
   <meta name="theme-color" content="#0b1120">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <script>
-    (function () {
-      try {
-        var pref = localStorage.getItem('wims_theme_pref') || 'dark';
-        var resolved = pref === 'system'
-          ? (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-          : pref;
-        document.documentElement.setAttribute('data-theme', resolved);
-      } catch (e) {}
-    })();
-  </script>
+  <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230284c7'><path d='M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z'/></svg>">
 </head>
@@ -791,6 +781,25 @@
             </span>
             <span class="action-choice-arrow" aria-hidden="true">→</span>
           </button>
+        </div>
+
+        <!-- Backups -->
+        <div class="more-section">
+          <div class="more-section-label">Backups</div>
+          <button type="button" id="more-backup-btn" class="action-choice-card compact-choice" data-action="triggerBackupNow">
+            <span class="action-choice-icon" aria-hidden="true">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            </span>
+            <span class="action-choice-body">
+              <strong id="more-backup-btn-title">Back Up Inventory Now</strong>
+              <span>Save a full zip backup of your database and all photos</span>
+            </span>
+            <span class="action-choice-arrow" aria-hidden="true">→</span>
+          </button>
+          <p class="more-help-line" id="more-backup-status">Automatic daily backups enabled</p>
+          <p class="more-help-line" style="margin-top: 4px;">
+            <a id="more-backup-download-link" href="#" class="settings-link" style="display: none;" download>Download latest backup →</a>
+          </p>
         </div>
 
         <!-- Starter Rooms Reset (if hidden) + Summary -->

@@ -489,20 +489,21 @@ def test_rollback_preserves_files_and_cascade_deletes_clean_orphans(client, db_s
     assert not d1_gal2_disk.exists(), "Secondary LocationPhoto gallery image leaked on location delete"
 
 
-def test_capture_session_snapshot_isolation_and_expired_upload_cleanup(client, monkeypatch):
+def test_capture_session_snapshot_isolation_and_expired_upload_cleanup(client, db_session, monkeypatch):
     import io
     from datetime import datetime, timedelta, timezone
     from PIL import Image
     from app.core.config import settings
+    from app.models.session import CaptureSessionRecord
     from app.services.capture_session_service import capture_session_service
 
     sess_data = client.post("/api/v1/photos/capture-sessions", json={"label": "Test Bin"}).json()
     token = sess_data["token"]
 
     # Snapshot returned by get_session must not expose internal mutable photos list
-    snap = capture_session_service.get_session(token)
+    snap = capture_session_service.get_session(db_session, token)
     snap.photos.append({"filename": "mutated.jpg"})
-    assert capture_session_service.get_session(token).photos == []
+    assert capture_session_service.get_session(db_session, token).photos == []
 
     # If session expires while photo_service.process_and_save is running, 410 must not leave orphan files
     before_originals = set(settings.ORIGINALS_DIR.glob("*"))
@@ -510,10 +511,11 @@ def test_capture_session_snapshot_isolation_and_expired_upload_cleanup(client, m
 
     orig_process = capture_session_service.mark_uploaded
 
-    def expire_then_mark(tok: str, photo_result: dict):
-        with capture_session_service._lock:
-            capture_session_service._sessions[tok].expires_at = datetime.now(timezone.utc) - timedelta(seconds=5)
-        return orig_process(tok, photo_result)
+    def expire_then_mark(db, tok: str, photo_result: dict):
+        rec = db.get(CaptureSessionRecord, tok)
+        rec.expires_at = (datetime.now(timezone.utc) - timedelta(seconds=5)).replace(tzinfo=None)
+        db.flush()
+        return orig_process(db, tok, photo_result)
 
     monkeypatch.setattr(capture_session_service, "mark_uploaded", expire_then_mark)
 
@@ -915,7 +917,7 @@ async def test_analyze_drawer_photo_releases_sqlite_write_lock_during_vision_cal
         file_engine.dispose()
 
 
-def test_capture_session_upload_service_layer_and_db_commit_atomicity(client, monkeypatch):
+def test_capture_session_upload_service_layer_and_db_commit_atomicity(client, db_session, monkeypatch):
     import inspect
     import io
     from PIL import Image
@@ -957,7 +959,7 @@ def test_capture_session_upload_service_layer_and_db_commit_atomicity(client, mo
         pass
 
     # Session must NOT expose an uncommitted/rolled-back photo, and files must be cleaned up
-    snap = capture_session_service.get_session(token)
+    snap = capture_session_service.get_session(db_session, token)
     assert snap.status == "pending"
     assert snap.photos == []
     assert set(settings.ORIGINALS_DIR.glob("*")) == before_originals
@@ -1466,9 +1468,12 @@ def test_api_timestamps_are_serialized_as_utc(client):
 
 
 def test_item_list_accepts_full_inventory_limit(client):
-    # The SPA loads the entire inventory into client state; a low cap silently hides items.
-    res = client.get("/api/v1/items?limit=20000")
-    assert res.status_code == 200
+    # Legacy /items is bounded to <=500, while /items/page provides cursor pagination up to 200 per page.
+    assert client.get("/api/v1/items?limit=20000").status_code == 422
+    page_res = client.get("/api/v1/items/page?limit=200")
+    assert page_res.status_code == 200
+    body = page_res.json()
+    assert "items" in body and "total" in body and "has_more" in body
 
 
 def test_ai_crop_filenames_are_detectable_as_crops(tmp_path):
@@ -2029,6 +2034,9 @@ def test_compartment_grid_inline_and_page_workflow_behavioral():
       if (u.includes('/api/v1/locations/tree')) {{
         return {{ ok: true, status: 200, json: async () => mockLocations }};
       }}
+      if (u.startsWith('/api/v1/items/page')) {{
+        return {{ ok: true, status: 200, json: async () => ({{ items: mockItems, total: mockItems.length, limit: 200, next_cursor: null, has_more: false }}) }};
+      }}
       if (u.startsWith('/api/v1/items?')) {{
         return {{ ok: true, status: 200, json: async () => mockItems }};
       }}
@@ -2236,6 +2244,9 @@ def test_unmatched_api_route_returns_404_not_405_and_slot_fallback(client):
       }}
       if (u.includes('/api/v1/locations/tree')) {{
         return {{ ok: true, status: 200, json: async () => mockTree }};
+      }}
+      if (u.startsWith('/api/v1/items/page')) {{
+        return {{ ok: true, status: 200, json: async () => ({{ items: [], total: 0, limit: 200, next_cursor: null, has_more: false }}) }};
       }}
       if (u.startsWith('/api/v1/items?')) {{
         return {{ ok: true, status: 200, json: async () => [] }};
@@ -2746,6 +2757,9 @@ def test_rapid_entry_preserves_ai_crops_and_item_replace_offers_bin_photos(clien
       if (u.includes('/api/v1/locations/tree')) {{
         return {{ ok: true, status: 200, json: async () => ([bin62]) }};
       }}
+      if (u.includes('/api/v1/items/page')) {{
+        return {{ ok: true, status: 200, json: async () => ({{ items: [item137], total: 1, limit: 200, next_cursor: null, has_more: false }}) }};
+      }}
       if (u.includes('/api/v1/items?')) {{
         return {{ ok: true, status: 200, json: async () => ([item137]) }};
       }}
@@ -3083,10 +3097,13 @@ def test_unit_setup_second_unit_creation_rejected(client):
     assert len(units) == 1
 
 
-def test_unit_setup_reservation_blocks_concurrent_create(client):
-    from app.services.unit_setup_service import unit_setup_service
+def test_unit_setup_reservation_blocks_concurrent_create(client, db_session):
+    from app.models.session import UnitSetupSessionRecord
+
     sess = client.post("/api/v1/unit-setup/sessions", json={}).json()
-    unit_setup_service._sessions[sess["token"]].unit_creating = True
+    rec = db_session.get(UnitSetupSessionRecord, sess["token"])
+    rec.unit_creating = True
+    db_session.commit()
     resp = client.post(
         f"/api/v1/unit-setup/sessions/{sess['token']}/unit",
         json={"name": "Racer", "compartment_count": 1},

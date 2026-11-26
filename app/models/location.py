@@ -31,8 +31,10 @@ class Location(Base):
     grid_row_span: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     grid_col_span: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
 
     parent: Mapped[Optional["Location"]] = relationship(
         "Location", remote_side=[id], back_populates="children"
@@ -82,6 +84,6 @@ class LocationPhoto(Base):
     thumbnail_path: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     caption: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     photo_type: Mapped[str] = mapped_column(String(32), nullable=False, default="container")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     location: Mapped["Location"] = relationship("Location", back_populates="photos")

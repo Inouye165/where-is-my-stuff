@@ -22,12 +22,14 @@ from app.schemas.item import (
     ItemGroupIntoBoxRequest,
     ItemGroupIntoBoxResponse,
     ItemImagesToPdfRequest,
+    ItemPageResponse,
     ItemRead,
     ItemUpdate,
     LocationPhotos,
 )
 from app.services.location_service import LocationHierarchySnapshot, location_service
 from app.services.photo_service import photo_service
+from app.services.quick_entry_parser import parse_quick_entry_lines as _parse_quick_entry_lines
 
 
 class InventoryService:
@@ -64,12 +66,18 @@ class InventoryService:
     def serialize_many(cls, db: Session, items: List[Item]) -> List[ItemRead]:
         if not items:
             return []
-        snapshot = location_service.build_snapshot(db, include_counts=False, include_photos=False)
+        loc_ids = [it.location_id for it in items if it.location_id is not None]
+        snapshot = location_service.build_scoped_snapshot(
+            db, loc_ids, include_counts=False, include_photos=False
+        )
         return [cls._serialize_with_snapshot(it, snapshot) for it in items]
 
     @classmethod
     def to_read_schema(cls, item: Item, db: Session) -> ItemRead:
-        snapshot = location_service.build_snapshot(db, include_counts=False, include_photos=False)
+        loc_ids = [item.location_id] if item.location_id is not None else []
+        snapshot = location_service.build_scoped_snapshot(
+            db, loc_ids, include_counts=False, include_photos=False
+        )
         return cls._serialize_with_snapshot(item, snapshot)
 
     @classmethod
@@ -98,11 +106,46 @@ class InventoryService:
         status: Optional[str] = None,
         sort: ItemSortOrder = ItemSortOrder.last_seen_desc,
         limit: int = 100,
+        offset: int = 0,
     ) -> List[ItemRead]:
         items = item_repository.list_filtered(
-            db, category=category, location_id=location_id, status=status, sort=sort, limit=limit
+            db,
+            category=category,
+            location_id=location_id,
+            status=status,
+            sort=sort,
+            limit=limit,
+            offset=offset,
         )
         return cls.serialize_many(db, items)
+
+    @classmethod
+    def list_items_page(
+        cls,
+        db: Session,
+        category: Optional[str] = None,
+        location_id: Optional[int] = None,
+        status: Optional[str] = None,
+        sort: ItemSortOrder = ItemSortOrder.last_seen_desc,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+    ) -> ItemPageResponse:
+        rows, total, next_cursor, has_more = item_repository.list_page(
+            db,
+            category=category,
+            location_id=location_id,
+            status=status,
+            sort=sort,
+            limit=limit,
+            cursor=cursor,
+        )
+        return ItemPageResponse(
+            items=cls.serialize_many(db, rows),
+            total=total,
+            limit=limit,
+            next_cursor=next_cursor,
+            has_more=has_more,
+        )
 
     @classmethod
     def list_items_for_location(cls, db: Session, location_id: int) -> List[ItemRead]:
@@ -162,64 +205,7 @@ class InventoryService:
 
     @classmethod
     def parse_quick_entry_lines(cls, text: str, location_id: int) -> List[ItemCreate]:
-        items: List[ItemCreate] = []
-        if not text:
-            return items
-
-        unit_pattern = r"pcs|pieces|box|boxes|set|sets|kit|kits|pack|packs|rolls?|tubes?|ft|meters?"
-        for raw in text.splitlines():
-            line = raw.strip()
-            line = re.sub(r"^(?:\d+[\.\)]\s*|[-*•]\s*)", "", line).strip()
-            if not line:
-                continue
-
-            qty = 1
-            unit = "pcs"
-            name = line
-
-            m1 = re.match(r"^(\d+)\s*[xX]\s+(.*)$", line)
-            if m1:
-                qty = int(m1.group(1))
-                name = m1.group(2).strip()
-            else:
-                m2 = re.match(rf"^(\d+)\s+({unit_pattern})\s+(.*)$", line, re.IGNORECASE)
-                if m2:
-                    qty = int(m2.group(1))
-                    unit = m2.group(2).lower()
-                    name = m2.group(3).strip()
-                else:
-                    m3 = re.search(
-                        rf"[\(\-\–]\s*(?:qty:?\s*)?(\d+)\s*({unit_pattern})?\s*[\)]?$",
-                        line,
-                        re.IGNORECASE,
-                    )
-                    if m3:
-                        qty = int(m3.group(1))
-                        if m3.group(2):
-                            unit = m3.group(2).lower()
-                        name = line[: m3.start()].strip()
-                        name = re.sub(r"[\(\-\–]+$", "", name).strip()
-
-            description: Optional[str] = None
-            if " — " in name:
-                head, tail = name.split(" — ", 1)
-                if head.strip():
-                    name = head.strip()
-                    description = tail.strip()[:20_000] or None
-
-            name = name.strip()[:160]
-            if name:
-                items.append(
-                    ItemCreate(
-                        name=name,
-                        description=description,
-                        quantity=qty,
-                        unit=unit,
-                        location_id=location_id,
-                        status="stored",
-                    )
-                )
-        return items
+        return _parse_quick_entry_lines(text, location_id)
 
     @staticmethod
     def _build_assortment_tags(items: List[ItemCreate]) -> Optional[str]:

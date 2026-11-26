@@ -1,13 +1,14 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import threading
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 import anyio
 from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app.core.database import session_scope
 from app.core.exceptions import BadRequestError, NotFoundError
-from app.core.network import build_qr_png, resolve_effective_base_url
+from app.core.network import build_qr_png, resolve_effective_base_url, validate_http_url
 from app.models.audit import AuditLog
 from app.models.item import Item
 from app.models.location import Location, LocationPhoto
@@ -28,7 +29,7 @@ from app.services.photo_service import photo_service
 from app.services.vision_service import vision_service
 
 
-_GRID_SLOT_LOCK = threading.Lock()
+_GRID_SLOT_LOCK = threading.RLock()
 _REPARENT_LOCK = threading.Lock()
 
 
@@ -158,6 +159,44 @@ class LocationService:
         return LocationHierarchySnapshot(locations, counts, photos_by_location)
 
     @staticmethod
+    def build_scoped_snapshot(
+        db: Session,
+        location_ids: Iterable[int],
+        include_counts: bool = True,
+        include_photos: bool = True,
+        photos_for_descendants: bool = False,
+    ) -> LocationHierarchySnapshot:
+        seeds = [int(i) for i in set(location_ids) if i is not None]
+        if not seeds:
+            return LocationHierarchySnapshot([], {}, {})
+
+        needed_ids = location_repository.get_ancestor_ids(db, seeds)
+        if include_counts or photos_for_descendants:
+            descendant_ids = location_repository.get_descendant_ids(db, seeds)
+            needed_ids |= descendant_ids
+        else:
+            descendant_ids = set(seeds)
+
+        locations = location_repository.list_by_ids(db, needed_ids)
+        counts = location_repository.get_direct_item_counts_for(db, descendant_ids) if include_counts else {}
+        photos_by_location: Dict[int, List[LocationPhoto]] = {}
+        if include_photos:
+            photo_target_ids = list(descendant_ids if photos_for_descendants else set(seeds))
+            if photo_target_ids:
+                photo_rows = (
+                    db.execute(
+                        select(LocationPhoto)
+                        .where(LocationPhoto.location_id.in_(photo_target_ids))
+                        .order_by(LocationPhoto.created_at.desc(), LocationPhoto.id.desc())
+                    )
+                    .scalars()
+                    .all()
+                )
+                for p in photo_rows:
+                    photos_by_location.setdefault(p.location_id, []).append(p)
+        return LocationHierarchySnapshot(locations, counts, photos_by_location)
+
+    @staticmethod
     def get_or_404(db: Session, location_id: int) -> Location:
         loc = location_repository.get_by_id(db, location_id)
         if not loc:
@@ -234,6 +273,13 @@ class LocationService:
 
     @classmethod
     def create(cls, db: Session, data: LocationCreate) -> Location:
+        if data.parent_id is not None and (data.grid_row is not None or data.grid_col is not None):
+            with _GRID_SLOT_LOCK:
+                return cls._create_unlocked(db, data)
+        return cls._create_unlocked(db, data)
+
+    @classmethod
+    def _create_unlocked(cls, db: Session, data: LocationCreate) -> Location:
         parent: Optional[Location] = None
         if data.parent_id is not None:
             parent = location_repository.get_by_id(db, data.parent_id)
@@ -307,14 +353,20 @@ class LocationService:
 
     @classmethod
     def update(cls, db: Session, location_id: int, data: LocationUpdate) -> Location:
-        if "parent_id" not in data.model_fields_set:
+        grid_keys = {"parent_id", "grid_row", "grid_col", "grid_row_span", "grid_col_span", "grid_rows", "grid_cols"}
+        needs_reparent = "parent_id" in data.model_fields_set
+        needs_grid = bool(grid_keys & data.model_fields_set)
+        if not needs_reparent and not needs_grid:
             return cls._update_unlocked(db, location_id, data)
-        # Serialize reparenting so concurrent moves can't each pass the cycle check and form a loop.
-        with _REPARENT_LOCK:
-            db.expire_all()
-            loc = cls._update_unlocked(db, location_id, data)
-            db.commit()
-            return loc
+        if needs_reparent:
+            # Serialize reparenting so concurrent moves can't each pass the cycle check and form a loop.
+            with _REPARENT_LOCK, _GRID_SLOT_LOCK:
+                db.expire_all()
+                loc = cls._update_unlocked(db, location_id, data)
+                db.commit()
+                return loc
+        with _GRID_SLOT_LOCK:
+            return cls._update_unlocked(db, location_id, data)
 
     @classmethod
     def _update_unlocked(cls, db: Session, location_id: int, data: LocationUpdate) -> Location:
@@ -482,7 +534,7 @@ class LocationService:
 
     @classmethod
     def get_read_by_id(cls, db: Session, location_id: int) -> LocationRead:
-        snapshot = cls.build_snapshot(db, include_counts=True)
+        snapshot = cls.build_scoped_snapshot(db, [location_id], include_counts=True, include_photos=True)
         loc = snapshot.loc_by_id.get(location_id)
         if not loc:
             raise NotFoundError("Location not found.")
@@ -517,7 +569,9 @@ class LocationService:
 
     @classmethod
     def get_tree_by_id(cls, db: Session, location_id: int) -> LocationTree:
-        snapshot = cls.build_snapshot(db, include_counts=True)
+        snapshot = cls.build_scoped_snapshot(
+            db, [location_id], include_counts=True, include_photos=True, photos_for_descendants=True
+        )
         if location_id not in snapshot.loc_by_id:
             raise NotFoundError("Location not found.")
         node_map, _ = cls._assemble_tree_map(snapshot)
@@ -635,6 +689,11 @@ class LocationService:
 
     @classmethod
     def save_grid_layout(cls, db: Session, location_id: int, data: LocationGridSave) -> LocationTree:
+        with _GRID_SLOT_LOCK:
+            return cls._save_grid_layout_locked(db, location_id, data)
+
+    @classmethod
+    def _save_grid_layout_locked(cls, db: Session, location_id: int, data: LocationGridSave) -> LocationTree:
         from sqlalchemy import update
 
         container = cls.get_or_404(db, location_id)
@@ -662,6 +721,13 @@ class LocationService:
         container.grid_rows = data.grid_rows
         container.grid_cols = data.grid_cols
         container.grid_config = data.grid_config
+
+        # Clear placed coordinates before re-assigning so swaps/reorders don't violate the unique grid index.
+        for ch in existing_children.values():
+            if ch.grid_row is not None or ch.grid_col is not None:
+                ch.grid_row = None
+                ch.grid_col = None
+        db.flush()
 
         for slot in data.slots:
             slot_type = slot.location_type.value if hasattr(slot.location_type, "value") else str(slot.location_type)
@@ -778,6 +844,16 @@ class LocationService:
         location_id: int,
         data: GridSlotMoveRequest,
     ) -> LocationTree:
+        with _GRID_SLOT_LOCK:
+            return cls._move_grid_slot_locked(db, location_id, data)
+
+    @classmethod
+    def _move_grid_slot_locked(
+        cls,
+        db: Session,
+        location_id: int,
+        data: GridSlotMoveRequest,
+    ) -> LocationTree:
         container = cls.get_or_404(db, location_id)
         if not (container.grid_rows and container.grid_cols):
             raise BadRequestError("Container does not have a grid layout.")
@@ -832,8 +908,11 @@ class LocationService:
 
             cls._refresh_auto_coord_name(src, new_src_rect[0], new_src_rect[1])
             cls._refresh_auto_coord_name(dst, new_dst_rect[0], new_dst_rect[1])
-            src.grid_row, src.grid_col = new_src_rect[0], new_src_rect[1]
+            src.grid_row, src.grid_col = None, None
+            db.flush()
             dst.grid_row, dst.grid_col = new_dst_rect[0], new_dst_rect[1]
+            db.flush()
+            src.grid_row, src.grid_col = new_src_rect[0], new_src_rect[1]
         else:
             if data.target_row is None or data.target_col is None:
                 raise BadRequestError("Target row and column are required when moving to an empty cell.")
@@ -868,8 +947,9 @@ class LocationService:
         base_url: Optional[str] = None,
     ) -> bytes:
         loc = cls.get_or_404(db, location_id)
-        resolved_target = target_url
-        if not resolved_target:
+        if target_url:
+            resolved_target = validate_http_url(target_url, allow_scheme_less=False)
+        else:
             effective_base = resolve_effective_base_url(host_header, base_url)
             if loc.location_type in ("room", "site"):
                 path = f"/#/room/{location_id}"
@@ -1022,14 +1102,19 @@ class LocationService:
         model: Optional[str] = None,
         expected_count: Optional[int] = None,
     ) -> VisionAnalysisResponse:
-        saved_photo_file = await anyio.to_thread.run_sync(
-            cls._prepare_drawer_photo_for_analysis,
-            db,
-            location_id,
-            file,
-            photo_id,
-        )
-        kwargs = {"provider": provider, "model": model}
+        bind = db.get_bind()
+
+        def _prepare_in_thread() -> Optional[Path]:
+            with session_scope(bind) as thread_db:
+                return cls._prepare_drawer_photo_for_analysis(
+                    thread_db,
+                    location_id,
+                    file,
+                    photo_id,
+                )
+
+        saved_photo_file = await anyio.to_thread.run_sync(_prepare_in_thread)
+        kwargs: dict = {"provider": provider, "model": model}
         if expected_count is not None:
             kwargs["expected_count"] = expected_count
         return await vision_service.analyze_image(saved_photo_file, **kwargs)
