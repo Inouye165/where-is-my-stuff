@@ -56,6 +56,7 @@ class Settings(BaseModel):
     THUMBNAILS_DIR: Path = DATA_DIR_DEFAULT / "uploads" / "thumbnails"
     ATTACHMENTS_DIR: Path = DATA_DIR_DEFAULT / "uploads" / "attachments"
     BACKUP_DIR: Path = DATA_DIR_DEFAULT / "backups"
+    CERTS_DIR: Path = DATA_DIR_DEFAULT / "certs"
     LOG_DIR: Path = BASE_DIR_DEFAULT / "logs"
 
     DATABASE_URL: str = Field(
@@ -65,6 +66,8 @@ class Settings(BaseModel):
     )
     HOST: str = Field(default_factory=lambda: os.getenv("HOST", "0.0.0.0"))
     PORT: int = Field(default_factory=lambda: _env_int("PORT", 8000))
+    HTTPS_ENABLED: bool = Field(default_factory=lambda: _env_bool("HTTPS_ENABLED", True))
+    HTTPS_PORT: int = Field(default_factory=lambda: _env_int("HTTPS_PORT", 8443))
 
     MAX_IMAGE_UPLOAD_SIZE_MB: int = Field(default_factory=lambda: _env_int("MAX_IMAGE_UPLOAD_SIZE_MB", 15))
     MAX_IMAGE_DIMENSION: int = Field(default_factory=lambda: _env_int("MAX_IMAGE_DIMENSION", 1600))
@@ -98,7 +101,7 @@ class Settings(BaseModel):
     RATE_LIMIT_AUTH_PER_MIN: int = Field(default_factory=lambda: _env_int("RATE_LIMIT_AUTH_PER_MIN", 10))
     RATE_LIMIT_VISION_PER_MIN: int = Field(default_factory=lambda: _env_int("RATE_LIMIT_VISION_PER_MIN", 15))
     RATE_LIMIT_SYSTEM_PER_MIN: int = Field(default_factory=lambda: _env_int("RATE_LIMIT_SYSTEM_PER_MIN", 10))
-    RATE_LIMIT_UPLOAD_PER_MIN: int = Field(default_factory=lambda: _env_int("RATE_LIMIT_UPLOAD_PER_MIN", 60))
+    RATE_LIMIT_UPLOAD_PER_MIN: int = Field(default_factory=lambda: _env_int("RATE_LIMIT_UPLOAD_PER_MIN", 180))
     VISION_PROVIDER: str = Field(default_factory=lambda: os.getenv("VISION_PROVIDER", "local"))
     OLLAMA_BASE_URL: str = Field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
     OLLAMA_VISION_MODEL: str = Field(default_factory=lambda: os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b"))
@@ -124,6 +127,7 @@ class Settings(BaseModel):
             self.THUMBNAILS_DIR,
             self.ATTACHMENTS_DIR,
             self.BACKUP_DIR,
+            self.CERTS_DIR,
             self.LOG_DIR,
         ):
             directory.mkdir(parents=True, exist_ok=True)

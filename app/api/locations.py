@@ -126,9 +126,11 @@ async def analyze_drawer_photo(
     location_id: int,
     file: Optional[UploadFile] = File(default=None),
     photo_id: Optional[int] = Form(default=None),
+    photo_ids: Optional[str] = Form(default=None, max_length=200),
     provider: Optional[str] = Form(default=None),
     model: Optional[str] = Form(default=None),
     expected_count: Optional[int] = Form(default=None, ge=1, le=500),
+    context_hint: Optional[str] = Form(default=None, max_length=300),
     db: Session = Depends(get_db),
 ) -> VisionAnalysisResponse:
     return await location_service.analyze_drawer_photo(
@@ -136,9 +138,11 @@ async def analyze_drawer_photo(
         location_id=location_id,
         file=file,
         photo_id=photo_id,
+        photo_ids=photo_ids,
         provider=provider,
         model=model,
         expected_count=expected_count,
+        context_hint=context_hint,
     )
 
 

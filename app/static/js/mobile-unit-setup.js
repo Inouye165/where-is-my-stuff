@@ -3,8 +3,8 @@
  * Features:
  *  - Step 1: Define storage unit (presets, count, columns, label, live diagram preview)
  *  - Step 2: Exterior photo
- *  - Step 3: Rapid-fire continuous camera burst (when getUserMedia available) OR bulk multi-select,
- *            with live non-blocking background upload queue showing transfer status in real time
+ *  - Step 3: Clean single-drawer focus (top-left -> right, top -> bottom) with continuous
+ *            multi-photo live camera (Done / Retake / Shutter) & background uploads
  *  - Step 4: Handoff to desktop for AI scan & item review
  */
 import { escapeHtml, pluralize, sanitizePhotoUrl } from './dom.js';
@@ -52,6 +52,9 @@ const setupState = {
   compartmentType: 'drawer',
   gridCols: 1,
   userEditedLayout: false,
+  existingContainerMode: false,
+  labeledOnly: false,
+  jumpPickerOpen: false,
   currentDrawerIdx: 0,
   renamingDrawer: false,
   uploadingExterior: false,
@@ -60,10 +63,11 @@ const setupState = {
 
   // Non-blocking per-drawer transfer queue: Array<{ localId, drawerId, previewUrl, status: 'uploading'|'error', error? }>
   pendingUploads: [],
-  // Live rapid-fire camera overlay state
+  // Per-drawer recent capture stack for instant Retake: Record<drawerId, Array<{ localId, serverPhotoId: number|null, previewUrl, deleted: boolean }>>
+  shotStacks: {},
+  // Live continuous camera overlay state
   liveCameraOpen: false,
   liveCameraStarting: false,
-  liveCameraError: '',
   liveStream: null,
   lastSnapPreview: '',
 };
@@ -78,7 +82,7 @@ function showSetupToast(msg, isError = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     el.classList.remove('is-open');
-  }, 2600);
+  }, 2400);
 }
 
 async function apiJson(url, options = {}) {
@@ -92,9 +96,23 @@ async function apiJson(url, options = {}) {
   return body;
 }
 
+function isCustomDrawerName(drawer) {
+  const name = String(drawer?.name || '').trim();
+  if (!name) return false;
+  if (/^(drawer|bin|shelf|compartment|cubby|slot)\s+\d+$/i.test(name)) return false;
+  if (/^[A-Z]{1,2}\d+(?:[\u2013\u2014-][A-Z]{1,2}\d+)?$/i.test(name)) return false;
+  return true;
+}
+
 function getCaptureTargets() {
   const drawers = setupState.session?.drawers || [];
-  if (drawers.length > 0) return drawers;
+  if (drawers.length > 0) {
+    if (setupState.labeledOnly) {
+      const labeled = drawers.filter(isCustomDrawerName);
+      if (labeled.length > 0) return labeled;
+    }
+    return drawers;
+  }
   const unit = setupState.session?.unit;
   if (!unit) return [];
   const photos = Array.isArray(unit.photos) ? unit.photos : [];
@@ -118,6 +136,47 @@ function getActiveUploadingCount(drawerId = null) {
   ).length;
 }
 
+function getDrawerShotStack(drawerId) {
+  const key = String(Number(drawerId));
+  if (!setupState.shotStacks[key]) {
+    setupState.shotStacks[key] = [];
+  }
+  return setupState.shotStacks[key];
+}
+
+function getDrawerTotalPhotoCount(drawer) {
+  if (!drawer) return 0;
+  const saved = Number(drawer.photo_count) || 0;
+  const uploading = getActiveUploadingCount(drawer.id);
+  return saved + uploading;
+}
+
+function getLatestPreviewForDrawer(drawer) {
+  if (!drawer) return '';
+  const stack = getDrawerShotStack(drawer.id);
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (!stack[i].deleted && stack[i].previewUrl) {
+      return stack[i].previewUrl;
+    }
+  }
+  const photos = Array.isArray(drawer.photos) ? drawer.photos : [];
+  if (photos.length > 0) {
+    const last = photos[photos.length - 1];
+    return sanitizePhotoUrl(last.thumbnail_path || last.photo_path || '');
+  }
+  return '';
+}
+
+function getDrawerDisplayLabel(drawer) {
+  if (!drawer) return 'Drawer';
+  const name = String(drawer.name || 'Drawer').trim();
+  const coord = String(drawer.coord || '').trim();
+  if (coord && !name.toLowerCase().includes(coord.toLowerCase())) {
+    return `${coord} — ${name}`;
+  }
+  return name || coord || 'Drawer';
+}
+
 function syncHeaderAndStepper() {
   const roomPill = document.getElementById('setup-room-pill');
   const finishEarlyBtn = document.getElementById('setup-finish-early-btn');
@@ -136,6 +195,8 @@ function syncHeaderAndStepper() {
 
   const stepper = document.getElementById('setup-stepper');
   if (!stepper) return;
+  stepper.hidden = Boolean(setupState.existingContainerMode);
+  if (stepper.hidden) return;
   const items = stepper.querySelectorAll('.setup-step-item');
   const lines = stepper.querySelectorAll('.setup-step-line');
   items.forEach((item) => {
@@ -325,29 +386,45 @@ function renderStep2ExteriorPhoto() {
   `;
 }
 
-function renderInteractiveDiagram(unit, drawers, activeIdx) {
+function renderJumpPickerPanel(unit, allDrawers, drawers, activeIdx) {
+  const labeledCount = allDrawers.filter(isCustomDrawerName).length;
+  const showFilterBar = labeledCount > 0 && labeledCount < allDrawers.length;
   const cols = Math.max(1, Number(unit?.grid_cols) || 1);
+
   return `
-    <div class="setup-diagram-frame">
-      <div class="setup-diagram-grid" style="grid-template-columns: repeat(${cols}, minmax(0, 1fr));">
-        ${drawers.map((d, idx) => {
-          const isActive = idx === activeIdx;
-          const pendingCount = getActiveUploadingCount(d.id);
-          const totalCount = (Number(d.photo_count) || 0) + pendingCount;
-          const hasPhotos = totalCount > 0;
-          return `
-            <button
-              type="button"
-              class="setup-drawer-slot ${isActive ? 'is-active' : ''} ${hasPhotos ? 'has-photos' : ''}"
-              data-drawer-idx="${idx}"
-            >
-              <span class="setup-drawer-slot-name">${escapeHtml(d.name)}</span>
-              <span class="setup-drawer-badge">
-                ${pendingCount > 0 ? `↑ ${totalCount}` : (hasPhotos ? `✓ ${d.photo_count}` : '0')}
-              </span>
-            </button>
-          `;
-        }).join('')}
+    <div class="setup-jump-drawer-panel" role="region" aria-label="Jump to drawer">
+      <div class="setup-jump-panel-head">
+        <span class="setup-section-label" style="margin: 0;">Jump to Drawer (${allDrawers.length})</span>
+        <button type="button" id="setup-jump-close-btn" class="setup-btn setup-btn-secondary setup-btn-xs">Close</button>
+      </div>
+      ${showFilterBar ? `
+        <div class="setup-filter-bar" role="group" aria-label="Filter drawers">
+          <button type="button" id="setup-filter-all-btn" class="setup-filter-pill ${!setupState.labeledOnly ? 'is-active' : ''}">
+            All (${allDrawers.length})
+          </button>
+          <button type="button" id="setup-filter-labeled-btn" class="setup-filter-pill ${setupState.labeledOnly ? 'is-active' : ''}">
+            Labeled only (${labeledCount})
+          </button>
+        </div>
+      ` : ''}
+      <div class="setup-jump-scroll">
+        <div class="setup-diagram-grid" style="grid-template-columns: repeat(${Math.min(cols, 4)}, minmax(0, 1fr));">
+          ${drawers.map((d, idx) => {
+            const isActive = idx === activeIdx;
+            const totalCount = getDrawerTotalPhotoCount(d);
+            const hasPhotos = totalCount > 0;
+            return `
+              <button
+                type="button"
+                class="setup-drawer-slot ${isActive ? 'is-active' : ''} ${hasPhotos ? 'has-photos' : ''}"
+                data-drawer-idx="${idx}"
+              >
+                <span class="setup-drawer-slot-name">${d.coord ? `<span class="setup-slot-coord">${escapeHtml(d.coord)}</span> ` : ''}${escapeHtml(d.name)}</span>
+                <span class="setup-drawer-badge">${hasPhotos ? `✓ ${totalCount}` : '0'}</span>
+              </button>
+            `;
+          }).join('')}
+        </div>
       </div>
     </div>
   `;
@@ -355,6 +432,7 @@ function renderInteractiveDiagram(unit, drawers, activeIdx) {
 
 function renderStep3DrawerPhotos() {
   const unit = setupState.session?.unit;
+  const allDrawers = setupState.session?.drawers || [];
   const drawers = getCaptureTargets();
   if (!drawers.length) {
     return `
@@ -372,123 +450,142 @@ function renderStep3DrawerPhotos() {
   const savedPhotos = Array.isArray(drawer.photos) ? drawer.photos : [];
   const pendingForThis = getPendingForDrawer(drawer.id);
   const uploadingCount = getActiveUploadingCount(drawer.id);
-  const photographedCount = drawers.filter(
-    (d) => (Number(d.photo_count) || 0) + getActiveUploadingCount(d.id) > 0
-  ).length;
+  const totalPhotos = savedPhotos.length + uploadingCount;
 
   return `
-    <div class="${isSingle ? '' : 'setup-split-layout'}">
-      ${!isSingle ? `
-        <section class="setup-card">
-          <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.65rem;">
-            <div>
-              <span class="setup-section-label" style="margin-bottom: 0.1rem;">${escapeHtml(unit?.name || 'Storage Unit')}</span>
-              <div style="font-size: 0.84rem; color: var(--text-secondary);">${photographedCount} of ${drawers.length} drawers have photos</div>
-            </div>
-          </div>
-          ${renderInteractiveDiagram(unit, drawers, idx)}
-        </section>
-      ` : ''}
-
-      <section class="setup-card">
-        <div class="setup-drawer-head">
-          <div>
-            <div class="setup-step-pill">${isSingle ? 'Box / Container Contents' : `Drawer ${idx + 1} of ${drawers.length}`}</div>
-            <h2 class="setup-drawer-title">${isSingle ? `Contents of ${escapeHtml(drawer.name)}` : escapeHtml(drawer.name)}</h2>
-          </div>
-          <button type="button" id="setup-rename-toggle-btn" class="setup-btn setup-btn-secondary setup-btn-sm">
+    <section class="setup-card setup-focus-card">
+      <div class="setup-focus-meta-row">
+        <div class="setup-step-pill">
+          ${isSingle ? 'Container Contents' : `Drawer ${idx + 1} of ${drawers.length}`}
+        </div>
+        <div class="setup-focus-meta-actions">
+          ${!isSingle ? `
+            <button
+              type="button"
+              id="setup-jump-toggle-btn"
+              class="setup-mini-action-btn ${setupState.jumpPickerOpen ? 'is-active' : ''}"
+              aria-expanded="${setupState.jumpPickerOpen ? 'true' : 'false'}"
+            >
+              Jump ▾
+            </button>
+          ` : ''}
+          <button type="button" id="setup-rename-toggle-btn" class="setup-mini-action-btn">
             ${setupState.renamingDrawer ? 'Cancel' : 'Rename'}
           </button>
         </div>
+      </div>
 
-        ${setupState.renamingDrawer ? `
-          <form id="setup-rename-form" class="setup-rename-row">
-            <input type="text" id="setup-rename-input" class="setup-input" value="${escapeHtml(drawer.name)}" maxlength="120" required>
-            <button type="submit" class="setup-btn setup-btn-primary setup-btn-sm" style="flex: 0 0 auto;">Save</button>
-          </form>
-        ` : ''}
+      ${setupState.jumpPickerOpen && !isSingle ? renderJumpPickerPanel(unit, allDrawers, drawers, idx) : ''}
 
-        ${canUseLiveCamera ? `
-          <div class="setup-camera-grid">
-            <button type="button" id="setup-start-live-cam-btn" class="setup-capture-btn">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
-              <span>Start Rapid Camera</span>
-              <span class="setup-btn-hint">Snap multiple photos non-stop</span>
-            </button>
+      <div class="setup-drawer-hero">
+        <h2 class="setup-drawer-title">
+          ${drawer.coord ? `<span class="setup-coord-badge">${escapeHtml(drawer.coord)}</span>` : ''}
+          <span class="setup-drawer-name-text">${isSingle ? `Contents of ${escapeHtml(drawer.name)}` : escapeHtml(drawer.name)}</span>
+        </h2>
+        ${drawer.description ? `<p class="setup-drawer-desc">${escapeHtml(drawer.description)}</p>` : ''}
+      </div>
 
-            <label class="setup-library-btn">
+      ${setupState.renamingDrawer ? `
+        <form id="setup-rename-form" class="setup-rename-row">
+          <input type="text" id="setup-rename-input" class="setup-input" value="${escapeHtml(drawer.name)}" maxlength="120" required>
+          <button type="submit" class="setup-btn setup-btn-primary setup-btn-sm" style="flex: 0 0 auto;">Save</button>
+        </form>
+      ` : ''}
+
+      ${!canUseLiveCamera && setupState.session?.https_url && /^https:\/\//i.test(setupState.session.https_url) && window.location.protocol === 'http:' ? `
+        <div class="setup-transfer-banner" style="justify-content: space-between; margin-bottom: 0.75rem;">
+          <span>Need multi-shot live camera?</span>
+          <a href="${escapeHtml(setupState.session.https_url)}" class="setup-btn setup-btn-primary setup-btn-xs" style="flex: 0 0 auto; text-decoration: none;">
+            Switch to Live Camera (HTTPS)
+          </a>
+        </div>
+      ` : ''}
+
+      ${canUseLiveCamera ? `
+        <div class="setup-camera-primary-wrap">
+          <button type="button" id="setup-start-live-cam-btn" class="setup-capture-btn setup-capture-btn-hero">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
+            <span>Open Camera</span>
+            <span class="setup-btn-hint">Tap shutter for 1 or many photos, then Done</span>
+          </button>
+
+          <div class="setup-secondary-actions-row">
+            <label class="setup-secondary-action">
               <input type="file" id="setup-drawer-gallery" accept="image/*" multiple style="display: none;">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" x2="12" y1="3" y2="15"></line></svg>
+              <span>Upload from library</span>
+            </label>
+            ${totalPhotos > 0 ? `
+              <button type="button" id="setup-retake-last-btn" class="setup-secondary-action is-danger">
+                Retake Last
+              </button>
+            ` : ''}
+          </div>
+        </div>
+      ` : `
+        <div class="setup-camera-primary-wrap">
+          <label class="setup-capture-btn setup-capture-btn-hero">
+            <input type="file" id="setup-drawer-camera" accept="image/*" capture="environment" style="display: none;">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
+            <span>Take Photo</span>
+            <span class="setup-btn-hint">Tap again to add more angles</span>
+          </label>
+
+          <div class="setup-secondary-actions-row">
+            <label class="setup-secondary-action">
+              <input type="file" id="setup-drawer-gallery" accept="image/*" multiple style="display: none;">
               <span>Select Multiple</span>
-              <span class="setup-btn-hint">From photo library</span>
             </label>
+            ${totalPhotos > 0 ? `
+              <button type="button" id="setup-retake-last-btn" class="setup-secondary-action is-danger">
+                Retake Last
+              </button>
+            ` : ''}
           </div>
-        ` : `
-          <div class="setup-camera-grid">
-            <label class="setup-capture-btn">
-              <input type="file" id="setup-drawer-gallery" accept="image/*" multiple style="display: none;">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" x2="12" y1="3" y2="15"></line></svg>
-              <span>Select Multiple Photos</span>
-              <span class="setup-btn-hint">Upload 1–20 photos at once</span>
-            </label>
+        </div>
+      `}
 
-            <label class="setup-library-btn">
-              <input type="file" id="setup-drawer-camera" accept="image/*" capture="environment" style="display: none;">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
-              <span>Single Snap</span>
-              <span class="setup-btn-hint">OS camera picker</span>
-            </label>
-          </div>
-          <p class="setup-tip-note">
-            Tip for fast multi-photo capture: snap all photos for this drawer in your Camera app, then tap <strong>Select Multiple Photos</strong> to transfer them all at once.
-          </p>
-        `}
+      ${uploadingCount > 0 ? `
+        <div class="setup-transfer-banner">
+          <span class="setup-mini-spinner" aria-hidden="true"></span>
+          <span>Uploading ${pluralize(uploadingCount, 'photo')}…</span>
+        </div>
+      ` : ''}
 
-        ${uploadingCount > 0 ? `
-          <div class="setup-transfer-banner">
-            <span class="setup-mini-spinner" aria-hidden="true"></span>
-            <span>Transferring ${pluralize(uploadingCount, 'photo')} to your computer…</span>
-          </div>
-        ` : ''}
-
-        ${(pendingForThis.length > 0 || savedPhotos.length > 0) ? `
-          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.45rem;">
-            <span class="setup-section-label" style="margin: 0;">
-              Drawer Photos (${savedPhotos.length} sent${uploadingCount > 0 ? ` · ${uploadingCount} transferring` : ''})
-            </span>
-          </div>
-          <div class="setup-thumbs-grid">
-            ${pendingForThis.map((p) => `
-              <div class="setup-thumb-card is-transferring">
-                ${p.previewUrl ? `<img src="${escapeHtml(p.previewUrl)}" alt="Transferring photo">` : ''}
-                <span class="setup-thumb-status ${p.status === 'error' ? 'is-error' : ''}">
-                  ${p.status === 'error' ? 'Failed' : 'Sending…'}
-                </span>
-                ${p.status === 'error' ? `<button type="button" class="setup-thumb-remove" data-dismiss-upload="${Number(p.localId)}" aria-label="Dismiss failed upload" title="Dismiss">×</button>` : ''}
+      ${(pendingForThis.length > 0 || savedPhotos.length > 0) ? `
+        <div class="setup-thumbs-header">
+          <span class="setup-section-label" style="margin: 0;">
+            ${pluralize(savedPhotos.length, 'photo')} saved${uploadingCount > 0 ? ` · ${uploadingCount} uploading` : ''}
+          </span>
+        </div>
+        <div class="setup-thumbs-grid">
+          ${pendingForThis.map((p) => `
+            <div class="setup-thumb-card is-transferring">
+              ${p.previewUrl ? `<img src="${escapeHtml(p.previewUrl)}" alt="Uploading photo">` : ''}
+              <span class="setup-thumb-status ${p.status === 'error' ? 'is-error' : ''}">
+                ${p.status === 'error' ? 'Failed' : 'Sending…'}
+              </span>
+              ${p.status === 'error' ? `<button type="button" class="setup-thumb-remove" data-dismiss-upload="${Number(p.localId)}" aria-label="Dismiss failed upload" title="Dismiss">×</button>` : ''}
+            </div>
+          `).join('')}
+          ${savedPhotos.map((p) => {
+            const thumbSrc = sanitizePhotoUrl(p.thumbnail_path || p.photo_path || '');
+            return `
+              <div class="setup-thumb-card is-sent">
+                ${thumbSrc ? `<img src="${escapeHtml(thumbSrc)}" alt="${escapeHtml(drawer.name)} photo">` : ''}
+                <span class="setup-thumb-sent-pill">✓</span>
+                <button
+                  type="button"
+                  class="setup-thumb-remove"
+                  data-delete-photo-id="${Number(p.id)}"
+                  aria-label="Delete photo"
+                  title="Delete photo"
+                >×</button>
               </div>
-            `).join('')}
-            ${savedPhotos.map((p) => {
-              const thumbSrc = sanitizePhotoUrl(p.thumbnail_path || p.photo_path || '');
-              return `
-                <div class="setup-thumb-card is-sent">
-                  ${thumbSrc ? `<img src="${escapeHtml(thumbSrc)}" alt="${escapeHtml(drawer.name)} photo">` : ''}
-                  <span class="setup-thumb-sent-pill">✓ Sent</span>
-                  <button
-                    type="button"
-                    class="setup-thumb-remove"
-                    data-delete-photo-id="${Number(p.id)}"
-                    aria-label="Delete photo"
-                    title="Delete photo"
-                  >×</button>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        ` : `
-          <p class="setup-sub" style="margin-bottom: 0;">Take or select 1 or more photos for <strong>${escapeHtml(drawer.name)}</strong> — they transfer live to your computer as you shoot.</p>
-        `}
-      </section>
-    </div>
+            `;
+          }).join('')}
+        </div>
+      ` : ''}
+    </section>
   `;
 }
 
@@ -506,7 +603,7 @@ function renderStep4Done() {
       <p class="setup-sub">
         ${returnMode === 'app'
           ? 'All photos are saved. Return to the app to scan contents with AI and edit items.'
-          : 'Continue on your computer to AI-scan each drawer photo, fix any labels, and save your items.'}
+          : 'Continue on your computer to scan all drawer photos and save identified items.'}
       </p>
 
       <div class="setup-stats-row">
@@ -538,12 +635,33 @@ function renderStep4Done() {
   `;
 }
 
+function isSafeHttpUrl(url) {
+  return typeof url === 'string' && /^https?:\/\/[^/\s]+/i.test(url);
+}
+
+async function fetchActiveSetupSession() {
+  try {
+    const res = await fetch('/api/v1/unit-setup/active');
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    if (!data || !data.token || !isSafeHttpUrl(data.mobile_url)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 function renderErrorCard(message) {
   return `
     <section class="setup-card" style="text-align: center; padding: 2rem 1.25rem;">
       <h1 class="setup-heading">Setup link unavailable</h1>
       <p class="setup-sub">${escapeHtml(message)}</p>
-      <a href="/" class="setup-btn setup-btn-secondary" style="text-decoration: none;">Open WhereIsMyStuff</a>
+      <div style="display: flex; gap: 0.65rem; flex-wrap: wrap; justify-content: center;">
+        <button type="button" id="setup-reconnect-active-btn" class="setup-btn setup-btn-primary" style="flex: 0 1 auto;">
+          Check for Active Session
+        </button>
+        <a href="/" class="setup-btn setup-btn-secondary" style="text-decoration: none;">Open WhereIsMyStuff</a>
+      </div>
     </section>
   `;
 }
@@ -585,11 +703,11 @@ function renderFooterForStep() {
       ` : ''}
       ${isLast ? `
         <button type="button" id="setup-finish-drawers-btn" class="setup-btn setup-btn-success" ${uploadingAny ? 'disabled' : ''}>
-          ${uploadingAny ? 'Finishing transfer…' : 'Finish on Computer ✓'}
+          ${uploadingAny ? 'Uploading…' : 'Finish ✓'}
         </button>
       ` : `
         <button type="button" id="setup-next-drawer-btn" class="setup-btn setup-btn-primary">
-          Next Drawer →
+          Done — Next Drawer →
         </button>
       `}
     `);
@@ -600,25 +718,157 @@ function renderFooterForStep() {
 
 function syncLiveCameraHud() {
   const drawers = getCaptureTargets();
-  const drawer = drawers[setupState.currentDrawerIdx];
+  const idx = Math.max(0, Math.min(drawers.length - 1, setupState.currentDrawerIdx));
+  setupState.currentDrawerIdx = idx;
+  const drawer = drawers[idx];
   if (!drawer) return;
+
+  const isSingle = Boolean(drawer.isSingleContainer);
+  const isLast = drawers.length === 0 || idx >= drawers.length - 1;
   const savedCnt = Number(drawer.photo_count) || 0;
   const pendingCnt = getActiveUploadingCount(drawer.id);
-  const statusEl = document.getElementById('live-cam-transfer-pill');
-  if (statusEl) {
-    statusEl.textContent = pendingCnt > 0
-      ? `${savedCnt} sent · ${pendingCnt} transferring…`
-      : `${savedCnt} sent to desktop`;
+  const total = savedCnt + pendingCnt;
+
+  const titleEl = document.getElementById('live-cam-drawer-title');
+  if (titleEl) {
+    titleEl.textContent = getDrawerDisplayLabel(drawer);
   }
+  const descEl = document.getElementById('live-cam-drawer-desc');
+  if (descEl) {
+    if (drawer.description) {
+      descEl.textContent = drawer.description;
+      descEl.hidden = false;
+    } else {
+      descEl.textContent = '';
+      descEl.hidden = true;
+    }
+  }
+  const metaEl = document.getElementById('live-cam-transfer-pill');
+  if (metaEl) {
+    const posText = isSingle ? '' : `${idx + 1}/${drawers.length} · `;
+    const photoWord = total === 1 ? '1 photo' : `${total} photos`;
+    metaEl.textContent = pendingCnt > 0
+      ? `${posText}${photoWord} (uploading…)`
+      : `${posText}${photoWord}`;
+  }
+
+  const prevBtn = document.getElementById('live-cam-prev-btn');
+  if (prevBtn) {
+    prevBtn.hidden = isSingle;
+    prevBtn.disabled = idx <= 0;
+  }
+
+  const retakeBtn = document.getElementById('live-cam-retake-btn');
+  if (retakeBtn) {
+    retakeBtn.disabled = total <= 0;
+  }
+
   const doneBtn = document.getElementById('live-cam-done-btn');
   if (doneBtn) {
-    const total = savedCnt + pendingCnt;
-    doneBtn.textContent = total > 0 ? `Review (${total}) →` : 'Done';
+    if (isLast) {
+      doneBtn.textContent = 'Finish ✓';
+      doneBtn.classList.add('is-finish');
+    } else {
+      doneBtn.textContent = total > 0 ? 'Done →' : 'Skip →';
+      doneBtn.classList.remove('is-finish');
+    }
   }
+
+  const thumbUrl = setupState.lastSnapPreview || getLatestPreviewForDrawer(drawer);
   const thumbImg = document.getElementById('live-cam-last-thumb');
-  if (thumbImg && setupState.lastSnapPreview) {
-    thumbImg.src = setupState.lastSnapPreview;
-    thumbImg.style.display = 'block';
+  const thumbWrap = document.getElementById('live-cam-thumb-slot');
+  if (thumbImg && thumbWrap) {
+    if (thumbUrl) {
+      thumbImg.src = thumbUrl;
+      thumbImg.style.display = 'block';
+      thumbWrap.classList.add('has-thumb');
+    } else {
+      thumbImg.removeAttribute('src');
+      thumbImg.style.display = 'none';
+      thumbWrap.classList.remove('has-thumb');
+    }
+  }
+}
+
+async function advanceDrawerInCamera(delta) {
+  const drawers = getCaptureTargets();
+  if (!drawers.length) return;
+  const nextIdx = Math.max(0, Math.min(drawers.length - 1, setupState.currentDrawerIdx + delta));
+  if (nextIdx === setupState.currentDrawerIdx) return;
+
+  setupState.currentDrawerIdx = nextIdx;
+  const target = drawers[nextIdx];
+  setupState.lastSnapPreview = getLatestPreviewForDrawer(target);
+  syncLiveCameraHud();
+
+  const allDrawers = setupState.session?.drawers || [];
+  const fullIdx = target ? allDrawers.findIndex((d) => Number(d.id) === Number(target.id)) : nextIdx;
+  const progressIdx = fullIdx >= 0 ? fullIdx : nextIdx;
+  try {
+    await apiJson(`/api/v1/unit-setup/sessions/${encodeURIComponent(token)}/progress`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_drawer_index: progressIdx, status: 'capturing_drawers' }),
+    });
+  } catch {
+    // Non-fatal progress sync error
+  }
+}
+
+async function retakeLastPhoto(drawer) {
+  if (!drawer) return;
+  const stack = getDrawerShotStack(drawer.id);
+  let targetShot = null;
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (!stack[i].deleted) {
+      targetShot = stack[i];
+      break;
+    }
+  }
+
+  if (targetShot) {
+    targetShot.deleted = true;
+    setupState.pendingUploads = setupState.pendingUploads.filter((u) => u.localId !== targetShot.localId);
+    const remainingPreview = getLatestPreviewForDrawer(drawer);
+    setupState.lastSnapPreview = remainingPreview;
+    if (targetShot.previewUrl && targetShot.previewUrl.startsWith('blob:') && targetShot.previewUrl !== remainingPreview) {
+      try { URL.revokeObjectURL(targetShot.previewUrl); } catch {}
+    }
+
+    if (setupState.liveCameraOpen) syncLiveCameraHud();
+    else render();
+
+    if (targetShot.serverPhotoId) {
+      try {
+        const res = await fetch(`/api/v1/locations/${drawer.id}/photos/${targetShot.serverPhotoId}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Could not remove photo');
+        await refreshSession();
+      } catch (err) {
+        showSetupToast(err?.message || 'Could not remove photo', true);
+      }
+    }
+    showSetupToast('Last photo removed');
+    if (setupState.liveCameraOpen) syncLiveCameraHud();
+    else render();
+    return;
+  }
+
+  const savedPhotos = Array.isArray(drawer.photos) ? drawer.photos : [];
+  if (savedPhotos.length > 0) {
+    const lastSaved = savedPhotos[savedPhotos.length - 1];
+    try {
+      const res = await fetch(`/api/v1/locations/${drawer.id}/photos/${lastSaved.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Could not remove photo');
+      await refreshSession();
+      const updatedDrawers = getCaptureTargets();
+      const updatedDrawer = updatedDrawers[setupState.currentDrawerIdx];
+      setupState.lastSnapPreview = getLatestPreviewForDrawer(updatedDrawer);
+      showSetupToast('Last photo removed');
+      if (setupState.liveCameraOpen) syncLiveCameraHud();
+      else render();
+    } catch (err) {
+      showSetupToast(err?.message || 'Could not remove photo', true);
+    }
   }
 }
 
@@ -630,11 +880,7 @@ function stopLiveCamera() {
     setupState.liveStream = null;
   }
   setupState.liveCameraOpen = false;
-  const lastPreview = setupState.lastSnapPreview;
   setupState.lastSnapPreview = '';
-  if (lastPreview && !setupState.pendingUploads.some((u) => u.previewUrl === lastPreview)) {
-    try { URL.revokeObjectURL(lastPreview); } catch {}
-  }
   const overlay = document.getElementById('live-camera-overlay');
   if (overlay) overlay.remove();
   renderFooterForStep();
@@ -659,7 +905,7 @@ async function startLiveCamera() {
     });
     setupState.liveStream = stream;
     setupState.liveCameraOpen = true;
-    setupState.lastSnapPreview = '';
+    setupState.lastSnapPreview = getLatestPreviewForDrawer(drawer);
     setFooterHtml('');
 
     const overlay = document.createElement('div');
@@ -667,24 +913,31 @@ async function startLiveCamera() {
     overlay.className = 'live-cam-overlay';
     overlay.innerHTML = `
       <div class="live-cam-topbar">
-        <div>
-          <div class="live-cam-drawer-title">${escapeHtml(drawer.name)} (${setupState.currentDrawerIdx + 1}/${drawers.length})</div>
-          <div id="live-cam-transfer-pill" class="live-cam-pill">Ready — tap shutter to snap</div>
+        <div class="live-cam-label-block">
+          <div id="live-cam-drawer-title" class="live-cam-drawer-title"></div>
+          <div id="live-cam-drawer-desc" class="live-cam-drawer-desc" hidden></div>
+          <div id="live-cam-transfer-pill" class="live-cam-pill"></div>
         </div>
-        <button type="button" id="live-cam-close-btn" class="live-cam-top-btn">Close</button>
+        <div class="live-cam-top-actions">
+          <button type="button" id="live-cam-prev-btn" class="live-cam-top-btn" aria-label="Previous drawer">‹ Prev</button>
+          <button type="button" id="live-cam-close-btn" class="live-cam-top-btn live-cam-close-btn" aria-label="Close camera">✕</button>
+        </div>
       </div>
       <div class="live-cam-stage">
         <video id="live-cam-video" autoplay playsinline muted></video>
         <div id="live-cam-flash" class="live-cam-flash"></div>
       </div>
       <div class="live-cam-controls">
-        <div class="live-cam-thumb-slot">
-          <img id="live-cam-last-thumb" src="" alt="Last snap" style="display: none;">
-        </div>
+        <button type="button" id="live-cam-retake-btn" class="live-cam-retake-btn" aria-label="Retake last photo" disabled>
+          <span id="live-cam-thumb-slot" class="live-cam-thumb-slot">
+            <img id="live-cam-last-thumb" src="" alt="" style="display: none;">
+          </span>
+          <span class="live-cam-retake-label">Retake</span>
+        </button>
         <button type="button" id="live-cam-shutter-btn" class="live-cam-shutter" aria-label="Take photo">
           <span class="live-cam-shutter-inner"></span>
         </button>
-        <button type="button" id="live-cam-done-btn" class="live-cam-done-btn">Done</button>
+        <button type="button" id="live-cam-done-btn" class="live-cam-done-btn">Done →</button>
       </div>
     `;
     document.body.appendChild(overlay);
@@ -701,13 +954,27 @@ async function startLiveCamera() {
       stopLiveCamera();
       render();
     });
+    document.getElementById('live-cam-prev-btn')?.addEventListener('click', () => {
+      advanceDrawerInCamera(-1);
+    });
+    document.getElementById('live-cam-retake-btn')?.addEventListener('click', () => {
+      const curDrawers = getCaptureTargets();
+      const cur = curDrawers[setupState.currentDrawerIdx];
+      retakeLastPhoto(cur);
+    });
     document.getElementById('live-cam-done-btn')?.addEventListener('click', () => {
-      stopLiveCamera();
-      render();
+      const curDrawers = getCaptureTargets();
+      const isLast = curDrawers.length === 0 || setupState.currentDrawerIdx >= curDrawers.length - 1;
+      if (isLast) {
+        stopLiveCamera();
+        finishToComputer();
+      } else {
+        advanceDrawerInCamera(1);
+      }
     });
     document.getElementById('live-cam-shutter-btn')?.addEventListener('click', snapLiveFrame);
   } catch (err) {
-    showSetupToast(err?.message || 'Camera access denied — use Select Multiple instead.', true);
+    showSetupToast(err?.message || 'Camera access denied — use Take Photo or library instead.', true);
   } finally {
     setupState.liveCameraStarting = false;
   }
@@ -719,7 +986,6 @@ async function snapLiveFrame() {
   const drawer = drawers[setupState.currentDrawerIdx];
   if (!videoEl || !drawer || !videoEl.videoWidth || !videoEl.videoHeight) return;
 
-  // Brief shutter flash animation
   const flash = document.getElementById('live-cam-flash');
   if (flash) {
     flash.classList.add('is-flashing');
@@ -747,11 +1013,7 @@ async function snapLiveFrame() {
   if (!blob) return;
   const file = new File([blob], `drawer_${drawer.id}_${Date.now()}.jpg`, { type: 'image/jpeg' });
   const previewUrl = URL.createObjectURL(blob);
-  const prevSnap = setupState.lastSnapPreview;
   setupState.lastSnapPreview = previewUrl;
-  if (prevSnap && !setupState.pendingUploads.some((u) => u.previewUrl === prevSnap)) {
-    try { URL.revokeObjectURL(prevSnap); } catch {}
-  }
   syncLiveCameraHud();
   enqueueDrawerUpload(drawer.id, file, previewUrl, true);
 }
@@ -760,7 +1022,10 @@ async function enqueueDrawerUpload(drawerId, rawFile, existingPreviewUrl = null,
   const localId = ++localUploadSeq;
   const previewUrl = existingPreviewUrl || URL.createObjectURL(rawFile);
   const entry = { localId, drawerId, previewUrl, status: 'uploading' };
+  const shotEntry = { localId, serverPhotoId: null, previewUrl, deleted: false };
+  getDrawerShotStack(drawerId).push(shotEntry);
   setupState.pendingUploads.unshift(entry);
+
   if (setupState.liveCameraOpen) {
     syncLiveCameraHud();
   } else {
@@ -772,13 +1037,16 @@ async function enqueueDrawerUpload(drawerId, rawFile, existingPreviewUrl = null,
     const fd = new FormData();
     fd.append('file', fileToSend);
     fd.append('photo_type', 'container');
-    await apiJson(`/api/v1/locations/${drawerId}/photos`, { method: 'POST', body: fd });
+    const saved = await apiJson(`/api/v1/locations/${drawerId}/photos`, { method: 'POST', body: fd });
+    shotEntry.serverPhotoId = Number(saved?.id) || null;
 
-    // Remove pending entry once confirmed on server
     setupState.pendingUploads = setupState.pendingUploads.filter((u) => u.localId !== localId);
-    if (previewUrl !== setupState.lastSnapPreview) {
-      try { URL.revokeObjectURL(previewUrl); } catch {}
+
+    // If user clicked Retake while upload was still in flight, immediately remove on server
+    if (shotEntry.deleted && shotEntry.serverPhotoId) {
+      await fetch(`/api/v1/locations/${drawerId}/photos/${shotEntry.serverPhotoId}`, { method: 'DELETE' }).catch(() => {});
     }
+
     await refreshSession();
     if (setupState.liveCameraOpen) {
       syncLiveCameraHud();
@@ -788,7 +1056,9 @@ async function enqueueDrawerUpload(drawerId, rawFile, existingPreviewUrl = null,
   } catch (err) {
     entry.status = 'error';
     entry.error = err?.message || 'Upload failed';
-    showSetupToast(entry.error, true);
+    if (!shotEntry.deleted) {
+      showSetupToast(entry.error, true);
+    }
     if (setupState.liveCameraOpen) {
       syncLiveCameraHud();
     } else {
@@ -813,6 +1083,14 @@ function render() {
 function renderMain(main) {
   if (setupState.errorMessage) {
     main.innerHTML = renderErrorCard(setupState.errorMessage);
+    document.getElementById('setup-reconnect-active-btn')?.addEventListener('click', async () => {
+      const active = await fetchActiveSetupSession();
+      if (active && isSafeHttpUrl(active.mobile_url)) {
+        window.location.replace(active.mobile_url);
+      } else {
+        showSetupToast('No active session open on your computer yet', true);
+      }
+    });
     renderFooterForStep();
     return;
   }
@@ -945,17 +1223,22 @@ function bindStep2Handlers() {
 }
 
 async function selectDrawerIndex(nextIdx) {
-  const drawers = setupState.session?.drawers || [];
+  const drawers = getCaptureTargets();
   if (!drawers.length) return;
   const clamped = Math.max(0, Math.min(drawers.length - 1, nextIdx));
   setupState.currentDrawerIdx = clamped;
   setupState.renamingDrawer = false;
+  setupState.jumpPickerOpen = false;
   render();
+  const target = drawers[clamped];
+  const allDrawers = setupState.session?.drawers || [];
+  const fullIdx = target ? allDrawers.findIndex((d) => Number(d.id) === Number(target.id)) : clamped;
+  const progressIdx = fullIdx >= 0 ? fullIdx : clamped;
   try {
     await apiJson(`/api/v1/unit-setup/sessions/${encodeURIComponent(token)}/progress`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ current_drawer_index: clamped, status: 'capturing_drawers' }),
+      body: JSON.stringify({ current_drawer_index: progressIdx, status: 'capturing_drawers' }),
     });
   } catch {
     // Non-fatal progress sync error
@@ -963,6 +1246,26 @@ async function selectDrawerIndex(nextIdx) {
 }
 
 function bindStep3Handlers() {
+  document.getElementById('setup-jump-toggle-btn')?.addEventListener('click', () => {
+    setupState.jumpPickerOpen = !setupState.jumpPickerOpen;
+    render();
+  });
+  document.getElementById('setup-jump-close-btn')?.addEventListener('click', () => {
+    setupState.jumpPickerOpen = false;
+    render();
+  });
+
+  document.getElementById('setup-filter-labeled-btn')?.addEventListener('click', () => {
+    setupState.labeledOnly = true;
+    setupState.currentDrawerIdx = 0;
+    render();
+  });
+  document.getElementById('setup-filter-all-btn')?.addEventListener('click', () => {
+    setupState.labeledOnly = false;
+    setupState.currentDrawerIdx = 0;
+    render();
+  });
+
   document.querySelectorAll('[data-drawer-idx]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const idx = Number(btn.getAttribute('data-drawer-idx'));
@@ -972,14 +1275,16 @@ function bindStep3Handlers() {
 
   document.getElementById('setup-start-live-cam-btn')?.addEventListener('click', startLiveCamera);
 
+  document.getElementById('setup-retake-last-btn')?.addEventListener('click', () => {
+    const drawers = getCaptureTargets();
+    const drawer = drawers[setupState.currentDrawerIdx];
+    retakeLastPhoto(drawer);
+  });
+
   document.querySelectorAll('[data-dismiss-upload]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const localId = Number(btn.getAttribute('data-dismiss-upload'));
-      const dropped = setupState.pendingUploads.find((u) => u.localId === localId);
       setupState.pendingUploads = setupState.pendingUploads.filter((u) => u.localId !== localId);
-      if (dropped?.previewUrl && dropped.previewUrl !== setupState.lastSnapPreview) {
-        try { URL.revokeObjectURL(dropped.previewUrl); } catch {}
-      }
       render();
     });
   });
@@ -1021,7 +1326,6 @@ function bindStep3Handlers() {
     const drawers = getCaptureTargets();
     const drawer = drawers[setupState.currentDrawerIdx];
     if (!files.length || !drawer) return;
-    // Queue all selected photos immediately so each one transfers live to desktop
     for (const file of files) {
       enqueueDrawerUpload(drawer.id, file);
     }
@@ -1064,7 +1368,7 @@ function bindStep4Handlers() {
 
 async function finishToComputer() {
   if (getActiveUploadingCount() > 0) {
-    showSetupToast('Waiting for remaining photos to finish transferring…');
+    showSetupToast('Waiting for remaining photos to finish uploading…');
     return;
   }
   stopLiveCamera();
@@ -1151,6 +1455,11 @@ function bindGlobalHeaderControls() {
 async function init() {
   bindGlobalHeaderControls();
   if (!token) {
+    const active = await fetchActiveSetupSession();
+    if (active && isSafeHttpUrl(active.mobile_url)) {
+      window.location.replace(active.mobile_url);
+      return;
+    }
     setupState.errorMessage = 'Missing setup token. Scan the QR code on your computer screen.';
     render();
     return;
@@ -1162,12 +1471,28 @@ async function init() {
     });
     setupState.session = data;
 
+    if (data.status === 'expired') {
+      const active = await fetchActiveSetupSession();
+      if (active && active.token !== token && isSafeHttpUrl(active.mobile_url)) {
+        window.location.replace(active.mobile_url);
+        return;
+      }
+      setupState.errorMessage = 'This setup QR code has expired. Generate a new one on your computer.';
+      render();
+      return;
+    }
+
     if (data.status === 'ready_for_review' || data.status === 'completed') {
       setupState.step = 4;
     } else if (data.unit_id) {
       const drawers = data.drawers || [];
       const anyDrawerPhotos = drawers.some((d) => Number(d.photo_count) > 0);
-      if (anyDrawerPhotos || data.unit?.container_photo) {
+      if (data.status === 'capturing_drawers') {
+        setupState.existingContainerMode = true;
+        setupState.labeledOnly = false;
+        setupState.step = 3;
+        setupState.currentDrawerIdx = Math.min(Math.max(0, data.current_drawer_index || 0), Math.max(0, getCaptureTargets().length - 1));
+      } else if (anyDrawerPhotos || data.unit?.container_photo) {
         setupState.step = drawers.length > 0 ? 3 : 2;
         setupState.currentDrawerIdx = Math.min(Math.max(0, data.current_drawer_index || 0), Math.max(0, drawers.length - 1));
       } else {
@@ -1177,6 +1502,13 @@ async function init() {
       setupState.step = 1;
     }
   } catch (err) {
+    if (err?.status === 404 || err?.status === 410) {
+      const active = await fetchActiveSetupSession();
+      if (active && active.token !== token && isSafeHttpUrl(active.mobile_url)) {
+        window.location.replace(active.mobile_url);
+        return;
+      }
+    }
     setupState.errorMessage = err.message || 'This setup link is invalid or has expired.';
   }
   render();

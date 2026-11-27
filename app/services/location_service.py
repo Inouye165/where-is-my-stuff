@@ -1064,19 +1064,63 @@ class LocationService:
         photo_service.schedule_photo_cleanup(db, old_path)
 
     @classmethod
-    def _prepare_drawer_photo_for_analysis(
+    def _prepare_drawer_photos_for_analysis(
         cls,
         db: Session,
         location_id: int,
         file: Optional[UploadFile] = None,
         photo_id: Optional[int] = None,
-    ) -> Optional[Path]:
+        photo_ids: Optional[str] = None,
+    ) -> Tuple[List[Path], Optional[str]]:
+        import re
+
         loc = cls.get_or_404(db, location_id)
+        hint_parts: List[str] = []
+        raw_name = (loc.name or "").strip()
+        if raw_name and not re.match(
+            r"^(drawer|bin|shelf|compartment|cubby|slot)\s+\d+$|^[A-Z]{1,2}\d+(?:[\u2013\u2014\-][A-Z]{1,2}\d+)?$",
+            raw_name,
+            re.IGNORECASE,
+        ):
+            hint_parts.append(raw_name)
+        if loc.description and loc.description.strip():
+            hint_parts.append(loc.description.strip()[:140])
+        default_hint = " — ".join(hint_parts) if hint_parts else None
+
+        if photo_ids and photo_ids.strip():
+            raw_tokens = [tok.strip() for tok in photo_ids.split(",") if tok.strip()]
+            if not raw_tokens:
+                raise BadRequestError("photo_ids cannot be empty.")
+            if len(raw_tokens) > 8:
+                raise BadRequestError("At most 8 photos can be analyzed together for one compartment.")
+            parsed_ids: List[int] = []
+            for tok in raw_tokens:
+                if not tok.isdigit() or int(tok) < 1:
+                    raise BadRequestError("photo_ids must be a comma-separated list of positive integers.")
+                pid = int(tok)
+                if pid not in parsed_ids:
+                    parsed_ids.append(pid)
+
+            rows = list(
+                db.execute(
+                    select(LocationPhoto).where(
+                        LocationPhoto.location_id == location_id,
+                        LocationPhoto.id.in_(parsed_ids),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            by_id = {r.id: r for r in rows}
+            if len(by_id) != len(parsed_ids):
+                raise NotFoundError("One or more photos not found for this location.")
+            return [photo_service.resolve_safe_upload_path(by_id[pid].photo_path) for pid in parsed_ids], default_hint
+
         if file and file.filename:
             photo_record = cls.add_photo(db=db, location_id=location_id, file=file, photo_type="container")
             photo_path = photo_record.photo_path
             db.commit()
-            return photo_service.resolve_safe_upload_path(photo_path)
+            return [photo_service.resolve_safe_upload_path(photo_path)], default_hint
         if photo_id is not None:
             photo_record = db.execute(
                 select(LocationPhoto).where(
@@ -1086,10 +1130,10 @@ class LocationService:
             ).scalar_one_or_none()
             if not photo_record:
                 raise NotFoundError("Photo not found.")
-            return photo_service.resolve_safe_upload_path(photo_record.photo_path)
+            return [photo_service.resolve_safe_upload_path(photo_record.photo_path)], default_hint
         if loc.container_photo:
-            return photo_service.resolve_safe_upload_path(loc.container_photo)
-        return None
+            return [photo_service.resolve_safe_upload_path(loc.container_photo)], default_hint
+        return [], default_hint
 
     @classmethod
     async def analyze_drawer_photo(
@@ -1098,26 +1142,36 @@ class LocationService:
         location_id: int,
         file: Optional[UploadFile] = None,
         photo_id: Optional[int] = None,
+        photo_ids: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
         expected_count: Optional[int] = None,
+        context_hint: Optional[str] = None,
     ) -> VisionAnalysisResponse:
         bind = db.get_bind()
 
-        def _prepare_in_thread() -> Optional[Path]:
+        def _prepare_in_thread() -> Tuple[List[Path], Optional[str]]:
             with session_scope(bind) as thread_db:
-                return cls._prepare_drawer_photo_for_analysis(
+                return cls._prepare_drawer_photos_for_analysis(
                     thread_db,
                     location_id,
                     file,
                     photo_id,
+                    photo_ids,
                 )
 
-        saved_photo_file = await anyio.to_thread.run_sync(_prepare_in_thread)
+        saved_photo_files, default_hint = await anyio.to_thread.run_sync(_prepare_in_thread)
         kwargs: dict = {"provider": provider, "model": model}
         if expected_count is not None:
             kwargs["expected_count"] = expected_count
-        return await vision_service.analyze_image(saved_photo_file, **kwargs)
+
+        if len(saved_photo_files) <= 1 and not (photo_ids and photo_ids.strip()) and not (context_hint and context_hint.strip()):
+            single_file = saved_photo_files[0] if saved_photo_files else None
+            return await vision_service.analyze_image(single_file, **kwargs)
+
+        resolved_hint = (context_hint or "").strip() or default_hint
+        kwargs["context_hint"] = resolved_hint
+        return await vision_service.analyze_images(saved_photo_files, **kwargs)
 
 
 location_service = LocationService()

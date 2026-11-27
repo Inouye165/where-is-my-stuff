@@ -22,9 +22,12 @@ const wizardState = {
   open: false,
   phase: 'choose', // 'choose' | 'phone' | 'review'
   roomId: null,
+  existingUnitId: null,
   token: null,
   mobileUrl: '',
   qrUrl: '',
+  baseQrUrl: '',
+  useHttpQrFallback: false,
   session: null,
   sessionSeq: 0,
   pollTimer: null,
@@ -91,6 +94,8 @@ function buildReviewDrawerState(drawerObj) {
   const photos = Array.isArray(drawerObj.photos) ? drawerObj.photos : [];
   return {
     id: Number(drawerObj.id),
+    coord: drawerObj.coord || '',
+    description: drawerObj.description || '',
     originalName: drawerObj.name || 'Drawer',
     draftName: drawerObj.name || 'Drawer',
     photos,
@@ -100,7 +105,7 @@ function buildReviewDrawerState(drawerObj) {
     saved: false,
     dirty: false,
     aiMessage: '',
-    items: [], // { uid, savedItemId, included, name, quantity, category, notes, cropPhotoPath, dirty }
+    items: [], // { uid, savedItemId, included, name, partNumber, quantity, category, notes, cropPhotoPath, dirty }
     quickAddDraft: '',
   };
 }
@@ -118,6 +123,7 @@ async function preloadExistingItemsForReview(seq) {
           saveAsBox: false,
           included: true,
           name: it.name || '',
+          partNumber: it.serial_or_part_number || '',
           quantity: it.quantity !== null && it.quantity !== undefined ? Number(it.quantity) : 1,
           category: it.category || '',
           notes: it.description || '',
@@ -150,9 +156,12 @@ export function openUnitSetupWizard(roomId = null) {
   wizardState.open = true;
   wizardState.phase = 'choose';
   wizardState.roomId = roomId ? Number(roomId) : null;
+  wizardState.existingUnitId = null;
   wizardState.token = null;
   wizardState.mobileUrl = '';
   wizardState.qrUrl = '';
+  wizardState.baseQrUrl = '';
+  wizardState.useHttpQrFallback = false;
   wizardState.session = null;
   wizardState.reviewDrawers = [];
   wizardState.activeDrawerIdx = 0;
@@ -160,6 +169,31 @@ export function openUnitSetupWizard(roomId = null) {
 
   renderWizard();
   document.getElementById('unit-setup-modal')?.classList.add('open');
+}
+
+export async function openExistingUnitCaptureWizard(unitId) {
+  const safeId = Number(unitId);
+  if (!safeId) return;
+  const unit = state.locationMap.get(safeId);
+  stopPolling();
+  abortActiveScans();
+  wizardState.sessionSeq += 1;
+  wizardState.open = true;
+  wizardState.phase = 'phone';
+  wizardState.roomId = unit?.parent_id ? Number(unit.parent_id) : null;
+  wizardState.existingUnitId = safeId;
+  wizardState.token = null;
+  wizardState.mobileUrl = '';
+  wizardState.qrUrl = '';
+  wizardState.baseQrUrl = '';
+  wizardState.useHttpQrFallback = false;
+  wizardState.session = null;
+  wizardState.reviewDrawers = [];
+  wizardState.activeDrawerIdx = 0;
+  wizardState.finishing = false;
+
+  document.getElementById('unit-setup-modal')?.classList.add('open');
+  await startPhoneQrSession();
 }
 
 export async function launchMobileUnitSetup(roomId = null) {
@@ -181,12 +215,16 @@ async function startPhoneQrSession() {
   renderWizard();
 
   try {
-    const payload = wizardState.roomId ? { room_id: wizardState.roomId } : {};
+    const payload = wizardState.existingUnitId
+      ? { unit_id: wizardState.existingUnitId }
+      : (wizardState.roomId ? { room_id: wizardState.roomId } : {});
     const created = await apiPost('/api/v1/unit-setup/sessions', payload, 'Could not start QR setup session.');
     if (seq !== wizardState.sessionSeq || !wizardState.open) return;
 
     wizardState.token = created.token;
     wizardState.mobileUrl = created.mobile_url;
+    wizardState.baseQrUrl = created.qr_url;
+    wizardState.useHttpQrFallback = false;
     wizardState.qrUrl = `${created.qr_url}?t=${Date.now()}`;
     wizardState.session = created;
     renderWizard();
@@ -281,6 +319,7 @@ function mergeDetectedItemsIntoDrawer(drawerState, detectedItems) {
       saveAsBox: false,
       included: true,
       name: cleanName,
+      partNumber: det.part_number ? String(det.part_number).trim() : '',
       quantity: qty,
       category: det.category ? String(det.category).trim() : '',
       notes: det.brief_specs ? String(det.brief_specs).trim() : '',
@@ -339,11 +378,17 @@ async function scanSingleDrawer(drawerIdx, signal, skipReadinessCheck = false) {
   let lastNotice = '';
 
   try {
-    for (const photo of d.photos) {
+    const photoIds = d.photos.map((p) => Number(p.id)).filter(Boolean);
+    for (let offset = 0; offset < photoIds.length; offset += 8) {
       if (signal?.aborted) break;
+      const chunk = photoIds.slice(offset, offset + 8);
       const fd = new FormData();
-      fd.append('photo_id', String(photo.id));
+      fd.append('photo_ids', chunk.join(','));
       if (provider) fd.append('provider', provider);
+      const hintParts = [d.draftName, d.description].map((s) => String(s || '').trim()).filter(Boolean);
+      if (hintParts.length > 0) {
+        fd.append('context_hint', hintParts.join(' — ').slice(0, 280));
+      }
 
       const res = await apiUpload(
         `/api/v1/locations/${d.id}/analyze-photo`,
@@ -375,7 +420,7 @@ async function scanSingleDrawer(drawerIdx, signal, skipReadinessCheck = false) {
   }
 }
 
-async function scanAllDrawers() {
+async function scanAllDrawers({ autoSave = false } = {}) {
   if (wizardState.batchScanning) return;
   const targets = wizardState.reviewDrawers
     .map((d, idx) => ({ d, idx }))
@@ -394,7 +439,7 @@ async function scanAllDrawers() {
     },
     onRetry: (nextProv) => {
       if (nextProv) wizardState.selectedProvider = nextProv;
-      return scanAllDrawers();
+      return scanAllDrawers({ autoSave });
     },
     onManual: () => {
       document.getElementById('usw-quick-add-input')?.focus();
@@ -414,17 +459,30 @@ async function scanAllDrawers() {
   const modal = document.getElementById('unit-setup-modal');
   if (modal?.dataset) modal.dataset.scanning = 'true';
 
+  let savedDrawers = 0;
+  let savedItems = 0;
   try {
     for (let i = 0; i < targets.length; i++) {
       if (controller.signal.aborted) break;
       const { d, idx } = targets[i];
-      wizardState.batchProgressText = `Scanning ${d.draftName} (${i + 1} of ${targets.length})…`;
+      wizardState.batchProgressText = `${autoSave ? 'Scanning & saving' : 'Scanning'} ${d.draftName} (${i + 1} of ${targets.length})…`;
       wizardState.activeDrawerIdx = idx;
       renderWizard();
       await scanSingleDrawer(idx, controller.signal, true);
+      if (autoSave && !controller.signal.aborted && d.items.some((it) => it.included && (!it.savedItemId || it.dirty))) {
+        const ok = await saveDrawerItems(idx);
+        if (ok) {
+          savedDrawers += 1;
+          savedItems += d.items.filter((it) => it.included && it.savedItemId).length;
+        }
+      }
     }
     if (!controller.signal.aborted) {
-      showToast(`Finished scanning ${pluralize(targets.length, 'drawer')}.`);
+      if (autoSave) {
+        showToast(`Auto-inserted ${pluralize(savedItems, 'item')} across ${pluralize(savedDrawers, 'drawer')}.`);
+      } else {
+        showToast(`Finished scanning ${pluralize(targets.length, 'drawer')}.`);
+      }
     }
   } finally {
     wizardState.batchScanning = false;
@@ -503,6 +561,7 @@ async function saveDrawerItems(drawerIdx) {
         `/api/v1/items/${it.savedItemId}`,
         {
           name: String(it.name).trim(),
+          serial_or_part_number: String(it.partNumber || '').trim().slice(0, 120) || null,
           quantity: qtyVal,
           category: String(it.category || '').trim() || null,
           description: String(it.notes || '').trim() || null,
@@ -523,6 +582,7 @@ async function saveDrawerItems(drawerIdx) {
           : Math.max(0, Number(it.quantity) || 0);
         const entry = {
           name: String(it.name).trim().slice(0, 160),
+          serial_or_part_number: String(it.partNumber || '').trim().slice(0, 120) || null,
           quantity: qtyVal,
           category: String(it.category || '').trim().slice(0, 80) || null,
           description: String(it.notes || '').trim().slice(0, 20000) || null,
@@ -679,6 +739,22 @@ function renderPhase2Phone() {
     statusSub = 'Generate a fresh QR code to continue on your phone.';
   }
 
+  const isHttpsPrimary = wizardState.mobileUrl.startsWith('https://');
+  let displayedUrl = wizardState.mobileUrl;
+  let displayedQrUrl = wizardState.qrUrl;
+  if (isHttpsPrimary && wizardState.useHttpQrFallback && wizardState.token) {
+    try {
+      const u = new URL(wizardState.mobileUrl);
+      const httpBase = `http://${u.hostname}:${window.location.port || '8000'}`;
+      displayedUrl = `${httpBase}/setup.html?token=${wizardState.token}`;
+      const qrBase = wizardState.baseQrUrl || `/api/v1/unit-setup/sessions/${encodeURIComponent(wizardState.token)}/qr`;
+      displayedQrUrl = `${qrBase}?base_url=${encodeURIComponent(httpBase)}`;
+    } catch {
+      displayedUrl = wizardState.mobileUrl;
+      displayedQrUrl = wizardState.qrUrl;
+    }
+  }
+
   return {
     title: `Mobile Guided Setup — ${getRoomDisplayName(wizardState.roomId)}`,
     subtitle: 'Set up the unit and snap drawer photos on your phone; everything syncs here live.',
@@ -686,16 +762,24 @@ function renderPhase2Phone() {
       <div class="usw-phone-layout">
         <div class="usw-qr-col">
           <div class="phone-qr-frame">
-            ${wizardState.qrUrl && !isExpired
-              ? `<img src="${escapeHtml(wizardState.qrUrl)}" alt="Scan with your phone camera" style="display: block;">`
+            ${displayedQrUrl && !isExpired
+              ? `<img src="${escapeHtml(displayedQrUrl)}" alt="Scan with your phone camera" style="display: block;">`
               : `<div class="usw-qr-placeholder">${isExpired ? 'Expired' : 'Generating…'}</div>`
             }
           </div>
-          ${wizardState.mobileUrl ? `
+          ${displayedUrl ? `
             <div class="usw-url-row">
-              <span class="phone-qr-url">${escapeHtml(wizardState.mobileUrl)}</span>
+              <span class="phone-qr-url">${escapeHtml(displayedUrl)}</span>
               <button type="button" id="usw-copy-url-btn" class="btn btn-secondary btn-xs">Copy link</button>
             </div>
+            ${isHttpsPrimary ? `
+              <p class="usw-live-status-sub" style="margin-top: 0.45rem; font-size: 0.78rem;">
+                Phone cameras often show only the IP (e.g. 10.0.0.126) in the QR preview — tap it to open. First time on HTTPS: tap Advanced → Proceed (or Show Details → visit this website).
+              </p>
+              <button type="button" id="usw-toggle-http-qr-btn" class="btn btn-secondary btn-xs" style="margin-top: 0.35rem;">
+                ${wizardState.useHttpQrFallback ? 'Switch Back to Live Camera QR (HTTPS)' : 'Trouble with HTTPS? Use Plain HTTP QR'}
+              </button>
+            ` : ''}
           ` : ''}
           ${isExpired ? `
             <button type="button" id="usw-refresh-qr-btn" class="btn btn-primary btn-sm">Generate New QR</button>
@@ -770,7 +854,7 @@ function renderPhase2Phone() {
                     return `
                       <div class="usw-live-drawer-card ${isActive ? 'is-current' : ''} ${hasPhotos ? 'has-photos' : ''}">
                         <div class="usw-live-drawer-top">
-                          <span class="usw-live-drawer-name">${escapeHtml(d.name)}${isActive ? ' · Active on phone' : ''}</span>
+                          <span class="usw-live-drawer-name">${d.coord ? `[${escapeHtml(d.coord)}] ` : ''}${escapeHtml(d.name)}${isActive ? ' · Active on phone' : ''}</span>
                           <span class="usw-pill ${hasPhotos ? 'is-saved' : 'is-muted'}">
                             ${hasPhotos ? `✓ ${pluralize(d.photo_count, 'photo')}` : 'Waiting'}
                           </span>
@@ -806,7 +890,11 @@ function renderPhase2Phone() {
       </div>
     `,
     footer: `
-      <button type="button" class="btn btn-secondary" id="usw-back-choose-btn">← Back</button>
+      ${wizardState.existingUnitId ? `
+        <button type="button" class="btn btn-secondary" id="usw-cancel-btn">Cancel</button>
+      ` : `
+        <button type="button" class="btn btn-secondary" id="usw-back-choose-btn">← Back</button>
+      `}
       <div style="flex: 1;"></div>
       ${unit ? `
         <button type="button" class="btn btn-primary" id="usw-go-review-btn">
@@ -860,6 +948,14 @@ function renderPhase3Review() {
             ` : ''}
           </div>
           <div class="usw-item-sub-inputs">
+            <input
+              type="text"
+              class="usw-field-cat"
+              data-item-field="partNumber"
+              data-item-idx="${itemIdx}"
+              value="${escapeHtml(it.partNumber || '')}"
+              placeholder="Part / Model # (optional)"
+            >
             <input
               type="text"
               class="usw-field-cat"
@@ -920,8 +1016,11 @@ function renderPhase3Review() {
               </button>
               <div class="usw-batch-status">${escapeHtml(wizardState.batchProgressText)}</div>
             ` : `
-              <button type="button" id="usw-scan-all-btn" class="btn btn-primary btn-sm" style="width: 100%;">
-                ${lucideIcon('camera', '', 15)} Scan All Drawers with AI
+              <button type="button" id="usw-scan-autoinsert-btn" class="btn btn-primary btn-sm" style="width: 100%;">
+                ${lucideIcon('camera', '', 15)} Scan &amp; Auto-Insert All
+              </button>
+              <button type="button" id="usw-scan-all-btn" class="btn btn-secondary btn-sm" style="width: 100%; margin-top: 0.35rem;">
+                Scan All (Review Only)
               </button>
             `}
             <select id="usw-provider-select" class="usw-provider-select" aria-label="AI Vision Provider">
@@ -947,7 +1046,7 @@ function renderPhase3Review() {
                   data-review-drawer-idx="${dIdx}"
                 >
                   <div class="usw-drawer-nav-top">
-                    <span class="usw-drawer-nav-name">${escapeHtml(d.draftName)}</span>
+                    <span class="usw-drawer-nav-name">${d.coord ? `[${escapeHtml(d.coord)}] ` : ''}${escapeHtml(d.draftName)}</span>
                     <span class="usw-pill ${pill.cls}">${escapeHtml(pill.label)}</span>
                   </div>
                   <span class="usw-drawer-nav-meta">${pluralize(d.photos.length, 'photo')}</span>
@@ -1104,13 +1203,25 @@ function bindWizardEvents() {
   });
 
   document.getElementById('usw-copy-url-btn')?.addEventListener('click', async () => {
-    if (!wizardState.mobileUrl) return;
+    let urlToCopy = wizardState.mobileUrl;
+    if (wizardState.useHttpQrFallback && wizardState.mobileUrl.startsWith('https://') && wizardState.token) {
+      try {
+        const u = new URL(wizardState.mobileUrl);
+        urlToCopy = `http://${u.hostname}:${window.location.port || '8000'}/setup.html?token=${wizardState.token}`;
+      } catch {}
+    }
+    if (!urlToCopy) return;
     try {
-      await navigator.clipboard.writeText(wizardState.mobileUrl);
+      await navigator.clipboard.writeText(urlToCopy);
       showToast('Link copied to clipboard');
     } catch {
       showToast('Copy failed — select and copy the URL manually.', 'info');
     }
+  });
+
+  document.getElementById('usw-toggle-http-qr-btn')?.addEventListener('click', () => {
+    wizardState.useHttpQrFallback = !wizardState.useHttpQrFallback;
+    renderWizard();
   });
 
   document.getElementById('usw-refresh-qr-btn')?.addEventListener('click', startPhoneQrSession);
@@ -1125,7 +1236,8 @@ function bindWizardEvents() {
   document.getElementById('usw-go-review-btn')?.addEventListener('click', enterReviewPhase);
 
   // Phase 3 handlers
-  document.getElementById('usw-scan-all-btn')?.addEventListener('click', scanAllDrawers);
+  document.getElementById('usw-scan-autoinsert-btn')?.addEventListener('click', () => scanAllDrawers({ autoSave: true }));
+  document.getElementById('usw-scan-all-btn')?.addEventListener('click', () => scanAllDrawers({ autoSave: false }));
   document.getElementById('usw-cancel-scan-btn')?.addEventListener('click', () => {
     abortActiveScans();
     renderWizard();
@@ -1272,6 +1384,7 @@ function bindWizardEvents() {
       saveAsBox: false,
       included: true,
       name,
+      partNumber: '',
       quantity: qty,
       category: '',
       notes: '',

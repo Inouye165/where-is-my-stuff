@@ -16,6 +16,7 @@ logs/
 *.log
 *.tmp
 data/backups/
+data/certs/
 data/uploads/originals/*
 data/uploads/thumbnails/*
 data/uploads/attachments/*

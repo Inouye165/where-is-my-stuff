@@ -18,7 +18,7 @@ import {
 } from './compartment-actions.js';
 import { closeAllModals, closeLightbox, closeModal, closeOnScrim, openLightbox, showToast } from './dom.js';
 import { closeScanAbortOnScrim, initUnsavedGuard, resolveScanAbortPrompt, resolveUnsavedPrompt } from './unsaved-guard.js';
-import { closeUnitSetupWizard, launchMobileUnitSetup, openUnitSetupWizard } from './unit-setup-wizard.js';
+import { closeUnitSetupWizard, launchMobileUnitSetup, openExistingUnitCaptureWizard, openUnitSetupWizard } from './unit-setup-wizard.js';
 import { closeLabelScanModal, openLabelScanModal } from './label-scan.js';
 import { openConvertItemToBoxModal, openMoveBoxModal, submitConvertItemToBox, submitMoveBox } from './box-actions.js';
 import { closeNoModelModal, continueManualFromNoModel, retryVisionModelCheck } from './vision-guard.js';
@@ -763,6 +763,7 @@ if (typeof window !== 'undefined') {
     openAddItemWithPrefill: openAddItemWithPrefill,
     openAddStorageModal: openAddStorageModal,
     openUnitSetupWizard: openUnitSetupWizard,
+    openExistingUnitCaptureWizard: openExistingUnitCaptureWizard,
     closeUnitSetupWizard: closeUnitSetupWizard,
     launchMobileUnitSetup: launchMobileUnitSetup,
     openLabelScanModal: openLabelScanModal,
