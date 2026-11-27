@@ -2,6 +2,7 @@ import { compressImageFile } from './photo-compress.js';
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get('token') || '';
+const highRes = params.get('hq') === '1';
 const titleEl = document.getElementById('capture-title');
 const subtitleEl = document.getElementById('capture-subtitle');
 const triggerEl = document.getElementById('capture-trigger');
@@ -73,10 +74,15 @@ async function handleFiles(fileList) {
 
   try {
     for (const file of files) {
-      const compressed = await compressImageFile(file);
+      const compressed = highRes
+        ? await compressImageFile(file, 3200, 0.92)
+        : await compressImageFile(file);
       const fd = new FormData();
       fd.append('file', compressed);
-      const res = await fetch(`/api/v1/photos/capture-sessions/${encodeURIComponent(token)}/upload`, {
+      const uploadUrl = highRes
+        ? `/api/v1/photos/capture-sessions/${encodeURIComponent(token)}/upload?max_dimension=3200`
+        : `/api/v1/photos/capture-sessions/${encodeURIComponent(token)}/upload`;
+      const res = await fetch(uploadUrl, {
         method: 'POST',
         body: fd,
       });

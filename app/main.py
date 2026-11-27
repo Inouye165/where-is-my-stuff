@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from app.api import auth, items, label_scan, locations, photos, search, system, unit_setup
+from app.api import auth, documents, items, label_scan, locations, photos, search, system, unit_setup
 from app.core.config import settings
 from app.core.database import engine, get_db
 from app.core.exceptions import NotFoundError, register_exception_handlers
@@ -116,6 +116,7 @@ def create_app() -> FastAPI:
     application.include_router(search.router, prefix="/api/v1")
     application.include_router(unit_setup.router, prefix="/api/v1")
     application.include_router(label_scan.router, prefix="/api/v1")
+    application.include_router(documents.router, prefix="/api/v1")
 
     @application.get("/phone", include_in_schema=False)
     def phone_capture_shortcut(

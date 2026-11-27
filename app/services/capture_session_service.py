@@ -71,6 +71,7 @@ class CaptureSessionService:
         host_header: Optional[str] = None,
         base_url_param: Optional[str] = None,
         location_id: Optional[int] = None,
+        high_res: bool = False,
     ) -> dict:
         now = datetime.now(timezone.utc)
         token = secrets.token_urlsafe(24)
@@ -101,14 +102,16 @@ class CaptureSessionService:
         db.flush()
 
         effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
-        capture_url = f"{effective_base}/capture.html?token={token}"
+        hq_suffix = "&hq=1" if high_res else ""
+        qr_hq_suffix = "?hq=1" if high_res else ""
+        capture_url = f"{effective_base}/capture.html?token={token}{hq_suffix}"
         return {
             "token": token,
             "label": clean_label,
             "location_id": location_id,
             "expires_in_seconds": self.TTL_SECONDS,
             "capture_url": capture_url,
-            "qr_url": f"/api/v1/photos/capture-sessions/{token}/qr",
+            "qr_url": f"/api/v1/photos/capture-sessions/{token}/qr{qr_hq_suffix}",
         }
 
     def get_session(self, db: Session, token: str) -> CaptureSession:
@@ -150,9 +153,15 @@ class CaptureSessionService:
         db.flush()
         return self._to_snapshot(rec)
 
-    def process_upload(self, db: Session, token: str, file: UploadFile) -> dict:
+    def process_upload(
+        self,
+        db: Session,
+        token: str,
+        file: UploadFile,
+        max_dimension: Optional[int] = None,
+    ) -> dict:
         sess = self.require_active_session(db, token)
-        result = photo_service.process_and_save(file)
+        result = photo_service.process_and_save(file, max_dimension=max_dimension)
         photo_service.schedule_rollback_cleanup(db, result["original_path"], result.get("thumbnail_path"))
 
         attached_photo_id: Optional[int] = None
@@ -186,10 +195,12 @@ class CaptureSessionService:
         token: str,
         host_header: Optional[str] = None,
         base_url_param: Optional[str] = None,
+        high_res: bool = False,
     ) -> bytes:
         self.require_active_session(db, token)
         effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
-        capture_url = f"{effective_base}/capture.html?token={token}"
+        hq_suffix = "&hq=1" if high_res else ""
+        capture_url = f"{effective_base}/capture.html?token={token}{hq_suffix}"
         return build_qr_png(capture_url)
 
 

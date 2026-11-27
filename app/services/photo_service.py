@@ -19,8 +19,8 @@ from app.models.item import Item
 from app.models.location import Location
 from app.repositories.item_repository import item_repository
 
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
-ALLOWED_PIL_FORMATS = {"JPEG", "PNG", "WEBP", "GIF", "BMP"}
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+ALLOWED_PIL_FORMATS = {"JPEG", "PNG", "WEBP", "GIF", "BMP", "TIFF"}
 ALLOWED_DOC_EXTENSIONS = {
     ".pdf", ".svg", ".csv", ".txt", ".md", ".json", ".xlsx", ".xls", ".doc", ".docx", ".zip"
 }
@@ -124,7 +124,8 @@ class PhotoService:
             raise BadRequestError(f"Failed to validate image content: {exc}") from exc
 
         unique_id = uuid.uuid4().hex
-        orig_filename = f"{unique_id}{ext}"
+        save_ext = ".png" if ext in (".tif", ".tiff") else ext
+        orig_filename = f"{unique_id}{save_ext}"
         thumb_filename = f"{unique_id}_thumb.webp"
 
         orig_path = settings.ORIGINALS_DIR / orig_filename
@@ -139,6 +140,8 @@ class PhotoService:
             ".webp": "WEBP",
             ".gif": "GIF",
             ".bmp": "BMP",
+            ".tif": "PNG",
+            ".tiff": "PNG",
         }[ext]
 
         try:
@@ -184,6 +187,124 @@ class PhotoService:
             "original_path": f"/uploads/originals/{orig_filename}",
             "thumbnail_path": f"/uploads/thumbnails/{thumb_filename}",
             "filename": orig_filename,
+        }
+
+    def save_pil_image(
+        self,
+        image: Image.Image,
+        *,
+        ext: str = ".jpg",
+        max_dimension: Optional[int] = None,
+        jpeg_quality: int = 92,
+        prefix: str = "",
+    ) -> dict[str, Any]:
+        """Atomically save a PIL image to originals + WebP thumbnail and return path + dimension metadata."""
+        if image is None or image.width < 1 or image.height < 1:
+            raise BadRequestError("Cannot save empty image.")
+        norm_ext = ext.lower()
+        if norm_ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            norm_ext = ".jpg"
+        pil_format = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP"}[norm_ext]
+
+        settings.ORIGINALS_DIR.mkdir(parents=True, exist_ok=True)
+        settings.THUMBNAILS_DIR.mkdir(parents=True, exist_ok=True)
+        unique_id = uuid.uuid4().hex
+        safe_prefix = re.sub(r"[^a-zA-Z0-9_\-]", "", prefix or "")[:24]
+        orig_filename = f"{safe_prefix}{unique_id}{norm_ext}"
+        thumb_filename = f"{safe_prefix}{unique_id}_thumb.webp"
+
+        orig_path = settings.ORIGINALS_DIR / orig_filename
+        thumb_path = settings.THUMBNAILS_DIR / thumb_filename
+        tmp_orig = settings.ORIGINALS_DIR / f".{orig_filename}.tmp"
+        tmp_thumb = settings.THUMBNAILS_DIR / f".{thumb_filename}.tmp"
+
+        try:
+            save_image = ImageOps.exif_transpose(image).copy()
+            if max_dimension and max_dimension > 0:
+                max_dim = int(max_dimension)
+                if save_image.width > max_dim or save_image.height > max_dim:
+                    save_image.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+            if pil_format == "JPEG" and save_image.mode not in ("RGB", "L"):
+                save_image = save_image.convert("RGB")
+            elif pil_format == "PNG" and save_image.mode not in ("RGB", "RGBA", "L"):
+                save_image = save_image.convert("RGB")
+
+            save_kwargs: dict[str, Any] = {}
+            clamped_quality = max(50, min(98, int(jpeg_quality)))
+            if pil_format == "JPEG":
+                save_kwargs = {"quality": clamped_quality, "optimize": True}
+            elif pil_format == "WEBP":
+                save_kwargs = {"quality": clamped_quality}
+
+            save_image.save(tmp_orig, format=pil_format, **save_kwargs)
+
+            thumb_img = save_image.copy()
+            if thumb_img.mode not in ("RGB", "L"):
+                thumb_img = thumb_img.convert("RGB")
+            thumb_img.thumbnail(
+                (settings.THUMBNAIL_MAX_DIMENSION, settings.THUMBNAIL_MAX_DIMENSION),
+                Image.Resampling.LANCZOS,
+            )
+            thumb_img.save(tmp_thumb, format="WEBP", quality=82)
+
+            os.replace(tmp_orig, orig_path)
+            os.replace(tmp_thumb, thumb_path)
+            out_w, out_h = save_image.size
+        except Exception as exc:
+            tmp_orig.unlink(missing_ok=True)
+            tmp_thumb.unlink(missing_ok=True)
+            orig_path.unlink(missing_ok=True)
+            thumb_path.unlink(missing_ok=True)
+            raise BadRequestError(f"Failed to save processed image: {exc}") from exc
+
+        return {
+            "original_path": f"/uploads/originals/{orig_filename}",
+            "thumbnail_path": f"/uploads/thumbnails/{thumb_filename}",
+            "filename": orig_filename,
+            "width": out_w,
+            "height": out_h,
+        }
+
+    def save_attachment_bytes(
+        self,
+        raw: bytes,
+        filename: str,
+        content_type: str = "application/pdf",
+        attachment_type: str = "pdf",
+        ext: str = ".pdf",
+    ) -> dict[str, Any]:
+        """Atomically save generated attachment bytes to ATTACHMENTS_DIR and return metadata."""
+        if not raw:
+            raise BadRequestError("Generated attachment payload is empty.")
+        clean_ext = ext.lower() if ext.startswith(".") else f".{ext.lower()}"
+        settings.ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        file_id = uuid.uuid4().hex
+        stored_name = f"{file_id}{clean_ext}"
+        target_path = (settings.ATTACHMENTS_DIR / stored_name).resolve()
+        tmp_path = (settings.ATTACHMENTS_DIR / f".{stored_name}.tmp").resolve()
+        if not target_path.is_relative_to(settings.ATTACHMENTS_DIR.resolve()):
+            raise BadRequestError("Invalid attachment filename.")
+
+        safe_filename = re.sub(r"[^A-Za-z0-9._\- ]+", "_", (filename or "Document").strip()).strip(" ._") or "Document"
+        if not safe_filename.lower().endswith(clean_ext):
+            safe_filename = f"{safe_filename[:240]}{clean_ext}"
+
+        try:
+            tmp_path.write_bytes(raw)
+            os.replace(tmp_path, target_path)
+        except Exception as exc:
+            tmp_path.unlink(missing_ok=True)
+            target_path.unlink(missing_ok=True)
+            raise BadRequestError(f"Failed to save generated attachment: {exc}") from exc
+
+        return {
+            "file_path": f"/uploads/attachments/{stored_name}",
+            "thumbnail_path": None,
+            "filename": safe_filename[:255],
+            "content_type": content_type,
+            "attachment_type": attachment_type,
+            "size_bytes": len(raw),
         }
 
     def _crop_from_image(self, img: Image.Image, bbox: list[float], coord_mode: str = "auto") -> Optional[str]:

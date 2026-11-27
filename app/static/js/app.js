@@ -21,6 +21,12 @@ import { closeScanAbortOnScrim, initUnsavedGuard, resolveScanAbortPrompt, resolv
 import { closeUnitSetupWizard, launchMobileUnitSetup, openExistingUnitCaptureWizard, openUnitSetupWizard } from './unit-setup-wizard.js';
 import { closeLabelScanModal, openLabelScanModal } from './label-scan.js';
 import { openConvertItemToBoxModal, openMoveBoxModal, submitConvertItemToBox, submitMoveBox } from './box-actions.js';
+import {
+  closeDocumentStudioModal,
+  closeDocumentStudioOnScrim,
+  createTypesetPdfFromAttachment,
+  openDocumentStudioModal,
+} from './document-studio.js';
 import { closeNoModelModal, continueManualFromNoModel, retryVisionModelCheck } from './vision-guard.js';
 import {
   chooseAddAction,
@@ -253,6 +259,7 @@ import {
   toggleUnitMoreMenu,
   triggerDrawerDirectPhotoUpload,
   triggerItemAttachmentUpload,
+  openItemSavedPhotosInDocumentStudio,
   unitViewerCropPhoto,
   unitViewerRemovePhoto,
   unitViewerReplacePhoto,
@@ -357,6 +364,11 @@ function initKeyboardAndRouter() {
       const editorModal = document.getElementById('photo-editor-modal');
       if (editorModal && editorModal.classList.contains('open')) {
         closePhotoEditorModal();
+        return;
+      }
+      const docStudioModal = document.getElementById('document-studio-modal');
+      if (docStudioModal && docStudioModal.classList.contains('open')) {
+        closeDocumentStudioModal();
         return;
       }
       const phoneModal = document.getElementById('phone-photo-modal');
@@ -863,6 +875,11 @@ if (typeof window !== 'undefined') {
     triggerItemAttachmentUpload: triggerItemAttachmentUpload,
     handleItemAttachmentUpload: handleItemAttachmentUpload,
     deleteItemAttachment: deleteItemAttachment,
+    openDocumentStudioModal: openDocumentStudioModal,
+    closeDocumentStudioModal: closeDocumentStudioModal,
+    closeDocumentStudioOnScrim: closeDocumentStudioOnScrim,
+    createTypesetPdfFromAttachment: createTypesetPdfFromAttachment,
+    openItemSavedPhotosInDocumentStudio: openItemSavedPhotosInDocumentStudio,
     cancelInlineItemRename: cancelInlineItemRename,
     deleteDrawerFromMenu: deleteDrawerFromMenu,
     dismissQuickAddFeedback: dismissQuickAddFeedback,

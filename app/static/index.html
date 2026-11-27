@@ -1362,6 +1362,279 @@
     </div>
   </div>
 
+  <!-- Modal 14: Item Document Studio (Scanner / Webcam / File / Phone QR + Enhance + Dual PDF) -->
+  <div id="document-studio-modal" class="modal-scrim no-print" onclick="closeDocumentStudioOnScrim(event)">
+    <div id="doc-studio-card" class="modal-card doc-studio-card">
+      <div class="modal-top">
+        <div style="min-width: 0;">
+          <h3 id="doc-studio-title" class="modal-title">Add Document to Item</h3>
+          <p id="doc-studio-subtitle" class="modal-subtitle">Capture, straighten, enhance &amp; create crisp PDFs</p>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.45rem; flex-shrink: 0;">
+          <div class="doc-studio-stage-pills" role="tablist" aria-label="Document workflow step">
+            <button type="button" id="doc-step-capture-btn" class="doc-studio-stage-pill active" role="tab">1. Capture</button>
+            <button type="button" id="doc-step-enhance-btn" class="doc-studio-stage-pill" role="tab" disabled>2. Enhance &amp; Save</button>
+          </div>
+          <button
+            type="button"
+            id="doc-studio-expand-btn"
+            class="btn btn-secondary btn-xs"
+            title="Toggle full-screen window"
+          >Full screen</button>
+          <button class="modal-close-btn" onclick="closeDocumentStudioModal()" aria-label="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-body-scroll doc-studio-body">
+        <div class="doc-studio-pages-bar">
+          <span id="doc-studio-page-count" class="doc-studio-page-count">0 pages</span>
+          <div id="doc-studio-pages-strip" class="doc-studio-pages-strip"></div>
+          <button type="button" id="doc-bar-add-more-btn" class="btn btn-secondary btn-xs" style="display: none;">+ Add Page</button>
+        </div>
+
+        <!-- Stage 1: Dedicated Capture Screen -->
+        <div id="doc-stage-capture" class="doc-studio-stage">
+          <div class="doc-studio-sources">
+            <div class="doc-studio-source-tabs" role="tablist" aria-label="Document capture source">
+              <button type="button" id="doc-tab-file" class="doc-studio-tab active" role="tab">File / Paste</button>
+              <button type="button" id="doc-tab-scanner" class="doc-studio-tab" role="tab">Scanner</button>
+              <button type="button" id="doc-tab-camera" class="doc-studio-tab" role="tab">Computer Camera</button>
+              <button type="button" id="doc-tab-phone" class="doc-studio-tab" role="tab">Phone (QR)</button>
+              <label class="doc-studio-inline-check" style="margin-left: auto; font-size: 0.8rem; color: var(--text-secondary);">
+                <input type="checkbox" id="doc-multi-page-toggle">
+                <span>Capture multiple pages before enhancing</span>
+              </label>
+            </div>
+
+            <div id="doc-panel-file" class="doc-studio-source-panel">
+              <label for="doc-file-input" id="doc-file-dropzone" class="doc-studio-dropzone" tabindex="0">
+                <strong>Drop document photos or files here, click to browse, or press Ctrl+V</strong>
+                <span>Images (JPG, PNG, WEBP, TIFF, BMP) are straightened &amp; enhanced; PDFs and Office docs attach directly.</span>
+                <input type="file" id="doc-file-input" multiple accept="image/*,.tif,.tiff,.pdf,.svg,.csv,.txt,.md,.json,.xlsx,.xls,.doc,.docx,.zip" style="display: none;">
+              </label>
+            </div>
+
+            <div id="doc-panel-scanner" class="doc-studio-source-panel" style="display: none;">
+              <div class="doc-studio-scanner-row">
+                <select id="doc-scanner-select" aria-label="Scanner device"></select>
+                <select id="doc-scanner-dpi" aria-label="Scan DPI">
+                  <option value="150">150 DPI (Fast)</option>
+                  <option value="300" selected>300 DPI (Sharp)</option>
+                  <option value="600">600 DPI (Fine Print)</option>
+                </select>
+                <select id="doc-scanner-color" aria-label="Scan color mode">
+                  <option value="color" selected>Color</option>
+                  <option value="grayscale">Grayscale</option>
+                  <option value="bw">Black &amp; White</option>
+                </select>
+                <select id="doc-scanner-source" aria-label="Paper source">
+                  <option value="flatbed" selected>Flatbed</option>
+                  <option value="feeder">Feeder</option>
+                </select>
+                <button type="button" id="doc-scanner-refresh-btn" class="btn btn-secondary btn-sm">Refresh</button>
+                <button type="button" id="doc-scanner-scan-btn" class="btn btn-primary btn-sm">Scan Page</button>
+              </div>
+              <div id="doc-scanner-status" class="doc-studio-source-status">Click Refresh to detect connected scanners.</div>
+            </div>
+
+            <div id="doc-panel-camera" class="doc-studio-source-panel" style="display: none;">
+              <div class="doc-studio-camera-wrap">
+                <div id="doc-studio-video-box" class="doc-studio-video-box">
+                  <video id="doc-studio-video" playsinline muted autoplay></video>
+                  <div id="doc-camera-crop-overlay" class="doc-camera-crop-overlay">
+                    <div id="doc-camera-crop-box" class="doc-camera-crop-box" title="Drag to move capture area">
+                      <span class="doc-crop-handle nw" data-handle="nw" title="Resize top-left"></span>
+                      <span class="doc-crop-handle ne" data-handle="ne" title="Resize top-right"></span>
+                      <span class="doc-crop-handle sw" data-handle="sw" title="Resize bottom-left"></span>
+                      <span class="doc-crop-handle se" data-handle="se" title="Resize bottom-right"></span>
+                      <span class="doc-crop-edge n" data-handle="n" title="Resize height (top)"></span>
+                      <span class="doc-crop-edge s" data-handle="s" title="Resize height (bottom)"></span>
+                      <span class="doc-crop-edge w" data-handle="w" title="Resize width (left)"></span>
+                      <span class="doc-crop-edge e" data-handle="e" title="Resize width (right)"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="doc-studio-camera-controls">
+                  <div style="display: flex; gap: 0.45rem; flex-wrap: wrap; width: 100%;">
+                    <select id="doc-camera-select" aria-label="Computer camera"></select>
+                    <select id="doc-camera-res" aria-label="Camera resolution">
+                      <option value="auto" selected>Auto (Best available)</option>
+                      <option value="3840x2160">4K (3840×2160)</option>
+                      <option value="2560x1440">2K (2560×1440)</option>
+                      <option value="1920x1080">1080p (1920×1080)</option>
+                    </select>
+                  </div>
+                  <div style="display: flex; gap: 0.45rem; flex-wrap: wrap;">
+                    <button type="button" id="doc-camera-capture-btn" class="btn btn-primary btn-sm">Capture Page</button>
+                    <button type="button" id="doc-camera-reset-crop-btn" class="btn btn-secondary btn-sm">Full Frame</button>
+                    <button type="button" id="doc-camera-retry-btn" class="btn btn-secondary btn-sm">Retry</button>
+                  </div>
+                  <span id="doc-camera-status" class="doc-studio-source-status">Starting camera…</span>
+                </div>
+              </div>
+            </div>
+
+            <div id="doc-panel-phone" class="doc-studio-source-panel" style="display: none;">
+              <div class="doc-studio-phone-row">
+                <img id="doc-phone-qr-img" class="doc-studio-qr-img" src="" alt="Scan QR code with phone" style="display: none;">
+                <div class="doc-studio-phone-info">
+                  <div id="doc-phone-qr-status" class="doc-studio-source-status">Generating high-res QR session…</div>
+                  <div id="doc-phone-qr-url" class="phone-qr-url"></div>
+                  <button type="button" id="doc-phone-qr-refresh-btn" class="btn btn-secondary btn-xs" style="margin-top: 0.4rem;">New QR Code</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stage 2: Dedicated Enhance & Export Screen -->
+        <div id="doc-stage-enhance" class="doc-studio-stage" style="display: none;">
+          <div class="doc-studio-workspace">
+          <div class="doc-studio-preview-pane">
+            <div class="doc-studio-view-toolbar">
+              <div class="doc-studio-view-modes">
+                <button type="button" id="doc-view-enhanced" class="btn btn-secondary btn-xs active">Enhanced</button>
+                <button type="button" id="doc-view-original" class="btn btn-secondary btn-xs">Original</button>
+                <button type="button" id="doc-view-compare" class="btn btn-secondary btn-xs">Split Compare</button>
+                <button type="button" id="doc-view-quad" class="btn btn-secondary btn-xs">Crop / 4-Corner</button>
+                <button type="button" id="doc-view-typeset" class="btn btn-secondary btn-xs">Typeset PDF Preview</button>
+                <button type="button" id="doc-view-apply-quad-btn" class="btn btn-primary btn-xs" style="display: none;">Apply Crop &amp; Straighten</button>
+              </div>
+              <div class="doc-studio-zoom-bar">
+                <button type="button" id="doc-zoom-out-btn" class="btn btn-secondary btn-xs" title="Zoom out">−</button>
+                <button type="button" id="doc-zoom-reset-btn" class="btn btn-secondary btn-xs" title="Reset zoom to fit">100%</button>
+                <button type="button" id="doc-zoom-in-btn" class="btn btn-secondary btn-xs" title="Zoom in to inspect fine print">+</button>
+                <button type="button" id="doc-stitch-open-btn" class="btn btn-primary btn-xs" title="Move camera closer to a blurry area and stitch higher-res detail into this page">+ Stitch Close-Up</button>
+                <button type="button" id="doc-stitch-undo-btn" class="btn btn-secondary btn-xs" style="display: none;" title="Undo last stitched close-up">Undo Stitch</button>
+              </div>
+              <span id="doc-studio-page-meta" class="doc-studio-page-meta"></span>
+            </div>
+            <div id="doc-stitch-panel" class="doc-stitch-panel" style="display: none;">
+              <div class="doc-stitch-video-wrap">
+                <video id="doc-stitch-video" playsinline muted autoplay></video>
+              </div>
+              <div class="doc-stitch-controls">
+                <div class="doc-stitch-title">Enhance Blurry Area (Close-Up Stitch)</div>
+                <p id="doc-stitch-status" class="doc-studio-source-status" style="margin: 0;">Move your camera closer to the unclear text (include a little surrounding text for alignment) and click Capture &amp; Stitch.</p>
+                <div style="display: flex; gap: 0.45rem; flex-wrap: wrap; align-items: center;">
+                  <button type="button" id="doc-stitch-capture-btn" class="btn btn-primary btn-sm">Capture &amp; Stitch</button>
+                  <label class="btn btn-secondary btn-sm" style="cursor: pointer; margin: 0;">
+                    Upload Close-Up
+                    <input type="file" id="doc-stitch-file-input" accept="image/*,.tif,.tiff" style="display: none;">
+                  </label>
+                  <button type="button" id="doc-stitch-close-btn" class="btn btn-secondary btn-sm">Close</button>
+                </div>
+              </div>
+            </div>
+            <div class="doc-studio-canvas-stage">
+              <div id="doc-studio-canvas-empty" class="doc-studio-canvas-empty">
+                Capture or drop a document page above to preview straightening &amp; lighting cleanup.
+              </div>
+              <canvas id="doc-studio-canvas" style="display: none;"></canvas>
+              <iframe id="doc-studio-pdf-preview" class="doc-studio-pdf-preview" src="about:blank" title="Typeset PDF preview" style="display: none;"></iframe>
+            </div>
+          </div>
+
+          <div class="doc-studio-controls-pane">
+            <div class="form-grid-2">
+              <div class="form-field">
+                <label for="doc-opt-preset">Enhancement preset</label>
+                <select id="doc-opt-preset">
+                  <option value="auto_document" selected>Auto Document (Clean Color)</option>
+                  <option value="clean_bw">Crisp B&amp;W Text</option>
+                  <option value="grayscale_scan">Grayscale Scan</option>
+                  <option value="photo_preserve">Preserve Photo Tones</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label for="doc-opt-aspect">Aspect ratio</label>
+                <select id="doc-opt-aspect">
+                  <option value="auto" selected>Auto (Snap Letter/A4)</option>
+                  <option value="letter">US Letter (8.5×11)</option>
+                  <option value="a4">A4 (210×297mm)</option>
+                  <option value="legal">Legal (8.5×14)</option>
+                  <option value="square">Square (1:1)</option>
+                  <option value="original">Original Proportions</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="doc-studio-rot-row">
+              <button type="button" id="doc-opt-rot-ccw" class="btn btn-secondary btn-xs">↺ Rotate 90°</button>
+              <button type="button" id="doc-opt-rot-cw" class="btn btn-secondary btn-xs">↻ Rotate 90°</button>
+              <button type="button" id="doc-opt-rot-180" class="btn btn-secondary btn-xs">↻ 180°</button>
+              <button type="button" id="doc-opt-reapply-btn" class="btn btn-secondary btn-xs">Re-Enhance</button>
+              <button type="button" id="doc-opt-apply-all-btn" class="btn btn-secondary btn-xs">Apply to All</button>
+            </div>
+
+            <div class="doc-studio-checks">
+              <label><input type="checkbox" id="doc-opt-orient"> Auto-rotate text (experimental)</label>
+              <label><input type="checkbox" id="doc-opt-perspective" checked> Straighten perspective</label>
+              <label><input type="checkbox" id="doc-opt-deskew" checked> Auto-deskew text lines</label>
+              <label><input type="checkbox" id="doc-opt-shading" checked> Remove shadows &amp; lighting</label>
+              <label><input type="checkbox" id="doc-opt-wb" checked> White-balance paper</label>
+            </div>
+
+            <div class="doc-studio-sliders">
+              <div class="photo-editor-slider-row">
+                <label for="doc-opt-shading-str">Shadows</label>
+                <input type="range" id="doc-opt-shading-str" min="0" max="100" value="85">
+                <span id="doc-opt-shading-val" class="photo-editor-slider-val">85%</span>
+              </div>
+              <div class="photo-editor-slider-row">
+                <label for="doc-opt-denoise-str">Denoise</label>
+                <input type="range" id="doc-opt-denoise-str" min="0" max="100" value="45">
+                <span id="doc-opt-denoise-val" class="photo-editor-slider-val">45%</span>
+              </div>
+              <div class="photo-editor-slider-row">
+                <label for="doc-opt-sharpen-str">Sharpen</label>
+                <input type="range" id="doc-opt-sharpen-str" min="0" max="100" value="40">
+                <span id="doc-opt-sharpen-val" class="photo-editor-slider-val">40%</span>
+              </div>
+            </div>
+
+            <div class="doc-studio-export-box">
+              <div class="form-field">
+                <label for="doc-save-title">Document title</label>
+                <input type="text" id="doc-save-title" placeholder="e.g., User Manual, Receipt, Schematic">
+              </div>
+              <div class="doc-studio-checks">
+                <label><input type="checkbox" id="doc-save-enhanced-pdf" checked> Save Enhanced Scan PDF</label>
+                <label><input type="checkbox" id="doc-save-typeset-pdf" checked> Save Typeset Vector PDF (crisp zoomable fonts)</label>
+              </div>
+              <div class="form-grid-2" style="margin-top: 0.45rem;">
+                <div class="form-field">
+                  <label for="doc-save-typeset-mode">Typeset layout</label>
+                  <select id="doc-save-typeset-mode">
+                    <option value="layout_matched" selected>Layout-Matched (closest look)</option>
+                    <option value="clean_reflow">Clean Reflow (book style)</option>
+                  </select>
+                </div>
+                <div class="form-field" style="justify-content: flex-end;">
+                  <label class="doc-studio-inline-check">
+                    <input type="checkbox" id="doc-save-include-graphics" checked>
+                    <span>Keep diagrams &amp; graphics</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      <div class="modal-bottom">
+        <button type="button" id="doc-back-to-capture-btn" class="btn btn-secondary" style="display: none;">← Add More Pages</button>
+        <div style="flex: 1;"></div>
+        <button type="button" class="btn btn-secondary" onclick="closeDocumentStudioModal()">Cancel</button>
+        <button type="button" id="doc-goto-enhance-btn" class="btn btn-primary" disabled>Next: Enhance &amp; Save →</button>
+        <button type="button" class="btn btn-primary" id="doc-studio-save-btn" style="display: none;" disabled>Save Document to Item</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification Shelf -->
   <div id="toast-shelf" class="toast-shelf no-print" aria-live="polite"></div>
 

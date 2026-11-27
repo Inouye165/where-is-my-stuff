@@ -117,7 +117,8 @@ class RequestContextMiddleware:
                 elif lower_path in ("/", "/index.html"):
                     resp_headers["Content-Security-Policy"] = (
                         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-                        "img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; "
+                        "img-src 'self' data: blob:; media-src 'self' blob: mediastream:; "
+                        "frame-src 'self' blob:; connect-src 'self'; object-src 'none'; "
                         "base-uri 'self'; frame-ancestors 'none'"
                     )
                 if lower_path.startswith("/uploads/attachments/") and lower_path.endswith(

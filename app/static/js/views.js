@@ -14,6 +14,7 @@ import {
   withSubmitLock
 } from './dom.js';
 import { renderSlotCarouselHtml, syncAllSlotCarousels } from './carousel.js';
+import { openDocumentStudioModal } from './document-studio.js';
 import {
   getCompartmentNoun,
   quickAddItemsToCompartment,
@@ -3860,6 +3861,14 @@ function formatBytes(bytes) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+export function openItemSavedPhotosInDocumentStudio(itemId) {
+  const safeId = Number(itemId);
+  const item = state.items.find(i => Number(i.id) === safeId);
+  const loc = item && item.location_id ? state.locationMap.get(item.location_id) : null;
+  const saved = collectItemSavedPhotos(item, loc).map(p => p.url);
+  void openDocumentStudioModal(safeId, { initialPhotoUrls: saved });
+}
+
 export function triggerItemAttachmentUpload(itemId) {
   const input = document.getElementById(`item-attachment-input-${itemId}`);
   if (input) input.click();
@@ -4184,6 +4193,10 @@ async function loadItemAttachmentsIntoView(itemId) {
           ? `<button type="button" class="btn btn-secondary btn-xs" onclick="${openCall}">View</button>`
           : (safeUrl ? `<a class="btn btn-secondary btn-xs" href="${escapeHtml(safeUrl)}" download="${escapeHtml(att.filename || 'file')}">Download</a>` : '')
         }
+            ${(isImg || att.attachment_type === 'pdf')
+          ? `<button type="button" class="btn btn-secondary btn-xs" onclick="createTypesetPdfFromAttachment(${Number(itemId)}, ${Number(att.id)})" title="Create a second crisp font-reconstructed PDF">Typeset PDF</button>`
+          : ''
+        }
             <button type="button" class="btn btn-secondary btn-xs danger-text" onclick="deleteItemAttachment(${Number(itemId)}, ${Number(att.id)})">Delete</button>
           </div>
         </div>
@@ -4490,6 +4503,12 @@ export function renderItemView(itemId) {
                       type="button"
                       class="unit-more-item"
                       role="menuitem"
+                      onclick="toggleItemPhotosMoreMenu(${safeItemId}, event); openItemSavedPhotosInDocumentStudio(${safeItemId})"
+                    >${lucideIcon('maximize', '', 14)} Enhance &amp; Scan as Document…</button>
+                    <button
+                      type="button"
+                      class="unit-more-item"
+                      role="menuitem"
                       onclick="toggleItemPhotosMoreMenu(${safeItemId}, event); openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Add photo' })"
                     >${lucideIcon('plus', '', 14)} Add photo…</button>
                   </div>
@@ -4689,6 +4708,7 @@ export function renderItemView(itemId) {
             ${partsSectionHtml ? '' : `<button type="button" class="item-add-chip" onclick="toggleItemPartsEditor(${safeItemId}, true)">${lucideIcon('plus', '', 13)} Add parts list</button>`}
             ${notesHtml ? '' : `<button type="button" class="item-add-chip" onclick="editItemFromView(${safeItemId}, { focusId: 'item-description' })">${lucideIcon('plus', '', 13)} Add notes</button>`}
             <button type="button" class="item-add-chip" id="item-attach-chip-${safeItemId}" onclick="triggerItemAttachmentUpload(${safeItemId})">${lucideIcon('plus', '', 13)} Attach file</button>
+            <button type="button" class="item-add-chip" id="item-doc-studio-chip-${safeItemId}" onclick="openDocumentStudioModal(${safeItemId})">${lucideIcon('fileText', '', 13)} Scan / Add Document</button>
           </div>
         </div>
 
@@ -4698,7 +4718,10 @@ export function renderItemView(itemId) {
           <section class="item-detail-card" id="item-attachments-card-${safeItemId}" hidden>
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem;">
               <h2 class="detail-section-title" style="margin-bottom: 0;">Documents &amp; Files</h2>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="triggerItemAttachmentUpload(${safeItemId})">+ Add file</button>
+              <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="openDocumentStudioModal(${safeItemId})">+ Scan / Add Document</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="triggerItemAttachmentUpload(${safeItemId})">+ Quick file</button>
+              </div>
             </div>
             <div id="item-attachments-list-${safeItemId}" class="item-attachments-list">
               <p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">Loading files...</p>

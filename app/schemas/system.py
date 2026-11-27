@@ -12,6 +12,7 @@ class CaptureSessionCreate(BaseModel):
     label: Optional[str] = None
     base_url: Optional[str] = None
     location_id: Optional[int] = Field(default=None, ge=1)
+    high_res: bool = False
 
 
 class CaptureSessionCreateResponse(BaseModel):
