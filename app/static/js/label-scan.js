@@ -699,7 +699,7 @@ async function runAnalyzeFromAlign() {
   if (!scanState.token || !scanState.activePhotoPath || scanState.busy) return;
   const seq = scanState.seq;
   scanState.busy = true;
-  scanState.busyMessage = 'Reading compartment labels (OCR + AI verification)...';
+  scanState.busyMessage = 'Reading compartment labels…';
   renderModal();
 
   const z = scanState.activeZone;
@@ -816,9 +816,9 @@ async function applyReviewedLabels() {
     await loadAllData();
     closeLabelScanModal();
     window.renderCurrentWorkspace?.();
-    const parts = [`Updated ${res.updated_count} compartment(s)`];
-    if (res.created_items_count > 0) parts.push(`${res.created_items_count} starter item(s) added`);
-    if (res.skipped_existing_count > 0) parts.push(`${res.skipped_existing_count} custom name(s) kept`);
+    const parts = [`Updated ${pluralize(res.updated_count, 'compartment')}`];
+    if (res.created_items_count > 0) parts.push(`${pluralize(res.created_items_count, 'starter item')} added`);
+    if (res.skipped_existing_count > 0) parts.push(`${pluralize(res.skipped_existing_count, 'custom name')} kept`);
     showToast(parts.join(' · '));
   } catch (err) {
     scanState.busy = false;
@@ -857,13 +857,13 @@ function renderModal() {
     } else if (scanState.stage === 'align') {
       if (scanState.alignStep === 'corners') {
         subtitleEl.textContent = scanState.activeZone
-          ? `Step 1/2: Drag TL, TR, BR, BL around close-up zone ${scanState.activeZone.label}.`
-          : 'Step 1/2: Drag TL, TR, BR, BL to the 4 outer corners of the compartments.';
+          ? `Step 1/2: Drag the 4 corners around close-up zone ${scanState.activeZone.label}.`
+          : 'Step 1/2: Drag the 4 corners to the outer edges of the compartments.';
       } else {
-        subtitleEl.textContent = 'Step 2/2: Drag right-edge dots for row heights & bottom-edge dots for column widths.';
+        subtitleEl.textContent = 'Step 2/2: Drag the edge dots to line up rows and columns.';
       }
     } else {
-      subtitleEl.textContent = 'Green = high confidence · Yellow = verify · Red = needs close-up (never guessed).';
+      subtitleEl.textContent = 'Green = Verified · Yellow = Check · Red = Needs close-up (never guessed).';
     }
   }
 
@@ -904,7 +904,7 @@ function renderModal() {
             : `<div class="lscan-qr-placeholder">Generating QR code...</div>`}
           <div class="lscan-qr-copy">
             <strong>Scan with your phone camera</strong>
-            <p>Your photo is kept at high resolution (up to 4096px) so tiny drawer stickers stay readable. Keep the phone tab open for guided close-ups if any labels are blurry.</p>
+            <p>Your photo stays at full detail so tiny drawer stickers stay readable. Keep the phone tab open in case a close-up is needed.</p>
             ${scanState.mobileUrl ? `<code class="lscan-url-hint">${escapeHtml(scanState.mobileUrl)}</code>` : ''}
           </div>
         </div>
@@ -952,9 +952,7 @@ function renderModal() {
         </div>
         <div class="lscan-align-tools">
           <button type="button" class="btn btn-secondary btn-xs" data-action="lscan-reset-quad">Reset ${isGridStep ? 'grid lines' : 'corners'}</button>
-          <span class="lscan-align-hint">${isGridStep
-            ? 'Drag right-edge dots (rows) and bottom-edge dots (columns). A 2.6× magnifier follows while dragging.'
-            : 'Drag TL, TR, BR, BL to the outer edges (a 2.6× magnifier follows while dragging).'}</span>
+          <span class="lscan-align-hint">A 2.6× magnifier follows while dragging.</span>
         </div>
       </div>
     `;
@@ -982,7 +980,7 @@ function renderModal() {
   const zonesHtml = scanState.closeupZones.length > 0 ? `
     <div class="lscan-zones-panel">
       <div class="lscan-zones-hdr">
-        <strong>${lucideIcon('camera', '', 15)} ${scanState.closeupZones.length} close-up zone(s) needed</strong>
+        <strong>${lucideIcon('camera', '', 15)} ${pluralize(scanState.closeupZones.length, 'close-up zone')} needed</strong>
         <span>Unreadable stickers are left blank — snap a closer photo of each highlighted zone.</span>
       </div>
       <div class="lscan-zones-list">

@@ -13,7 +13,7 @@ import { formatHumanPath, getLocationHierarchy, isUnknownPlaceholder, loadAllDat
 export async function createSubBoxFromDetectedRow(parentLocationId, row) {
   const cleanName = String(row?.name || '').trim().slice(0, 120);
   if (!parentLocationId || !cleanName) {
-    throw new Error('Box name and parent location are required.');
+    throw new Error('Box name and location are required.');
   }
 
   const descParts = [];
@@ -144,7 +144,7 @@ export function openMoveBoxModal(boxId) {
       .sort((a, b) => (a.full_path || a.name).localeCompare(b.full_path || b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
     selectEl.innerHTML = [
-      `<option value="">Needs a home (unassigned)</option>`,
+      `<option value="">Needs a home</option>`,
       ...candidates.map((loc) => {
         const label = formatHumanPath(loc.full_path || loc.name);
         const isCurrent = Number(box.parent_id) === Number(loc.id);

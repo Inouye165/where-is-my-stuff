@@ -454,7 +454,7 @@ export function renderHomeStageBody() {
     <div class="home-section-hdr">
       <div class="home-section-title-wrap">
         <h2 class="home-section-title">Your spaces</h2>
-        <span class="home-section-sub">Rooms, garages, sheds, and other areas where your containers live</span>
+        <span class="home-section-sub">Areas and rooms where your containers live</span>
       </div>
       <div class="home-section-actions">
         <button type="button" class="btn btn-secondary btn-sm" onclick="navToNeedsHome(true)" title="View all containers and boxes not attached to a space">
@@ -1163,7 +1163,7 @@ export function renderRoomView(roomId) {
       <div class="place-hero-card room-hero-card">
         <div class="place-hero-left">
           ${roomPhoto
-      ? `<img class="place-hero-thumb" src="${escapeHtml(roomPhoto)}" alt="${escapeHtml(room.name)}" onclick="openLightbox('${escapeJsStr(roomPhoto)}', '${escapeJsStr(room.name)}')">`
+      ? `<button type="button" class="place-hero-thumb-btn" aria-label="View full-size photo of ${escapeHtml(room.name)}" onclick="openLightbox('${escapeJsStr(roomPhoto)}', '${escapeJsStr(room.name)}')"><img class="place-hero-thumb" src="${escapeHtml(roomPhoto)}" alt="${escapeHtml(room.name)}"></button>`
       : `<div class="room-hero-icon-badge">${lucideIcon(roomIconName, '', 26)}</div>`
     }
           <div style="min-width: 0;">
@@ -1190,7 +1190,6 @@ export function renderRoomView(roomId) {
         <div class="home-section-hdr">
           <div class="home-section-title-wrap">
             <h2 class="home-section-title">Sub-spaces</h2>
-            <span class="home-section-sub">${escapeHtml(pluralize(subRooms.length, 'area'))} inside ${escapeHtml(room.name)}</span>
           </div>
         </div>
         <div class="containers-grid">
@@ -1199,10 +1198,10 @@ export function renderRoomView(roomId) {
       const subItemCount = sr.total_item_count || 0;
       const subChildCount = (sr.children && sr.children.length) || sr.child_count || 0;
       return `
-              <div class="container-card is-rich" onclick="navToRoom(${safeSubId}, true)">
+              <div class="container-card is-rich" role="button" tabindex="0" onclick="navToRoom(${safeSubId}, true)">
                 <div class="container-card-body">
                   <div class="container-card-top">
-                    <h4 class="container-card-title">${escapeHtml(sr.name)}</h4>
+                    <h3 class="container-card-title">${escapeHtml(sr.name)}</h3>
                     <span class="room-tile-count-badge">${escapeHtml(pluralize(subItemCount, 'item'))}</span>
                   </div>
                   <p class="container-card-meta">${escapeHtml(pluralize(subChildCount, 'container'))}</p>
@@ -1217,7 +1216,6 @@ export function renderRoomView(roomId) {
         <div class="home-section-hdr">
           <div class="home-section-title-wrap">
             <h2 class="home-section-title">Storage containers</h2>
-            <span class="home-section-sub">${escapeHtml(pluralize(containers.length, 'container'))} in ${escapeHtml(room.name)}</span>
           </div>
         </div>
         <div class="containers-grid">
@@ -1276,7 +1274,7 @@ function renderContainerCard(container) {
   const quickDrawers = drawers.slice(0, 3);
 
   return `
-    <div class="container-card is-rich" onclick="navToStorageUnit(${safeId}, true)">
+    <div class="container-card is-rich" role="button" tabindex="0" onclick="navToStorageUnit(${safeId}, true)">
       <div class="container-card-media">
         ${photo ? `
           <img class="container-card-thumb" src="${escapeHtml(photo)}" alt="${escapeHtml(container.name)}" loading="lazy">
@@ -1530,7 +1528,7 @@ export async function deleteSpaceFromMenu(roomId) {
   closeUnitMoreMenu(false);
   const room = state.locationMap.get(roomId);
   if (!room) return;
-  if (!window.confirm(`Remove "${room.name}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`)) return;
+  if (!window.confirm(`Delete "${room.name}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`)) return;
   try {
     await apiDelete(`/api/v1/locations/${roomId}`, 'Could not delete space.');
     showToast('Space deleted.');
@@ -1652,9 +1650,7 @@ export function renderStorageUnitView(unitId) {
       : `<button type="button" class="unit-space-pill" onclick="navToRoom(${Number(parent.id)}, true)">${lucideIcon(getRoomIconName(parent), '', 13)}<span>${escapeHtml(toSentenceCase(parent.name))}</span></button>`
     }
                 </div>
-                <p class="place-hero-sub">
-                  ${pluralize(drawers.length, 'drawer')} · ${pluralize(totalItemsCount, 'item')}${isUnassigned ? ' · Currently in Needs a home' : ` · In ${escapeHtml(toSentenceCase(parent.name))}`}${unit.description ? ` · ${escapeHtml(unit.description)}` : ''}
-                </p>
+                ${unit.description ? `<p class="place-hero-sub">${escapeHtml(unit.description)}</p>` : ''}
                 ${isUnassigned && moveChoices.length > 0 ? `
                   <div class="quick-move-pills" style="margin-top: 0.5rem;">
                     ${moveChoices.map(r => `
@@ -1697,7 +1693,7 @@ export function renderStorageUnitView(unitId) {
                   type="text"
                   id="unit-quick-search-input"
                   class="unit-quick-search-input"
-                  placeholder="Quick find container label, drawer, or coordinate (e.g. A1, M2, ESP32)..."
+                  placeholder="Quick find label, drawer, or coordinate (e.g., A1, M2, screws)..."
                   value="${escapeHtml(state.unitQuickSearchQuery || '')}"
                   autocomplete="off"
                   oninput="handleUnitQuickSearchInput(event, ${safeUnitId})"
@@ -2189,7 +2185,7 @@ function renderDrawerCard(drawer) {
   }
 
   return `
-    <div id="drawer-card-${safeDrawerId}" class="drawer-card ${isBoxType ? 'is-subbox-card' : ''} ${isSpotlight ? 'spotlight-highlight' : ''}" onclick="navToDrawer(${safeDrawerId}, true)">
+    <div id="drawer-card-${safeDrawerId}" class="drawer-card ${isBoxType ? 'is-subbox-card' : ''} ${isSpotlight ? 'spotlight-highlight' : ''}" role="button" tabindex="0" onclick="navToDrawer(${safeDrawerId}, true)">
       <div class="drawer-card-top">
         <div style="display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; flex: 1;">
           <h4 class="drawer-card-title">${isBoxType ? '📦 ' : ''}${escapeHtml(toSentenceCase(drawer.name))}</h4>
@@ -3137,7 +3133,7 @@ function renderDrawerItemCard(item, mode = 'list') {
 
   if (mode === 'grid') {
     return `
-      <div class="drawer-item-grid-card" onclick="${isInlineRenaming ? '' : `navToItem(${safeId}, true)`}">
+      <div class="drawer-item-grid-card" ${isInlineRenaming ? '' : `role="button" tabindex="0" onclick="navToItem(${safeId}, true)"`}>
         <div class="drawer-item-grid-media">
           ${thumb
         ? `<img class="drawer-item-grid-img" src="${escapeHtml(thumb)}" alt="${escapeHtml(item.name)}" loading="lazy">`
@@ -3155,7 +3151,7 @@ function renderDrawerItemCard(item, mode = 'list') {
 
   return `
     <div class="drawer-item-row">
-      <div class="drawer-item-row-main" onclick="${isInlineRenaming ? '' : `navToItem(${safeId}, true)`}">
+      <div class="drawer-item-row-main" ${isInlineRenaming ? '' : `role="button" tabindex="0" onclick="navToItem(${safeId}, true)"`}>
         ${thumb
       ? `<img class="drawer-item-thumb" src="${escapeHtml(thumb)}" alt="${escapeHtml(item.name)}" loading="lazy">`
       : `<div class="drawer-item-thumb drawer-item-thumb-empty">${lucideIcon('package', '', 22)}</div>`
@@ -3260,19 +3256,25 @@ function renderExpandableSubBoxCard(box) {
 
   return `
     <div id="drawer-card-${safeBoxId}" class="subbox-expand-card ${isExpanded ? 'is-expanded' : ''}">
-      <div class="subbox-expand-header" onclick="toggleExpandSubBox(${safeBoxId})">
+      <div class="subbox-expand-header" role="button" tabindex="0" aria-expanded="${isExpanded ? 'true' : 'false'}" onclick="toggleExpandSubBox(${safeBoxId})">
         <span class="subbox-expand-chevron ${isExpanded ? 'is-open' : ''}" aria-hidden="true">
           ${lucideIcon('chevronRight', '', 16)}
         </span>
         ${mainBoxPhoto ? `
           <div class="subbox-thumb-wrap">
-            <img
-              class="subbox-expand-thumb"
-              src="${escapeHtml(mainBoxPhoto.thumb || mainBoxPhoto.url)}"
-              alt="${escapeHtml(box.name)}"
+            <button
+              type="button"
+              class="place-hero-thumb-btn"
+              aria-label="View full-size photo of ${escapeHtml(box.name)}"
               title="View full box photo"
               onclick="event.stopPropagation(); openLightbox('${escapeJsStr(mainBoxPhoto.url)}', '${escapeJsStr(box.name)}')"
             >
+              <img
+                class="subbox-expand-thumb"
+                src="${escapeHtml(mainBoxPhoto.thumb || mainBoxPhoto.url)}"
+                alt="${escapeHtml(box.name)}"
+              >
+            </button>
           </div>
         ` : `
           <div class="subbox-expand-thumb subbox-expand-thumb-empty">${lucideIcon('package', '', 18)}</div>
@@ -3395,11 +3397,11 @@ export function renderDrawerView(drawerId) {
   const cabinetDrawerRef = hier.drawer || drawer;
   const cabinetVisualHtml = isBoxLoc
     ? (activePhoto
-      ? `<img class="place-hero-thumb drawer-hero-cabinet-thumb" src="${escapeHtml(activePhoto.thumb || activePhoto.url)}" alt="${escapeHtml(drawer.name)}" onclick="openLightbox('${escapeJsStr(activePhoto.url)}', '${escapeJsStr(drawer.name)}')" style="cursor: pointer;">`
+      ? `<button type="button" class="place-hero-thumb-btn" aria-label="View full-size photo of ${escapeHtml(drawer.name)}" onclick="openLightbox('${escapeJsStr(activePhoto.url)}', '${escapeJsStr(drawer.name)}')"><img class="place-hero-thumb drawer-hero-cabinet-thumb" src="${escapeHtml(activePhoto.thumb || activePhoto.url)}" alt="${escapeHtml(drawer.name)}"></button>`
       : '')
     : (renderCabinetHighlightVisual(hier.unit, cabinetDrawerRef, { compact: true })
       || (spotPhoto
-        ? `<img class="place-hero-thumb drawer-hero-cabinet-thumb" src="${escapeHtml(spotPhoto)}" alt="${escapeHtml(drawer.name)}" onclick="openLightbox('${escapeJsStr(spotPhoto)}', '${escapeJsStr(drawer.name)}')" style="cursor: pointer;">`
+        ? `<button type="button" class="place-hero-thumb-btn" aria-label="View full-size photo of ${escapeHtml(drawer.name)}" onclick="openLightbox('${escapeJsStr(spotPhoto)}', '${escapeJsStr(drawer.name)}')"><img class="place-hero-thumb drawer-hero-cabinet-thumb" src="${escapeHtml(spotPhoto)}" alt="${escapeHtml(drawer.name)}"></button>`
         : ''));
 
   const overallCarouselEntries = photos.map((p, idx) => ({
@@ -3529,7 +3531,7 @@ export function renderDrawerView(drawerId) {
                 type="text"
                 id="drawer-label-input-${safeDrawerId}"
                 value="${escapeHtml(isCoordNamedOnly ? '' : drawer.name)}"
-                placeholder="${escapeHtml(slotCoord ? `Name ${slotCoord} (e.g. Buck Converters, M3 Screws)` : `${compNounCap} label`)}"
+                placeholder="${escapeHtml(slotCoord ? `Name ${slotCoord} (e.g., AA Batteries, M3 Screws)` : `${compNounCap} label`)}"
                 style="margin-bottom: 0.4rem;"
                 onkeydown="if (event.key === 'Enter') { event.preventDefault(); saveDrawerLabel(${safeDrawerId}); } else if (event.key === 'Escape') { event.preventDefault(); toggleDrawerLabelEdit(${safeDrawerId}, false); }"
               >
@@ -3582,7 +3584,7 @@ export function renderDrawerView(drawerId) {
           <input
             type="text"
             id="drawer-quick-add-${safeDrawerId}"
-            placeholder="Add items to ${escapeHtml(slotCoord || drawer.name)}, e.g. 'AA batteries x4' or 'ESP32, Buck converter'"
+            placeholder="Add items to ${escapeHtml(slotCoord || drawer.name)}, e.g., 'AA batteries x4' or 'tape measure, scissors'"
             onkeydown="if (event.key === 'Enter') { event.preventDefault(); quickAddDrawerItems(${safeDrawerId}); }"
           >
           <button type="button" class="btn btn-primary btn-sm drawer-quick-add-submit" onclick="quickAddDrawerItems(${safeDrawerId})">Add</button>
@@ -3605,7 +3607,7 @@ export function renderDrawerView(drawerId) {
                 ${lucideIcon('plus', '', 14)} Detailed add form
               </button>
               <button type="button" class="unit-more-item" role="menuitem" onclick="toggleQuickAddMoreMenu(event); openRapidEntryModal(${safeDrawerId}, { openLlmPanel: true })">
-                ${lucideIcon('list', '', 14)} Bulk import (JSON / LLM)
+                ${lucideIcon('list', '', 14)} Paste list from Gemini / ChatGPT
               </button>
             </div>
           </div>
@@ -3682,11 +3684,11 @@ export function renderDrawerView(drawerId) {
                   <div class="drawer-photo-group-bar">
                     <div class="drawer-photo-group-top">
                       <span class="drawer-photo-group-hint">
-                        Select 1+ photos for one container (e.g. box lid + inventory list + inside shots). Scanning puts all detected items inside that container.
+                        Select one or more photos for a container (e.g., box lid, list, inside shots).
                       </span>
                       <div class="drawer-photo-group-quick-links">
                         <button type="button" class="btn-link-subtle" onclick="selectAllDrawerBoxPhotos(${safeDrawerId}, true)">Select all</button>
-                        <button type="button" class="btn-link-subtle" onclick="selectAllDrawerBoxPhotos(${safeDrawerId}, false)">Clear</button>
+                        <button type="button" class="btn-link-subtle" onclick="selectAllDrawerBoxPhotos(${safeDrawerId}, false)">Deselect all</button>
                       </div>
                     </div>
                     <div class="drawer-photo-group-inputs">
@@ -3694,7 +3696,7 @@ export function renderDrawerView(drawerId) {
                         type="text"
                         id="drawer-box-group-name-${safeDrawerId}"
                         value="${escapeHtml(nameDraft)}"
-                        placeholder="Container name (optional — AI can suggest)"
+                        placeholder="Container name (optional)"
                         oninput="updateDrawerPhotoBoxDraft(${safeDrawerId}, 'name', this.value)"
                       >
                       <input
@@ -3787,8 +3789,8 @@ export function renderDrawerView(drawerId) {
             ${genericItems.length > 0 ? `
               <span class="drawer-generic-nudge">
                 · ${drawerGenericReviewMode
-          ? `Reviewing ${genericItems.length} generic · <button type="button" class="drawer-generic-review-link" onclick="toggleGenericReviewMode(${safeDrawerId})">Show all</button>`
-          : `${pluralize(genericItems.length, 'item')} ${genericItems.length === 1 ? 'has a generic name' : 'have generic names'} · <button type="button" class="drawer-generic-review-link" onclick="toggleGenericReviewMode(${safeDrawerId})">Review</button>`}
+          ? `Showing ${genericItems.length} needing clearer names · <button type="button" class="drawer-generic-review-link" onclick="toggleGenericReviewMode(${safeDrawerId})">Show all</button>`
+          : `${pluralize(genericItems.length, 'item')} ${genericItems.length === 1 ? 'needs a clearer name' : 'need clearer names'} · <button type="button" class="drawer-generic-review-link" onclick="toggleGenericReviewMode(${safeDrawerId})">Review</button>`}
               </span>
             ` : ''}
           </div>
@@ -3818,7 +3820,7 @@ export function renderDrawerView(drawerId) {
           <div class="empty-state compartment-empty-card">
             <div class="compartment-empty-icon" aria-hidden="true">${lucideIcon('package', '', 24)}</div>
             <h3 class="empty-state-title">${escapeHtml(slotCoord ? `${slotCoord} is empty` : `This ${compNoun} is empty`)}</h3>
-            <p class="empty-state-desc">Type items in the bar above, or upload a photo and let AI list them for you.</p>
+            <p class="empty-state-desc">Add items above, or upload a photo to scan them.</p>
             <div class="compartment-empty-actions">
               ${overallCarouselEntries.length > 0 ? `
                 <button type="button" class="btn btn-primary btn-sm" onclick="scanCompartmentPhotosWithAi(${safeDrawerId})">
@@ -4144,7 +4146,7 @@ async function loadItemAttachmentsIntoView(itemId) {
     const count = Array.isArray(attachments) ? attachments.length : 0;
     syncItemAttachmentsVisibility(itemId, count);
     if (count === 0) {
-      target.innerHTML = `<p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">No datasheets, charts, or files attached yet.</p>`;
+      target.innerHTML = `<p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">No manuals, receipts, or files attached yet.</p>`;
       return;
     }
     target.innerHTML = attachments.map(att => {
@@ -4167,7 +4169,7 @@ async function loadItemAttachmentsIntoView(itemId) {
         : '';
       return `
         <div class="item-attachment-row">
-          <div class="item-attachment-left" ${openCall ? `style="cursor: pointer;" onclick="${openCall}" title="View inside app"` : ''}>
+          <div class="item-attachment-left" ${openCall ? `role="button" tabindex="0" style="cursor: pointer;" onclick="${openCall}" title="View inside app"` : ''}>
             ${isImg
           ? `<img class="item-attachment-thumb" src="${escapeHtml(safeThumb || safeUrl)}" alt="${escapeHtml(att.filename)}">`
           : `<span class="item-attachment-badge">${escapeHtml(badge)}</span>`
@@ -4258,7 +4260,7 @@ export function renderItemView(itemId) {
   const isPdfSelectMode = Boolean(itemPdfSelectModeByItem.get(safeItemId));
 
   workspace.innerHTML = `
-    <div class="workspace-inner">
+    <div class="workspace-inner is-item-detail-page">
       ${renderStickyContextBar(
     crumbs,
     `
@@ -4285,8 +4287,8 @@ export function renderItemView(itemId) {
       <div class="place-hero-card item-hero-card">
         <div class="place-hero-left">
           ${itemPhoto
-      ? `<img class="place-hero-thumb" src="${escapeHtml(itemPhoto)}" alt="${escapeHtml(item.name)}" onclick="openLightbox('${escapeJsStr(itemPhoto)}', '${escapeJsStr(item.name)}')">`
-      : `<div class="place-hero-emoji" style="cursor: pointer;" onclick="openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Add photo' })" title="Add photo">${lucideIcon('package', '', 28)}</div>`
+      ? `<button type="button" class="place-hero-thumb-btn" aria-label="View full-size photo of ${escapeHtml(item.name)}" onclick="openLightbox('${escapeJsStr(itemPhoto)}', '${escapeJsStr(item.name)}')"><img class="place-hero-thumb" src="${escapeHtml(itemPhoto)}" alt="${escapeHtml(item.name)}"></button>`
+      : `<button type="button" class="place-hero-emoji" aria-label="Add item photo" title="Add photo" onclick="openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Add photo' })">${lucideIcon('package', '', 28)}</button>`
     }
           <div style="min-width: 0;">
             <div class="item-hero-eyebrow-row">
@@ -4320,39 +4322,62 @@ export function renderItemView(itemId) {
             </p>
           </div>
         </div>
-        <div class="detail-qty-stepper item-hero-stepper">
-          <button type="button" class="qty-stepper-btn" onclick="adjustItemQty(${safeItemId}, -1)">−</button>
+        <div class="detail-qty-stepper item-hero-stepper" role="group" aria-label="Item quantity">
+          <button type="button" class="qty-stepper-btn" aria-label="Decrease quantity" ${(!hasQty || Number(item.quantity) <= 0) ? 'disabled' : ''} onclick="adjustItemQty(${safeItemId}, -1)">−</button>
           <span class="qty-stepper-val" id="item-view-qty-val">
             ${hasQty ? Number(item.quantity) : 'Not counted'}
           </span>
-          <button type="button" class="qty-stepper-btn" onclick="adjustItemQty(${safeItemId}, 1)">+</button>
-          <span style="font-size: 0.85rem; color: var(--text-secondary);">${escapeHtml(item.unit || 'pcs')}</span>
+          <button type="button" class="qty-stepper-btn" aria-label="${hasQty ? 'Increase quantity' : 'Start counting at 1'}" onclick="adjustItemQty(${safeItemId}, 1)">+</button>
+          <span class="qty-stepper-unit">${escapeHtml(item.unit || 'pcs')}</span>
         </div>
       </div>
 
       <section class="item-detail-card">
-        <span class="detail-section-title">Where it's at &amp; what it looks like</span>
+        <h2 class="detail-section-title">Photos &amp; Location</h2>
         <div class="item-view-photos-grid" style="margin-bottom: 0.85rem;">
           <div class="detail-photo-card">
-            <div
-              class="detail-photo-thumb item-view-photo-thumb"
-              onclick="${itemPhoto ? `openLightbox('${escapeJsStr(itemPhoto)}', '${escapeJsStr(item.name)}')` : `openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Add photo' })`}"
-            >
-              ${itemPhoto ? `<img src="${escapeHtml(itemPhoto)}" alt="${escapeHtml(item.name)}">` : `<span style="font-size: 0.78rem; color: var(--accent-text); font-weight: 700;">+ Add item photo</span>`}
+            ${itemPhoto ? `
+              <button
+                type="button"
+                class="detail-photo-thumb item-view-photo-thumb"
+                aria-label="View full-size item photo"
+                onclick="openLightbox('${escapeJsStr(itemPhoto)}', '${escapeJsStr(item.name)}')"
+              >
+                <img src="${escapeHtml(itemPhoto)}" alt="${escapeHtml(item.name)}">
+              </button>
+            ` : `
+              <button
+                type="button"
+                class="detail-photo-thumb item-view-photo-thumb is-empty-photo"
+                onclick="openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Add photo' })"
+              >
+                ${lucideIcon('camera', 'empty-photo-icon', 24)}
+                <span class="empty-photo-cta">Add photo</span>
+              </button>
+            `}
+            <span class="detail-photo-caption">Item photo</span>
+            <div class="detail-photo-actions">
+              ${itemPhoto ? `<button type="button" class="detail-photo-edit-btn" onclick="editExistingPhoto({ kind: 'item', id: ${safeItemId}, photoUrl: '${escapeJsStr(itemPhoto)}', title: 'Edit item photo' })">${lucideIcon('scissors', '', 13)} Crop</button>` : ''}
+              ${itemPhoto ? `<button type="button" class="detail-photo-edit-btn" onclick="openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Replace item photo' })">${lucideIcon('camera', '', 13)} Replace</button>` : ''}
+              <button type="button" class="detail-photo-edit-btn" onclick="findAndImportItemPhoto(${safeItemId})">${lucideIcon('search', '', 13)} Auto-find</button>
             </div>
-            <span class="detail-photo-caption">What it looks like</span>
-            ${itemPhoto ? `<button type="button" class="detail-photo-edit-btn" onclick="editExistingPhoto({ kind: 'item', id: ${safeItemId}, photoUrl: '${escapeJsStr(itemPhoto)}', title: 'Edit item photo' })">${lucideIcon('scissors', '', 12)} Crop</button>` : ''}
-            <button type="button" class="detail-photo-edit-btn" onclick="openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Replace item photo' })">${lucideIcon('camera', '', 12)} Replace</button>
-            <button type="button" class="detail-photo-edit-btn" onclick="findAndImportItemPhoto(${safeItemId})">${lucideIcon('search', '', 12)} Auto-find</button>
           </div>
 
           <div class="detail-photo-card">
-            <div
-              class="detail-photo-thumb item-view-photo-thumb"
-              ${insidePhoto ? `onclick="openLightbox('${escapeJsStr(insidePhoto)}', '${escapeJsStr(hier.unit ? hier.unit.name : 'Container')}')"` : 'style="cursor: default;"'}
-            >
-              ${insidePhoto ? `<img src="${escapeHtml(insidePhoto)}" alt="${escapeHtml(hier.unit ? hier.unit.name : 'Container')}">` : `<span style="font-size: 0.78rem; color: var(--text-muted);">No container photo</span>`}
-            </div>
+            ${insidePhoto ? `
+              <button
+                type="button"
+                class="detail-photo-thumb item-view-photo-thumb"
+                aria-label="View full-size photo of ${escapeHtml(hier.unit ? hier.unit.name : 'Container')}"
+                onclick="openLightbox('${escapeJsStr(insidePhoto)}', '${escapeJsStr(hier.unit ? hier.unit.name : 'Container')}')"
+              >
+                <img src="${escapeHtml(insidePhoto)}" alt="${escapeHtml(hier.unit ? hier.unit.name : 'Container')}">
+              </button>
+            ` : `
+              <div class="detail-photo-thumb item-view-photo-thumb" style="cursor: default;">
+                <span class="empty-photo-muted">No container photo</span>
+              </div>
+            `}
             <span class="detail-photo-caption">${escapeHtml(hier.unit ? hier.unit.name : 'Container')}</span>
           </div>
 
@@ -4362,20 +4387,27 @@ export function renderItemView(itemId) {
                 ${renderCabinetHighlightVisual(hier.unit, hier.drawer || loc)}
               </div>
             ` : (hier.unit && Number(hier.unit.grid_rows) > 0 && Number(hier.unit.grid_cols) > 0) ? `
-              <div
+              <button
+                type="button"
                 class="detail-photo-thumb item-view-photo-thumb is-grid-diagram"
-                style="cursor: pointer;"
+                aria-label="Show ${escapeHtml(item.name)} in ${escapeHtml(hier.unit.name)}"
                 title="Show in container"
                 onclick="locateDrawerInUnit(${Number(hier.unit.id)}, ${Number(hier.drawer?.id || item.location_id || 0)})"
               >
                 ${renderContainerGridHtml(hier.unit, { highlightDrawerId: hier.drawer?.id || item.location_id, diagram: true })}
-              </div>
-            ` : `
-              <div
-                class="detail-photo-thumb item-view-photo-thumb"
-                onclick="${spotPhoto ? `openLightbox('${escapeJsStr(spotPhoto)}', 'Where it sits')` : (loc ? `openQuickPhotoModal({ kind: 'spot', id: ${safeLocId}, title: 'Where it sits' })` : '')}"
+              </button>
+            ` : (spotPhoto || loc) ? `
+              <button
+                type="button"
+                class="detail-photo-thumb item-view-photo-thumb ${spotPhoto ? '' : 'is-empty-photo'}"
+                aria-label="${spotPhoto ? 'View full-size photo of where it sits' : 'Add photo of where it sits'}"
+                onclick="${spotPhoto ? `openLightbox('${escapeJsStr(spotPhoto)}', 'Where it sits')` : `openQuickPhotoModal({ kind: 'spot', id: ${safeLocId}, title: 'Where it sits' })`}"
               >
-                ${spotPhoto ? `<img src="${escapeHtml(spotPhoto)}" alt="Where it sits">` : `<span style="font-size: 0.78rem; color: var(--accent-text); font-weight: 700;">${loc ? '+ Where it sits' : 'No location'}</span>`}
+                ${spotPhoto ? `<img src="${escapeHtml(spotPhoto)}" alt="Where it sits">` : `${lucideIcon('camera', 'empty-photo-icon', 24)}<span class="empty-photo-cta">Where it sits</span>`}
+              </button>
+            ` : `
+              <div class="detail-photo-thumb item-view-photo-thumb" style="cursor: default;">
+                <span class="empty-photo-muted">No location</span>
               </div>
             `}
             <span class="detail-photo-caption">Where in ${escapeHtml(hier.unit ? hier.unit.name : 'container')}</span>
@@ -4387,13 +4419,6 @@ export function renderItemView(itemId) {
             ${isPdfSelectMode ? `
               <div class="item-saved-photos-select-bar" role="toolbar" aria-label="Create PDF from photos">
                 <div class="item-saved-photos-select-left">
-                  <button
-                    type="button"
-                    class="item-pdf-cancel-icon-btn"
-                    onclick="toggleItemPdfSelectMode(${safeItemId}, false)"
-                    aria-label="Exit PDF selection"
-                    title="Exit PDF selection"
-                  >${lucideIcon('x', '', 15)}</button>
                   <span class="item-pdf-select-status">
                     ${selectedPdfPaths.length > 0
           ? `${selectedPdfPaths.length} ${selectedPdfPaths.length === 1 ? 'page' : 'pages'} selected`
@@ -4409,20 +4434,20 @@ export function renderItemView(itemId) {
                     placeholder="PDF title (optional)"
                     oninput="updateItemPdfDraftTitle(${safeItemId}, this.value)"
                   >
-                  <label class="item-pdf-remove-label" title="Remove converted document images from the bin gallery after creating the PDF">
+                  <label class="item-pdf-remove-label" title="Remove the original photos from this container after creating the PDF">
                     <input
                       type="checkbox"
                       id="item-pdf-remove-src-${safeItemId}"
                       ${pdfRemoveSource ? 'checked' : ''}
                       onchange="toggleItemPdfRemoveSource(${safeItemId}, this.checked)"
                     >
-                    <span>Remove originals from bin</span>
+                    <span>Remove original photos</span>
                   </label>
                   <button
                     type="button"
                     class="btn btn-secondary btn-xs"
                     onclick="selectAllItemPdfPhotos(${safeItemId}, ${selectedPdfPaths.length < savedPhotos.length ? 'true' : 'false'})"
-                  >${selectedPdfPaths.length < savedPhotos.length ? 'Select all' : 'Clear'}</button>
+                  >${selectedPdfPaths.length < savedPhotos.length ? 'Select all' : 'Deselect all'}</button>
                   <button
                     type="button"
                     class="btn btn-primary btn-xs"
@@ -4526,54 +4551,82 @@ export function renderItemView(itemId) {
         ` : ''}
 
         <div class="item-where-grid">
-          <div
+          <button
+            type="button"
             class="location-step-item ${hier.isNeedsHome ? 'is-needs-home' : ''}"
+            aria-label="Open Space: ${escapeHtml(hier.roomName)}"
             onclick="${hier.room ? `navToRoom(${Number(hier.room.id)}, true)` : `navToNeedsHome(true)`}"
           >
-            <span class="step-emoji">${hier.room ? escapeHtml(getRoomEmoji(hier.room)) : '📌'}</span>
+            <span class="step-emoji" aria-hidden="true">${hier.room ? escapeHtml(getRoomEmoji(hier.room)) : '📌'}</span>
             <div class="step-content">
               <span class="step-level-tag">Space</span>
               <span class="step-level-val">${escapeHtml(hier.roomName)}</span>
             </div>
-            <span style="color: var(--accent-text); font-weight: 700;">→</span>
-          </div>
+            <span class="step-arrow" aria-hidden="true">→</span>
+          </button>
 
-          <div
-            class="location-step-item ${!hier.unit ? 'is-muted-step' : ''}"
-            ${hier.unit ? `onclick="navToStorageUnit(${Number(hier.unit.id)}, true)"` : ''}
-          >
-            <span class="step-emoji">${lucideIcon('package', '', 18)}</span>
-            <div class="step-content">
-              <span class="step-level-tag">Storage Container</span>
-              <span class="step-level-val">${escapeHtml(hier.unit ? hier.unitName : 'None / Loose in space')}</span>
+          ${hier.unit ? `
+            <button
+              type="button"
+              class="location-step-item"
+              aria-label="Open Storage Container: ${escapeHtml(hier.unitName)}"
+              onclick="navToStorageUnit(${Number(hier.unit.id)}, true)"
+            >
+              <span class="step-emoji" aria-hidden="true">${lucideIcon('package', '', 18)}</span>
+              <div class="step-content">
+                <span class="step-level-tag">Storage Container</span>
+                <span class="step-level-val">${escapeHtml(hier.unitName)}</span>
+              </div>
+              <span class="step-arrow" aria-hidden="true">→</span>
+            </button>
+          ` : `
+            <div class="location-step-item is-muted-step">
+              <span class="step-emoji" aria-hidden="true">${lucideIcon('package', '', 18)}</span>
+              <div class="step-content">
+                <span class="step-level-tag">Storage Container</span>
+                <span class="step-level-val">None / Loose in space</span>
+              </div>
             </div>
-            ${hier.unit ? `<span style="color: var(--accent-text); font-weight: 700;">→</span>` : ''}
-          </div>
+          `}
 
-          <div
-            class="location-step-item ${!(hier.drawer || loc) ? 'is-muted-step' : ''}"
-            ${hier.drawer ? `onclick="navToDrawer(${Number(hier.drawer.id)}, true)"` : (loc ? `onclick="navToDrawer(${safeLocId}, true)"` : '')}
-          >
-            <span class="step-emoji">${lucideIcon('archive', '', 18)}</span>
-            <div class="step-content">
-              <span class="step-level-tag">Location / Drawer / Bin</span>
-              <span class="step-level-val" ${(hier.drawer && !hier.box) ? 'style="color: var(--accent-text);"' : ''}>${escapeHtml(hier.drawer ? hier.drawerName : (hier.unit ? hier.unitName : 'Unassigned'))}</span>
+          ${(hier.drawer || loc) ? `
+            <button
+              type="button"
+              class="location-step-item"
+              aria-label="Open Location: ${escapeHtml(hier.drawer ? hier.drawerName : hier.unitName)}"
+              onclick="${hier.drawer ? `navToDrawer(${Number(hier.drawer.id)}, true)` : `navToDrawer(${safeLocId}, true)`}"
+            >
+              <span class="step-emoji" aria-hidden="true">${lucideIcon('archive', '', 18)}</span>
+              <div class="step-content">
+                <span class="step-level-tag">Location / Drawer / Bin</span>
+                <span class="step-level-val" ${(hier.drawer && !hier.box) ? 'style="color: var(--accent-text);"' : ''}>${escapeHtml(hier.drawer ? hier.drawerName : hier.unitName)}</span>
+              </div>
+              <span class="step-arrow" aria-hidden="true">→</span>
+            </button>
+          ` : `
+            <div class="location-step-item is-muted-step">
+              <span class="step-emoji" aria-hidden="true">${lucideIcon('archive', '', 18)}</span>
+              <div class="step-content">
+                <span class="step-level-tag">Location / Drawer / Bin</span>
+                <span class="step-level-val">Unassigned</span>
+              </div>
             </div>
-            ${(hier.drawer || loc) ? `<span style="color: var(--accent-text); font-weight: 700;">→</span>` : ''}
-          </div>
+          `}
 
           ${(hier.subLocations || []).map((sub, idx, arr) => `
-            <div
+            <button
+              type="button"
               class="location-step-item"
+              aria-label="Open Box or Kit: ${escapeHtml(sub.name)}"
               onclick="navToDrawer(${Number(sub.id)}, true)"
             >
-              <span class="step-emoji">${lucideIcon('package', '', 18)}</span>
+              <span class="step-emoji" aria-hidden="true">${lucideIcon('package', '', 18)}</span>
               <div class="step-content">
                 <span class="step-level-tag">Box / Kit</span>
                 <span class="step-level-val" ${idx === arr.length - 1 ? 'style="color: var(--accent-text);"' : ''}>${escapeHtml(sub.name)}</span>
               </div>
-              <span style="color: var(--accent-text); font-weight: 700;">→</span>
-            </div>
+              <span class="step-arrow" aria-hidden="true">→</span>
+            </button>
           `).join('')}
         </div>
       </section>
@@ -4581,47 +4634,47 @@ export function renderItemView(itemId) {
       <div class="item-detail-grid" id="item-detail-grid-${safeItemId}">
         <div class="item-detail-col">
           <section class="item-detail-card">
-            <span class="detail-section-title">Item Details</span>
-            <div class="specs-parsed-grid">
+            <h2 class="detail-section-title">Item Details</h2>
+            <dl class="specs-parsed-grid">
               <div class="spec-parsed-row">
-                <span class="spec-parsed-k">Category</span>
-                <span class="spec-parsed-v">${escapeHtml(item.category || 'Uncategorized')}</span>
+                <dt class="spec-parsed-k">Category</dt>
+                <dd class="spec-parsed-v">${escapeHtml(item.category || 'Uncategorized')}</dd>
               </div>
               ${item.serial_or_part_number ? `
                 <div class="spec-parsed-row">
-                  <span class="spec-parsed-k">Brand / Model / Part #</span>
-                  <span class="spec-parsed-v" style="font-family: var(--font-mono);">${escapeHtml(item.serial_or_part_number)}</span>
+                  <dt class="spec-parsed-k">Brand / Model / Part #</dt>
+                  <dd class="spec-parsed-v" style="font-family: var(--font-mono);">${escapeHtml(item.serial_or_part_number)}</dd>
                 </div>
               ` : ''}
               <div class="spec-parsed-row">
-                <span class="spec-parsed-k">Quantity</span>
-                <span class="spec-parsed-v">${hasQty ? `${Number(item.quantity)} ${escapeHtml(item.unit || 'pcs')}` : 'Not counted'}</span>
+                <dt class="spec-parsed-k">Quantity</dt>
+                <dd class="spec-parsed-v">${hasQty ? `${Number(item.quantity)} ${escapeHtml(item.unit || 'pcs')}` : 'Not counted'}</dd>
               </div>
               <div class="spec-parsed-row">
-                <span class="spec-parsed-k">Status</span>
-                <span class="spec-parsed-v">${escapeHtml(statusLabel)}${item.status_note ? ` — ${escapeHtml(item.status_note)}` : ''}</span>
+                <dt class="spec-parsed-k">Status</dt>
+                <dd class="spec-parsed-v">${escapeHtml(statusLabel)}${item.status_note ? ` — ${escapeHtml(item.status_note)}` : ''}</dd>
               </div>
               <div class="spec-parsed-row">
-                <span class="spec-parsed-k">Last seen</span>
-                <span class="spec-parsed-v">${escapeHtml(formatDate(item.last_seen_at))}</span>
+                <dt class="spec-parsed-k">Last seen</dt>
+                <dd class="spec-parsed-v">${escapeHtml(formatDate(item.last_seen_at))}</dd>
               </div>
               ${item.created_at ? `
                 <div class="spec-parsed-row">
-                  <span class="spec-parsed-k">Added</span>
-                  <span class="spec-parsed-v">${escapeHtml(formatDate(item.created_at))}</span>
+                  <dt class="spec-parsed-k">Added</dt>
+                  <dd class="spec-parsed-v">${escapeHtml(formatDate(item.created_at))}</dd>
                 </div>
               ` : ''}
               ${item.updated_at ? `
                 <div class="spec-parsed-row">
-                  <span class="spec-parsed-k">Updated</span>
-                  <span class="spec-parsed-v">${escapeHtml(formatDate(item.updated_at))}</span>
+                  <dt class="spec-parsed-k">Updated</dt>
+                  <dd class="spec-parsed-v">${escapeHtml(formatDate(item.updated_at))}</dd>
                 </div>
               ` : ''}
-            </div>
+            </dl>
 
             ${tagList.length > 0 ? `
               <div class="item-tags-wrap">
-                <span class="detail-section-title" style="margin-bottom: 0.35rem;">Tags</span>
+                <h3 class="detail-section-title" style="margin-bottom: 0.35rem;">Tags</h3>
                 <div class="item-tags-list">
                   ${tagList.map(t => `<span class="item-tag-chip">${escapeHtml(t)}</span>`).join('')}
                 </div>
@@ -4630,8 +4683,6 @@ export function renderItemView(itemId) {
           </section>
 
           ${partsSectionHtml}
-
-          ${notesHtml ? `<section class="item-detail-card">${notesHtml}</section>` : ''}
 
           <div class="item-add-chips" id="item-add-chips-${safeItemId}">
             <input type="file" id="item-attachment-input-${safeItemId}" multiple accept="image/*,.pdf,.svg,.csv,.txt,.md,.json,.xlsx,.xls,.doc,.docx,.zip" style="display: none;" onchange="handleItemAttachmentUpload(${safeItemId}, event)">
@@ -4642,10 +4693,12 @@ export function renderItemView(itemId) {
         </div>
 
         <div class="item-detail-col">
+          ${notesHtml ? `<section class="item-detail-card">${notesHtml}</section>` : ''}
+
           <section class="item-detail-card" id="item-attachments-card-${safeItemId}" hidden>
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem;">
-              <span class="detail-section-title" style="margin-bottom: 0;">Datasheets, Charts &amp; Files</span>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="triggerItemAttachmentUpload(${safeItemId})">+ Add PDF / chart / file</button>
+              <h2 class="detail-section-title" style="margin-bottom: 0;">Documents &amp; Files</h2>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="triggerItemAttachmentUpload(${safeItemId})">+ Add file</button>
             </div>
             <div id="item-attachments-list-${safeItemId}" class="item-attachments-list">
               <p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">Loading files...</p>
@@ -4895,7 +4948,7 @@ export function renderItemCard(item) {
   const safeDrawerId = Number(hier.drawer?.id || item.location_id || 0);
 
   return `
-    <div class="item-card" onclick="navToItem(${safeItemId})">
+    <div class="item-card" role="button" tabindex="0" onclick="navToItem(${safeItemId})">
       <div class="item-card-header">
         <div>
           <div style="display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.2rem; flex-wrap: wrap;">
@@ -4909,6 +4962,9 @@ export function renderItemCard(item) {
 
       <div
         class="item-card-loc-box"
+        role="button"
+        tabindex="0"
+        aria-label="Show ${escapeHtml(item.name)} in container"
         onclick="event.stopPropagation(); locateDrawerInUnit(${safeUnitId}, ${safeDrawerId})"
         title="Show in container"
       >
@@ -5044,7 +5100,7 @@ function renderItemPartsSection(item) {
                     type="text"
                     class="ai-edit-input ai-edit-name"
                     value="${escapeHtml(part.name || '')}"
-                    placeholder="Part name (e.g. 2N2222 NPN Transistor)"
+                    placeholder="Part name (e.g., M3 x 12mm Screw)"
                     aria-label="Part name"
                     oninput="updateItemPartField(${safeItemId}, ${idx}, 'name', this.value)"
                   >
@@ -5094,7 +5150,7 @@ function renderItemPartsSection(item) {
           <input
             type="text"
             id="item-part-quick-add-${safeItemId}"
-            placeholder="Add part(s) (e.g. 20x BC547, 10k resistor, #1 Phillips)..."
+            placeholder="Add items (e.g., 20x M3 screws, 10mm socket, #1 Phillips)..."
             onkeydown="if (event.key === 'Enter') { event.preventDefault(); addItemPartToEditor(${safeItemId}); }"
           >
           <button type="button" class="btn btn-secondary btn-sm" onclick="addItemPartToEditor(${safeItemId})">+ Add part</button>
@@ -5288,10 +5344,13 @@ function renderItemNotesSection(item) {
     for (const line of lines) {
       const idx = line.indexOf(':');
       if (idx > 0 && idx < 36) {
-        kvRows.push({
-          k: line.slice(0, idx).trim(),
-          v: line.slice(idx + 1).trim()
-        });
+        const k = line.slice(0, idx).trim();
+        const v = line.slice(idx + 1).trim();
+        if (v) {
+          kvRows.push({ k, v });
+        } else {
+          plainLines.push(k);
+        }
       } else {
         plainLines.push(line);
       }
@@ -5299,16 +5358,16 @@ function renderItemNotesSection(item) {
 
     return `
       <div class="detail-section">
-        <span class="detail-section-title">Notes</span>
+        <h2 class="detail-section-title">Notes</h2>
         ${kvRows.length > 0 ? `
-          <div class="specs-parsed-grid">
+          <dl class="specs-parsed-grid">
             ${kvRows.map(r => `
               <div class="spec-parsed-row">
-                <span class="spec-parsed-k">${escapeHtml(r.k)}</span>
-                <span class="spec-parsed-v">${escapeHtml(r.v)}</span>
+                <dt class="spec-parsed-k">${escapeHtml(r.k)}</dt>
+                <dd class="spec-parsed-v">${escapeHtml(r.v)}</dd>
               </div>
             `).join('')}
-          </div>
+          </dl>
         ` : ''}
         ${plainLines.length > 0 ? `
           <div class="item-notes-box">

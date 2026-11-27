@@ -94,13 +94,13 @@ function syncEditorControlsUI() {
       const names = ['Top-Left', 'Top-Right', 'Bottom-Right', 'Bottom-Left'];
       quadStatus.textContent = `Click corner ${editorState.quadPickIndex + 1}/4: ${names[editorState.quadPickIndex]}`;
     } else {
-      quadStatus.textContent = 'Drag the 4 corners to match the cabinet edges, or click "Click 4 Corners".';
+      quadStatus.textContent = 'Drag the 4 corners to match the edges, or click "Click 4 Corners".';
     }
   }
 
   if (hintEl) {
     hintEl.textContent = isQuad
-      ? 'Align TL, TR, BR, BL with the 4 corners of the cabinet, then click "Flatten & Preview" or "Use Photo".'
+      ? 'Click "Flatten & Preview" to check alignment, or "Use Photo" when ready.'
       : 'Drag the corners to crop. Rotate 90° if the photo is sideways.';
   }
 }

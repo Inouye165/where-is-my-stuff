@@ -35,8 +35,8 @@
   --border-focus: #38bdf8;
 
   --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
 
   --accent-primary: #0ea5e9;
   --accent-primary-hover: #0284c7;
@@ -101,12 +101,12 @@
   --border-focus: #0284c7;
 
   --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
+  --text-secondary: #334155;
+  --text-muted: #475569;
 
   --accent-primary: #0284c7;
   --accent-primary-hover: #0369a1;
-  --accent-text: #0284c7;
+  --accent-text: #0369a1;
   --accent-subtle: rgba(2, 132, 199, 0.1);
   --accent-soft: var(--accent-subtle);
 
@@ -1887,7 +1887,7 @@ textarea {
    3. DRILL-DOWN VIEWS & STICKY TOP CONTEXT BAR
    ========================================================================== */
 .workspace-inner {
-  max-width: 1380px;
+  max-width: 1560px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -2787,11 +2787,12 @@ textarea {
 }
 
 .detail-section-title {
-  font-size: 0.73rem;
+  margin: 0;
+  font-size: 0.82rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
 }
 
 /* In-Use Status Toggle Card */
@@ -2830,13 +2831,18 @@ textarea {
 }
 
 .location-step-item {
+  width: 100%;
+  min-height: 54px;
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  padding: 0.5rem 0.65rem;
+  padding: 0.55rem 0.75rem;
   border-radius: var(--radius-sm);
   background: var(--surface-card);
   border: 1px solid var(--border-subtle);
+  text-align: left;
+  font: inherit;
+  color: inherit;
   cursor: pointer;
   transition: border-color var(--transition-fast);
 }
@@ -2865,11 +2871,16 @@ textarea {
 }
 
 .step-level-tag {
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--text-muted);
+  color: var(--text-secondary);
+}
+
+.step-arrow {
+  color: var(--accent-text);
+  font-weight: 700;
 }
 
 .step-level-val {
@@ -2900,8 +2911,10 @@ textarea {
 }
 
 .qty-stepper-btn {
-  width: 38px;
-  height: 38px;
+  min-width: 40px;
+  min-height: 40px;
+  width: 40px;
+  height: 40px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   background: var(--surface-card);
@@ -2909,6 +2922,16 @@ textarea {
   font-size: 1.15rem;
   font-weight: 700;
   cursor: pointer;
+}
+
+.qty-stepper-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.qty-stepper-unit {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
 }
 
 .qty-stepper-val {
@@ -2920,6 +2943,7 @@ textarea {
 
 /* Specs & Notes */
 .specs-parsed-grid {
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 0.38rem;
@@ -2929,30 +2953,39 @@ textarea {
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.45rem 0.7rem;
+  padding: 0.55rem 0.8rem;
   background: var(--surface-subtle);
   border-radius: var(--radius-sm);
-  font-size: 0.82rem;
+  font-size: 0.9rem;
 }
 
 .spec-parsed-k {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-weight: 600;
 }
 
 .spec-parsed-v {
+  margin: 0;
   color: var(--text-primary);
   font-weight: 600;
   text-align: right;
 }
 
 .item-notes-box {
-  font-size: 0.86rem;
-  color: var(--text-secondary);
+  font-size: 0.92rem;
+  color: var(--text-primary);
   background: var(--surface-subtle);
-  padding: 0.8rem;
+  padding: 0.85rem;
   border-radius: var(--radius-md);
   line-height: 1.5;
+}
+
+.item-notes-box p {
+  margin: 0 0 0.4rem;
+}
+
+.item-notes-box p:last-child {
+  margin-bottom: 0;
 }
 
 /* Detail Photos Gallery */
@@ -3831,14 +3864,25 @@ textarea {
   color: var(--text-muted);
 }
 
+.detail-photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
 .detail-photo-edit-btn {
-  margin-top: 0.25rem;
-  padding: 0.18rem 0.45rem;
-  font-size: 0.72rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 32px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
   border-radius: 6px;
   border: 1px solid var(--border-subtle);
   background: var(--surface-raised);
-  color: var(--text-secondary);
+  color: var(--text-primary);
   cursor: pointer;
 }
 
@@ -4498,13 +4542,13 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  min-height: 32px;
-  padding: 0.3rem 0.75rem;
+  min-height: 36px;
+  padding: 0.35rem 0.8rem;
   border-radius: 999px;
   border: 1px dashed var(--border-subtle);
   background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.8rem;
+  color: var(--text-primary);
+  font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
   transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
@@ -4573,13 +4617,16 @@ textarea {
 }
 
 .item-tag-chip {
-  font-size: 0.76rem;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  font-size: 0.8rem;
   font-weight: 600;
-  padding: 0.24rem 0.6rem;
+  padding: 0.25rem 0.7rem;
   border-radius: 999px;
   background: var(--surface-subtle);
   border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .item-view-photos-grid {
@@ -4596,6 +4643,63 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
+}
+
+/* Shared Accessible Photo, Hero & Item Detail Layout Rules */
+.place-hero-thumb-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+button.place-hero-emoji {
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  padding: 0;
+}
+
+.empty-photo-muted {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+button.detail-photo-thumb {
+  width: 100%;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.detail-photo-thumb.is-empty-photo {
+  border: 2px dashed var(--border-strong);
+  background: var(--surface-subtle);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  color: var(--accent-text);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.detail-photo-thumb.is-empty-photo:hover,
+.detail-photo-thumb.is-empty-photo:focus-visible {
+  border-color: var(--accent-primary);
+  background: var(--accent-subtle);
+}
+
+.empty-photo-cta {
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.is-item-detail-page .item-detail-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .item-audit-row {
@@ -5894,8 +5998,9 @@ textarea {
    Drawer Carousel, Quick Add/Remove, Phone Multi-Photo & AI Scan UI
    ========================================================================== */
 .btn-xs {
-  padding: 0.25rem 0.55rem;
-  font-size: 0.76rem;
+  min-height: 30px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8rem;
   line-height: 1.25;
 }
 
@@ -10823,12 +10928,13 @@ textarea {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.2rem 0.48rem;
+  min-height: 28px;
+  padding: 0.25rem 0.55rem;
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-muted);
-  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.12s ease, color 0.12s ease;
@@ -10885,21 +10991,22 @@ textarea {
 }
 
 .rail-view-label {
-  font-size: 0.68rem;
+  font-size: 0.76rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
 }
 
 .rail-view-reset {
   border: none;
   background: transparent;
   color: var(--accent-text);
-  font-size: 0.68rem;
+  font-size: 0.76rem;
   font-weight: 600;
   cursor: pointer;
-  padding: 0;
+  min-height: 24px;
+  padding: 0 0.25rem;
 }
 
 .rail-view-reset:hover {
@@ -10908,7 +11015,7 @@ textarea {
 
 .rail-zoom-stepper {
   display: grid;
-  grid-template-columns: 28px 1fr 28px;
+  grid-template-columns: 32px 1fr 32px;
   align-items: center;
   background: var(--bg-canvas);
   border: 1px solid var(--border-subtle);
@@ -10918,11 +11025,11 @@ textarea {
 
 .rail-zoom-step-btn,
 .rail-zoom-readout {
-  height: 26px;
+  height: 30px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 700;
   cursor: pointer;
   display: inline-flex;
@@ -10933,7 +11040,7 @@ textarea {
 
 .rail-zoom-readout {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   color: var(--text-primary);
   border-left: 1px solid var(--border-subtle);
   border-right: 1px solid var(--border-subtle);
@@ -10956,13 +11063,13 @@ textarea {
   align-items: center;
   justify-content: center;
   gap: 0.3rem;
-  height: 26px;
-  padding: 0 0.4rem;
+  height: 30px;
+  padding: 0 0.45rem;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   background: transparent;
-  color: var(--text-muted);
-  font-size: 0.7rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;

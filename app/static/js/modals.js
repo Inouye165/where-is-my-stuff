@@ -63,7 +63,7 @@ function syncAddSheetContext() {
     placeDesc.textContent = 'Set up a bin, shelf, or multi-drawer organizer here.';
   } else if (loc) {
     placeTitle.textContent = `New Drawer or Box in ${loc.name}`;
-    placeDesc.textContent = 'Add a drawer, bin, or box inside this container.';
+    placeDesc.textContent = 'Organize items inside this container.';
   } else {
     placeTitle.textContent = 'New Space or Container';
     placeDesc.textContent = 'Create a room, storage area, bin, or multi-drawer organizer.';
@@ -503,7 +503,7 @@ export async function handleStorageFormSubmit(e) {
       if (rawParent === '__new__') {
         const inlineName = document.getElementById('inline-room-name').value.trim();
         if (!inlineName) {
-          showToast('Please enter a name for the new room.', 'error');
+          showToast('Please enter a name for the new space.', 'error');
           return;
         }
         const createdRoom = await ensureRoomExists(inlineName, '🏠');
@@ -566,8 +566,8 @@ export async function handleStorageFormSubmit(e) {
       }
 
       const saved = editId
-        ? await apiPatch(`/api/v1/locations/${editId}`, payload, 'Could not save place.')
-        : await apiPost('/api/v1/locations', payload, 'Could not save place.');
+        ? await apiPatch(`/api/v1/locations/${editId}`, payload, 'Could not save space.')
+        : await apiPost('/api/v1/locations', payload, 'Could not save space.');
 
       if (kind === 'room') {
         const emoji = document.getElementById('room-emoji-input').value || '🏠';
@@ -598,12 +598,12 @@ export async function handleStorageDelete() {
   const editId = document.getElementById('edit-storage-id').value;
   if (!editId) return;
   const loc = state.locationMap.get(parseInt(editId, 10));
-  if (!confirm(`Remove "${loc ? loc.name : 'this place'}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`)) return;
+  if (!confirm(`Delete "${loc ? loc.name : 'this space'}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`)) return;
 
   return withSubmitLock('storage-delete-btn', 'Deleting...', async () => {
     try {
       const parentId = loc?.parent_id || null;
-      await apiDelete(`/api/v1/locations/${editId}`, 'Could not delete place.');
+      await apiDelete(`/api/v1/locations/${editId}`, 'Could not delete space.');
       closeModal('add-storage-modal', true);
       showToast('Deleted.');
       await loadAllData();
@@ -708,10 +708,10 @@ function updateVisionStatusUI() {
     }
   } else {
     statusEl.textContent = provider === 'local'
-      ? 'Ollama not detected locally'
-      : 'API key not set in .env';
+      ? 'Ollama not running'
+      : 'Not set up yet';
     statusEl.className = 'ai-provider-pill warn';
-    if (quietBtn) quietBtn.textContent = 'AI: Configure';
+    if (quietBtn) quietBtn.textContent = 'AI: Set up';
   }
 }
 
@@ -724,7 +724,7 @@ export function onVisionProviderChange() {
 async function loadVisionProviderStatus() {
   const statusEl = document.getElementById('rapid-vision-status');
   if (statusEl) {
-    statusEl.textContent = 'Checking models...';
+    statusEl.textContent = 'Checking AI scanner…';
     statusEl.className = 'ai-provider-pill';
   }
   try {
@@ -851,11 +851,11 @@ function syncRapidStageUI() {
   const subtitleEl = document.getElementById('rapid-modal-subtitle');
   if (titleEl && subtitleEl) {
     if (showLlmStage) {
-      titleEl.textContent = 'Import from Gemini / ChatGPT';
-      subtitleEl.textContent = 'Copy the prompt, send it with your photo, then paste the JSON reply';
+      titleEl.textContent = 'Paste a list from Gemini / ChatGPT';
+      subtitleEl.textContent = 'Copy the prompt, send it with your photo, then paste the reply';
     } else {
       titleEl.textContent = 'Scan with Camera';
-      subtitleEl.textContent = 'Snap or upload a photo — AI lists the parts for you';
+      subtitleEl.textContent = 'Snap or upload a photo — AI lists the items for you';
     }
   }
 
@@ -1001,7 +1001,7 @@ export function setRapidSaveMode(mode, explicit = true) {
   }
   if (modalSub) {
     modalSub.textContent = rapidSaveMode === 'box'
-      ? 'Saves your photo(s) as 1 Box / Kit & crops each item inside'
+      ? 'Saves your photos as 1 Box / Kit and crops each item inside'
       : 'Snap or upload a photo — AI lists the items for you';
   }
 
@@ -1023,9 +1023,9 @@ export function setRapidSaveMode(mode, explicit = true) {
   }
   if (hintEl) {
     if (rapidSaveMode === 'box') {
-      hintEl.textContent = 'Saves all scanned photo(s) on 1 Box / Kit in this location, and saves each checked item inside with its cropped photo.';
+      hintEl.textContent = 'Each checked item is saved inside this Box / Kit with its cropped photo.';
     } else if (rapidSaveMode === 'assortment') {
-      hintEl.textContent = 'Saves 1 grouped checklist item (e.g. Assorted Tools or Resistor Kit) with a searchable, editable contents list.';
+      hintEl.textContent = 'Saves 1 grouped checklist item (e.g., Assorted Tools or Fastener Kit) with a searchable, editable contents list.';
     } else {
       hintEl.textContent = 'Saves each checked item individually in this location.';
     }
@@ -1125,7 +1125,7 @@ export async function copyLlmInventoryPrompt() {
     await navigator.clipboard.writeText(promptText);
     showToast('Prompt copied! Paste it + your photo into Gemini or ChatGPT.');
   } catch {
-    window.prompt('Copy this LLM prompt:', promptText);
+    window.prompt('Copy this prompt:', promptText);
   }
 }
 
@@ -1133,13 +1133,13 @@ export function importLlmJsonToRapidList() {
   const textarea = document.getElementById('rapid-llm-json-input');
   const raw = (textarea?.value || '').trim();
   if (!raw) {
-    showToast('Paste the JSON reply from Gemini/ChatGPT first.', 'error');
+    showToast('Paste the reply from Gemini or ChatGPT first.', 'error');
     textarea?.focus();
     return;
   }
   const jsonResult = parseJsonInventoryInput(raw);
   if (!jsonResult || !jsonResult.items.length) {
-    showToast('Could not find valid JSON items. Make sure you pasted the JSON from Gemini/ChatGPT.', 'error');
+    showToast('Could not read any items from that reply. Make sure you pasted the full reply from Gemini or ChatGPT.', 'error');
     textarea?.focus();
     return;
   }
@@ -1175,7 +1175,7 @@ export function importLlmJsonToRapidList() {
     locId
   );
   syncRapidStageUI();
-  showToast(`Loaded ${pluralize(jsonResult.items.length, 'item')} from JSON!`);
+  showToast(`Loaded ${pluralize(jsonResult.items.length, 'item')}!`);
 }
 
 function parseManualPartEntries(rawText) {
@@ -1265,7 +1265,7 @@ export function handleRapidAddPartPaste(e) {
     if (input) input.value = '';
     const added = addPartToRapidList(`${prefix}${text}`);
     if (looksLikeJson && added > 0) {
-      showToast(`Imported ${pluralize(added, 'item')} from JSON!`);
+      showToast(`Imported ${pluralize(added, 'item')}!`);
     }
   }
 }
@@ -1276,7 +1276,7 @@ export function addPartToRapidList(rawOverride = null) {
   const entries = parseManualPartEntries(raw);
   if (!entries.length) {
     if (rawOverride === null) {
-      showToast('Type a part name or paste a JSON/text list first.', 'error');
+      showToast('Type an item name or paste a list first.', 'error');
       input?.focus();
     }
     return 0;
@@ -1422,11 +1422,11 @@ function renderRapidAiResults(items, message, locId = null) {
     }
   }
 
-  const baseMessage = message || `Parts list (${pluralize(rapidDetectedItems.length, 'part')})`;
+  const baseMessage = message || `Items list (${pluralize(rapidDetectedItems.length, 'item')})`;
   const boxDupSummary = existingInBin.length > 0
     ? (dupInBoxCount > 0
-      ? ` · ${dupInBoxCount} already in box (unchecked — check to add anyway)`
-      : ' · 0 already in box')
+      ? ` · ${dupInBoxCount} already here (unchecked)`
+      : ' · 0 already here')
     : '';
 
   box.style.display = 'block';
@@ -1440,7 +1440,7 @@ function renderRapidAiResults(items, message, locId = null) {
       <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
         ${hasAnyCrop ? `<button type="button" class="btn btn-secondary btn-xs" onclick="clearRapidAiCrops()" title="Remove AI crop thumbnails if boxes were misaligned">Clear crops</button>` : ''}
         <button type="button" class="btn btn-secondary btn-xs" onclick="toggleAllRapidDetectedItems(true)">Select all</button>
-        <button type="button" class="btn btn-secondary btn-xs" onclick="toggleAllRapidDetectedItems(false)">Clear</button>
+        <button type="button" class="btn btn-secondary btn-xs" onclick="toggleAllRapidDetectedItems(false)">Deselect all</button>
       </div>
     </div>
     <div class="ai-results-list">
@@ -1472,7 +1472,7 @@ function renderRapidAiResults(items, message, locId = null) {
                 aria-label="Part name"
                 oninput="updateRapidDetectedItemField(${idx}, 'name', this.value)"
               >
-              ${alreadyInBin ? `<span class="drawer-badge-count" title="Already exists in this container — check to add anyway">Already in box</span>` : ''}
+              ${alreadyInBin ? `<span class="drawer-badge-count" title="Already in this container — check to add anyway">Already here</span>` : ''}
               ${!isBox ? `
                 <div class="ai-edit-qty-wrap" title="Quantity">
                   <span class="ai-edit-qty-prefix">×</span>
@@ -1505,8 +1505,8 @@ function renderRapidAiResults(items, message, locId = null) {
               <button
                 type="button"
                 class="ai-edit-del-btn"
-                title="Remove part"
-                aria-label="Remove part"
+                title="Remove item"
+                aria-label="Remove item"
                 onclick="removeRapidDetectedItem(${idx})"
               >×</button>
             </div>
@@ -1550,7 +1550,6 @@ function renderRapidAiResults(items, message, locId = null) {
                 <span class="ai-row-edit-hint">Edit</span>
               </button>
             ` : '')}
-            ${alreadyInBin ? `<div class="ai-already-in-bin-hint">Already in this bin (unchecked by default)</div>` : ''}
           </div>
         </div>
       `;
@@ -1605,7 +1604,7 @@ export function applyDetectedItemsToText() {
     if (firstCat) catInput.value = firstCat;
   }
   const dupeNote = skippedDupes > 0 ? ` (${skippedDupes} duplicate skipped)` : '';
-  showToast(`Copied ${pluralize(lines.length, 'part')} to text lines${dupeNote}.`);
+  showToast(`Copied ${pluralize(lines.length, 'item')} to list${dupeNote}.`);
 }
 
 function normalizePartKey(val) {
@@ -2090,10 +2089,10 @@ export async function runRapidAiScan() {
         ? `Scanned ${successCount}/${totalScanned} photos — ${pluralize(combinedItems.length, 'unique item')}.`
         : (lastMessage || lastFailureMessage);
       if (expectedCount && combinedItems.length < expectedCount) {
-        summaryMsg = `Found ${combinedItems.length} of ${expectedCount} expected types — add another photo or paste an LLM JSON list below.`;
+        summaryMsg = `Found ${combinedItems.length} of ${expectedCount} expected item types — add another photo or paste a list below.`;
       }
       if (totalScanned > 1 && failedCount > 0 && successCount > 0) {
-        summaryMsg += ` (${failedCount} failed: ${lastFailureMessage || 'check logs/wims.log'})`;
+        summaryMsg += ` (${failedCount} failed${lastFailureMessage ? `: ${lastFailureMessage}` : ''})`;
       }
 
       if (rapidScanController === scanController) {
@@ -2108,7 +2107,7 @@ export async function runRapidAiScan() {
       document.getElementById('rapid-ai-results')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
       if (successCount === 0) {
-        showToast(lastFailureMessage || 'AI scan did not return items.', 'error');
+        showToast(lastFailureMessage || 'No items found in this photo.', 'error');
       } else if (failedCount > 0) {
         showToast(`Scanned ${successCount}/${totalScanned} photos (${failedCount} failed).`, 'error');
       } else if (mergedAiItems.length === 0) {
@@ -2139,7 +2138,7 @@ export async function runRapidAiScan() {
 export async function submitRapidEntry() {
   if (rapidIsScanning) {
     const choice = await showScanAbortPrompt(
-      'The AI scan is still running. Do you want to abort the scan and save now without waiting for the remaining results?'
+      'The AI scan is still running. Do you want to stop the scan and save now without waiting for the remaining results?'
     );
     if (choice !== 'abort') {
       return;
@@ -2168,7 +2167,7 @@ export async function submitRapidEntry() {
   const assortmentLabel = (document.getElementById('rapid-assortment-label')?.value || '').trim().slice(0, 40) || null;
 
   if (!checkedParts.length && !text && !rapidSelectedFiles.length && !rapidRemotePhotoPath && !rapidPhotoId) {
-    showToast('Scan a photo or add at least one part to save.', 'error');
+    showToast('Scan a photo or add at least one item to save.', 'error');
     return;
   }
 
@@ -2340,7 +2339,7 @@ function setQuickPhotoFile(file) {
   const icon = document.getElementById('quick-photo-icon');
 
   if (file) {
-    if (label) label.textContent = file.name || 'Pasted image';
+    if (label) label.textContent = file.name || 'Pasted photo';
     if (preview) {
       pendingQuickPhotoPreviewUrl = URL.createObjectURL(file);
       preview.src = pendingQuickPhotoPreviewUrl;
@@ -2348,7 +2347,7 @@ function setQuickPhotoFile(file) {
     }
     if (icon) icon.style.display = 'none';
   } else {
-    if (label) label.textContent = 'Tap, choose, or paste photo (Ctrl+V)';
+    if (label) label.textContent = 'Tap to choose, or paste (Ctrl+V)';
     if (preview) {
       preview.removeAttribute('src');
       preview.style.display = 'none';
@@ -2389,7 +2388,7 @@ function bindQuickPhotoPasteAndDrop() {
     if (!imgFile) return;
     e.preventDefault();
     setQuickPhotoFile(imgFile);
-    showToast('Image pasted! Click Save photo.');
+    showToast('Photo pasted! Click Save photo.');
   });
 
   const dropzone = document.getElementById('quick-photo-dropzone');

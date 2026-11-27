@@ -331,7 +331,7 @@ export function populateLocationDropdowns() {
   const itemSelect = document.getElementById('item-location-select');
   if (itemSelect) {
     const prev = itemSelect.value;
-    itemSelect.innerHTML = '<option value="">-- Choose a box, drawer, container, or room --</option>';
+    itemSelect.innerHTML = '<option value="">Choose a drawer, container, or space</option>';
     for (const loc of allLocations) {
       const opt = document.createElement('option');
       opt.value = loc.id;
@@ -381,12 +381,12 @@ export function populateStorageParentDropdown(kind, selectedParentId = null, exc
   if (kind === 'room') {
     const topOpt = document.createElement('option');
     topOpt.value = '';
-    topOpt.textContent = 'Top-level room (on Places)';
+    topOpt.textContent = 'Top-level space';
     parentSelect.appendChild(topOpt);
 
     const newRoomOpt = document.createElement('option');
     newRoomOpt.value = '__new__';
-    newRoomOpt.textContent = '+ Create a new room...';
+    newRoomOpt.textContent = '+ Create a new space…';
     parentSelect.appendChild(newRoomOpt);
 
     const allRooms = Array.from(state.locationMap.values())
@@ -410,7 +410,7 @@ export function populateStorageParentDropdown(kind, selectedParentId = null, exc
 
     const newRoomOpt = document.createElement('option');
     newRoomOpt.value = '__new__';
-    newRoomOpt.textContent = '+ Create a new room...';
+    newRoomOpt.textContent = '+ Create a new space…';
     parentSelect.appendChild(newRoomOpt);
 
     for (const room of state.namedRooms) {
@@ -556,7 +556,7 @@ function renderBootLoadingState(title, subtitle, showRetry = false) {
       retryBtn.textContent = 'Retry now';
       retryBtn.addEventListener('click', () => {
         initialRetryCount = 0;
-        renderBootLoadingState('Loading inventory...', 'Connecting to WIMS server', false);
+        renderBootLoadingState('Loading inventory…', 'Connecting to WhereIsMyStuff…', false);
         loadAllData();
       });
       container.appendChild(retryBtn);
@@ -602,7 +602,7 @@ export async function loadAllData() {
   try {
     const [itemPage, locations] = await Promise.all([
       loadAllItemsPaginated(reqSeq),
-      apiGet('/api/v1/locations/tree', 'Could not load rooms and containers.')
+      apiGet('/api/v1/locations/tree', 'Could not load spaces and containers.')
     ]);
     if (reqSeq !== loadAllDataSeq || !itemPage) return;
 
@@ -630,8 +630,8 @@ export async function loadAllData() {
     if (!hasCompletedInitialLoad && isConnectionError && initialRetryCount < MAX_INITIAL_RETRIES) {
       initialRetryCount += 1;
       renderBootLoadingState(
-        'Starting WIMS...',
-        `Waiting for server to come up (attempt ${initialRetryCount}/${MAX_INITIAL_RETRIES})`,
+        'Starting WhereIsMyStuff…',
+        `Waiting for WhereIsMyStuff to start (attempt ${initialRetryCount}/${MAX_INITIAL_RETRIES})`,
         false
       );
       initialRetryTimer = setTimeout(() => {
@@ -643,8 +643,8 @@ export async function loadAllData() {
 
     if (!hasCompletedInitialLoad) {
       renderBootLoadingState(
-        'Unable to connect to WIMS server',
-        msg || 'Make sure the server is running and try again.',
+        'Unable to connect to WhereIsMyStuff',
+        msg || 'Make sure WhereIsMyStuff is running and try again.',
         true
       );
     }

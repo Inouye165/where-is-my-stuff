@@ -41,7 +41,7 @@ function showExpired(msg) {
 
 async function init() {
   if (!token) {
-    showExpired('Missing capture token. Scan the QR code on your computer screen.');
+    showExpired('Scan the QR code on your computer screen to start.');
     return;
   }
   try {
@@ -59,7 +59,7 @@ async function init() {
       titleEl.textContent = data.label;
     }
   } catch {
-    setStatus('Could not reach server on Wi-Fi.', 'error');
+    setStatus('Could not reach your computer on Wi-Fi.', 'error');
   }
 }
 
@@ -103,7 +103,7 @@ async function handleFiles(fileList) {
     triggerEl.classList.remove('disabled');
     galleryTriggerEl.style.pointerEvents = 'auto';
     btnLabelEl.textContent = 'Take another photo';
-    subtitleEl.textContent = 'Photos sent! Keep snapping or close this tab when finished.';
+    subtitleEl.textContent = 'Keep snapping or close this tab when finished.';
     setStatus(`✓ ${uploadedCount} ${uploadedCount === 1 ? 'photo' : 'photos'} sent to your computer!`, 'success');
   } catch (err) {
     triggerEl.classList.remove('disabled');

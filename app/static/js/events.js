@@ -88,6 +88,17 @@ export function initDelegatedEvents(root = typeof document !== 'undefined' ? doc
   });
 
   root.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      const btnRole = event.target?.closest?.('[role="button"][tabindex="0"]');
+      if (btnRole && event.target === btnRole) {
+        const tag = (btnRole.tagName || '').toUpperCase();
+        if (!['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) {
+          event.preventDefault();
+          btnRole.click();
+          return;
+        }
+      }
+    }
     const target = event.target?.closest?.('[data-keydown-action]');
     if (target) {
       void dispatchElementAction(target, 'keydownAction', event);

@@ -74,8 +74,8 @@ async function showExpired(msg) {
   zoneBanner.classList.remove('active');
   const redirected = await tryAutoJoinActiveSetupSession();
   if (redirected) return;
-  subtitleEl.textContent = msg || 'This QR link has expired. Generate a new one on your computer.';
-  setStatus('Session expired', 'error');
+  subtitleEl.textContent = msg || 'This QR link has expired. Open a new one on your computer.';
+  setStatus('Link expired', 'error');
 }
 
 function colLetter(c) {
@@ -98,9 +98,9 @@ function renderZoneBanner(session) {
 
   activeZoneId = zone.zone_id;
   zoneBanner.classList.add('active');
-  zoneTitle.textContent = `Close-up requested: ${zone.label}`;
-  zoneSub.textContent = `Frame compartments ${zone.label} (${zone.slot_count} ${zone.slot_count === 1 ? 'slot' : 'slots'}) up close and snap 1 photo.`;
-  subtitleEl.textContent = `Get closer to ${zone.label} so the small label text is crisp.`;
+  zoneTitle.textContent = `Close-up needed: ${zone.label}`;
+  zoneSub.textContent = `Frame ${zone.label} (${zone.slot_count} ${zone.slot_count === 1 ? 'compartment' : 'compartments'}) up close so the labels are crisp.`;
+  subtitleEl.textContent = `Take 1 close-up photo of ${zone.label}.`;
   btnLabelEl.textContent = `Snap close-up of ${zone.label}`;
 
   const rows = Math.max(1, Math.min(26, Number(zone.grid_rows) || 1));
@@ -153,8 +153,8 @@ async function handleFile(file) {
   if (!file || !token) return;
   triggerEl.classList.add('disabled');
   galleryTriggerEl.style.pointerEvents = 'none';
-  btnLabelEl.textContent = 'Sending full-res photo...';
-  setStatus('Uploading high-res image...', 'info');
+  btnLabelEl.textContent = 'Uploading…';
+  setStatus('Uploading high-res photo…', 'info');
 
   try {
     // Preserve up to 4096px so dense organizer stickers stay legible on the first pass.

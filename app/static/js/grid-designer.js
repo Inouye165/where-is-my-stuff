@@ -1420,7 +1420,7 @@ function renderDesignerCanvas() {
   if (designer.selectedKeys.size === 0) {
     inspectorEl.innerHTML = `
       <div class="gd-inspector-hint">
-        Tap a drawer to rename, resize, or combine it with neighbours. Click <strong>—</strong> next to a row number to add a section divider.
+        Click <strong>—</strong> next to a row number to add a section divider.
       </div>
     `;
   } else if (designer.selectedKeys.size === 1) {
@@ -1688,11 +1688,11 @@ async function executeGridSlotMove(unitId, payload, successMessage) {
   if (gridViewDrag.inFlight) return;
   gridViewDrag.inFlight = true;
   try {
-    await apiPost(`/api/v1/locations/${Number(unitId)}/grid/move`, payload, 'Could not move bin.');
+    await apiPost(`/api/v1/locations/${Number(unitId)}/grid/move`, payload, 'Could not move drawer.');
     await loadAllData();
     showToast(successMessage);
   } catch (err) {
-    showToast(err?.message || 'Could not move bin.', 'info');
+    showToast(err?.message || 'Could not move drawer.', 'info');
   } finally {
     gridViewDrag.inFlight = false;
   }
@@ -1745,7 +1745,7 @@ export async function handleGridSlotDropOnSlot(event, unitId, targetSlotId) {
   await executeGridSlotMove(
     unitId,
     { source_id: src.slotId, target_id: targetId },
-    'Bins swapped'
+    'Drawers swapped'
   );
 }
 
@@ -1761,7 +1761,7 @@ export async function handleGridSlotDropOnEmpty(event, unitId, targetRow, target
   await executeGridSlotMove(
     unitId,
     { source_id: src.slotId, target_row: Number(targetRow), target_col: Number(targetCol) },
-    'Bin moved'
+    'Drawer moved'
   );
 }
 

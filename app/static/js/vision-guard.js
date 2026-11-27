@@ -23,19 +23,19 @@ function buildProviderExplanation(selectedProvider, meta) {
 
   if (selectedProvider === 'gemini' && !geminiInfo.available) {
     return {
-      headline: 'Google Gemini API key is not configured',
-      detail: 'Add GEMINI_API_KEY to your .env file and restart the server, or switch to an available provider below.',
+      headline: 'Google Gemini is not set up yet',
+      detail: 'Add your Gemini API key in settings or switch to an available scanner below.',
     };
   }
   if (selectedProvider === 'openai' && !openaiInfo.available) {
     return {
-      headline: 'OpenAI API key is not configured',
-      detail: 'Add OPENAI_API_KEY to your .env file and restart the server, or switch to an available provider below.',
+      headline: 'OpenAI is not set up yet',
+      detail: 'Add your OpenAI API key in settings or switch to an available scanner below.',
     };
   }
   return {
     headline: 'No AI vision model is running right now',
-    detail: `Local Ollama (${localInfo.base_url || 'http://localhost:11434'}) could not be reached, and no cloud API key (Gemini or OpenAI) is set. Start Ollama on your computer ("ollama serve") so your local model (${localInfo.model || 'qwen2.5vl:7b'}) can scan photos.`,
+    detail: `Local AI (Ollama: ${localInfo.model || 'qwen2.5vl:7b'}) could not be reached, and no cloud scanner is set up. Start Ollama on your computer so photos can be scanned automatically.`,
   };
 }
 
@@ -61,8 +61,8 @@ function renderNoModelModal(selectedProvider, meta) {
         const isReady = Boolean(info.available);
         const label = info.label || key;
         const sub = key === 'local'
-          ? (isReady ? `Running (${info.model || 'ready'})` : `Not running at ${info.base_url || 'http://localhost:11434'}`)
-          : (isReady ? `Ready (${info.model || 'API key set'})` : 'API key not set in .env');
+          ? (isReady ? `Running (${info.model || 'ready'})` : 'Not running')
+          : (isReady ? `Ready (${info.model || 'connected'})` : 'Not set up');
         return `
           <div class="nomodel-provider-row ${isReady ? 'is-ready' : 'is-off'}">
             <div>
@@ -83,7 +83,7 @@ function renderNoModelModal(selectedProvider, meta) {
 
     ${availableAlternatives.length === 0 ? `
       <p class="nomodel-tip">
-        Quick fix: open a terminal and run <code>ollama serve</code>, then click <strong>Re-check &amp; Scan</strong> below.
+        Start Ollama on your computer (<code>ollama serve</code>), then click <strong>Re-check &amp; Scan</strong> below.
       </p>
     ` : ''}
   `;
@@ -124,10 +124,10 @@ export async function retryVisionModelCheck() {
       }
     } else {
       renderNoModelModal(meta?.default_provider || 'local', meta);
-      showToast('Still no vision model reachable. Make sure Ollama is running.', 'error');
+      showToast('Still no AI scanner available. Make sure Ollama is running.', 'error');
     }
   } catch {
-    showToast('Could not check vision models.', 'error');
+    showToast('Could not check AI scanners.', 'error');
   } finally {
     if (retryBtn) {
       retryBtn.disabled = false;

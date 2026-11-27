@@ -222,7 +222,7 @@ export function renderMobileCabinetDiagram(unit, activeDrawer = null, options = 
             ${clickAttr}
           >
             <span class="m-drawer-pull" aria-hidden="true"></span>
-            <span class="m-cab-compact-label">${escapeHtml(isSelected && !interactive ? 'HERE' : coord)}</span>
+            <span class="m-cab-compact-label">${escapeHtml(isSelected && !interactive ? 'Here' : coord)}</span>
           </${tag}>
         `;
       }
@@ -302,7 +302,7 @@ function renderFallbackDrawerButton(d, activeId, interactive, compact = false) {
     return `
       <div class="m-cab-slot is-compact ${isSelected ? 'is-selected' : ''} ${photos.length > 0 ? 'has-photos' : ''}">
         <span class="m-drawer-pull" aria-hidden="true"></span>
-        <span class="m-cab-compact-label">${escapeHtml(d.name)}${isSelected ? ' · HERE' : ''}</span>
+        <span class="m-cab-compact-label">${escapeHtml(d.name)}${isSelected ? ' · Here' : ''}</span>
       </div>
     `;
   }
@@ -887,7 +887,7 @@ function renderTouchRoomsStep() {
 
     ${rooms.length === 0 && unassigned.length === 0 ? `
       <div class="m-card" style="text-align: center; padding: 2rem 1.25rem;">
-        <p class="m-page-sub">No rooms set up yet. Set up your rooms and cabinets on your computer first.</p>
+        <p class="m-page-sub">No rooms set up yet. Add a room on your computer or tap Add Storage Unit to get started.</p>
       </div>
     ` : `
       <div class="m-choice-grid">
@@ -1071,8 +1071,8 @@ function renderTouchDrawerCapturePanel(unit, drawers, drawer, showMiniDiagram = 
                   <button
                     type="button"
                     class="m-photo-remove-btn"
-                    title="Delete photo"
-                    aria-label="Delete photo"
+                    title="Remove photo"
+                    aria-label="Remove photo"
                     onclick="event.stopPropagation(); deleteTouchDrawerPhoto(${safeDrawerId}, ${Number(p.id)})"
                   >×</button>
                 ` : ''}
@@ -1115,7 +1115,7 @@ function renderTouchDrawerCapturePanel(unit, drawers, drawer, showMiniDiagram = 
             ${hasNext ? '' : 'disabled'}
             onclick="stepTouchDrawer(1)"
           >
-            Next Drawer ${lucideIcon('arrowRight', '', 18)}
+            Next ${lucideIcon('arrowRight', '', 18)}
           </button>
         ` : '')}
       </div>

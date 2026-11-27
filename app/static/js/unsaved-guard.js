@@ -84,7 +84,7 @@ export function resolveScanAbortPrompt(choice = 'continue') {
 }
 
 export function showScanAbortPrompt(
-  message = 'The AI scan is still running. Do you want to abort the scan and save now without waiting for the remaining results?'
+  message = 'The AI scan is still running. Do you want to stop the scan and save now without waiting for the remaining results?'
 ) {
   const modal = document.getElementById('scan-abort-confirm-modal');
   const msgEl = document.getElementById('scan-abort-confirm-msg');
@@ -115,7 +115,7 @@ export async function guardModalClose(modalId, forceCloseFn) {
   }
 
   if (isScanning && !dirty) {
-    const choice = await showUnsavedPrompt('AI scan is still running. Discard and stop scanning?');
+    const choice = await showUnsavedPrompt('The AI scan is still running. Discard and stop scanning?');
     if (choice === 'discard') {
       markModalClean(modalId);
       forceCloseFn(modalId);

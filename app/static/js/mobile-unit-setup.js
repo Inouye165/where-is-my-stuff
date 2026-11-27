@@ -369,7 +369,7 @@ function renderStep2ExteriorPhoto() {
         <label class="setup-capture-btn">
           <input type="file" id="setup-exterior-camera" accept="image/*" capture="environment" style="display: none;">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></svg>
-          <span>${setupState.uploadingExterior ? 'Transferring…' : (extPhoto ? 'Retake Photo' : 'Take Photo')}</span>
+          <span>${setupState.uploadingExterior ? 'Uploading…' : (extPhoto ? 'Retake Photo' : 'Take Photo')}</span>
         </label>
 
         <label class="setup-library-btn">
@@ -512,7 +512,7 @@ function renderStep3DrawerPhotos() {
           <div class="setup-secondary-actions-row">
             <label class="setup-secondary-action">
               <input type="file" id="setup-drawer-gallery" accept="image/*" multiple style="display: none;">
-              <span>Upload from library</span>
+              <span>Choose from photo library</span>
             </label>
             ${totalPhotos > 0 ? `
               <button type="button" id="setup-retake-last-btn" class="setup-secondary-action is-danger">
@@ -533,7 +533,7 @@ function renderStep3DrawerPhotos() {
           <div class="setup-secondary-actions-row">
             <label class="setup-secondary-action">
               <input type="file" id="setup-drawer-gallery" accept="image/*" multiple style="display: none;">
-              <span>Select Multiple</span>
+              <span>Choose from photo library</span>
             </label>
             ${totalPhotos > 0 ? `
               <button type="button" id="setup-retake-last-btn" class="setup-secondary-action is-danger">
@@ -562,7 +562,7 @@ function renderStep3DrawerPhotos() {
             <div class="setup-thumb-card is-transferring">
               ${p.previewUrl ? `<img src="${escapeHtml(p.previewUrl)}" alt="Uploading photo">` : ''}
               <span class="setup-thumb-status ${p.status === 'error' ? 'is-error' : ''}">
-                ${p.status === 'error' ? 'Failed' : 'Sending…'}
+                ${p.status === 'error' ? 'Failed' : 'Uploading…'}
               </span>
               ${p.status === 'error' ? `<button type="button" class="setup-thumb-remove" data-dismiss-upload="${Number(p.localId)}" aria-label="Dismiss failed upload" title="Dismiss">×</button>` : ''}
             </div>
@@ -1194,7 +1194,7 @@ async function refreshSession() {
   const data = await apiJson(`/api/v1/unit-setup/sessions/${encodeURIComponent(token)}`);
   setupState.session = data;
   if (data.status === 'expired') {
-    setupState.errorMessage = 'This setup QR code has expired. Generate a new one on your computer.';
+    setupState.errorMessage = 'This QR link has expired. Open a new one on your computer.';
   }
   return data;
 }
@@ -1210,7 +1210,7 @@ function bindStep2Handlers() {
     try {
       await uploadPhotoToLocation(unitId, file, 'container');
       await refreshSession();
-      showSetupToast('Exterior photo sent to desktop');
+      showSetupToast('Outside photo sent to computer');
     } catch (err) {
       showSetupToast(err.message || 'Could not upload photo', true);
     } finally {

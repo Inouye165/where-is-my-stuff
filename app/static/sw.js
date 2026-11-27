@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wims-shell-v56';
+const CACHE_NAME = 'wims-shell-v60';
 const NEVER_CACHE_PATHS = new Set(['/docs', '/redoc', '/openapi.json', '/docs/oauth2-redirect']);
 const APP_SHELL_URLS = [
   '/',

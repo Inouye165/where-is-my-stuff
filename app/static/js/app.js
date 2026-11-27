@@ -602,13 +602,13 @@ function showPinUnlockModal() {
   title.style.cssText = 'margin:0 0 8px 0;font-size:1.1rem;font-weight:700;';
 
   const sub = document.createElement('p');
-  sub.textContent = 'This WIMS inventory is PIN-protected on the network.';
+  sub.textContent = 'This WhereIsMyStuff inventory is protected by a PIN.';
   sub.style.cssText = 'margin:0 0 14px 0;font-size:0.875rem;opacity:0.8;';
 
   const input = document.createElement('input');
   input.type = 'password';
   input.autocomplete = 'current-password';
-  input.placeholder = 'Access PIN';
+  input.placeholder = 'Enter PIN';
   input.required = true;
   input.style.cssText = [
     'width:100%', 'box-sizing:border-box', 'padding:10px 12px', 'border-radius:8px',
@@ -639,7 +639,7 @@ function showPinUnlockModal() {
       });
       if (!resp.ok) {
         const body = await resp.json().catch(() => null);
-        errEl.textContent = body?.error?.message || 'Invalid PIN.';
+        errEl.textContent = body?.error?.message || 'Incorrect PIN. Please try again.';
         submitBtn.disabled = false;
         input.focus();
         return;
@@ -647,7 +647,7 @@ function showPinUnlockModal() {
       overlay.remove();
       loadAllData();
     } catch {
-      errEl.textContent = 'Could not reach server.';
+      errEl.textContent = 'Could not connect. Please try again.';
       submitBtn.disabled = false;
     }
   });

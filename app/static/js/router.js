@@ -113,7 +113,7 @@ export function handleHashRouting() {
 
 export function updatePageTitle(label = '') {
   if (typeof document === 'undefined') return;
-  document.title = label ? `${label} - WhereIsMyStuff` : 'WhereIsMyStuff';
+  document.title = label ? `${label} — WhereIsMyStuff` : 'WhereIsMyStuff';
 }
 
 export function switchAppTab(tabName, recordHistory = true) {
@@ -172,7 +172,7 @@ export function navToRoom(roomId, recordHistory = true) {
     state.currentLocationId = roomId;
     state.spotlightDrawerId = null;
     const room = state.locationMap.get(roomId);
-    updatePageTitle(room ? room.name : 'Room');
+    updatePageTitle(room ? room.name : 'Space');
 
     if (recordHistory) {
       state.historyStack.push({ tab: 'places', view: 'room', id: roomId });

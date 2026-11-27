@@ -404,13 +404,13 @@ async function scanSingleDrawer(drawerIdx, signal, skipReadinessCheck = false) {
     }
     d.scanned = true;
     if (totalDetected === 0) {
-      d.aiMessage = lastNotice || 'No items auto-detected — add items manually below.';
+      d.aiMessage = lastNotice || 'No items found automatically — add items below.';
     } else {
-      d.aiMessage = lastNotice || `Detected ${pluralize(totalDetected, 'item')}. Review or edit below.`;
+      d.aiMessage = lastNotice || `Found ${pluralize(totalDetected, 'item')}. Review or edit below.`;
     }
   } catch (err) {
     if (err?.name === 'UserAbortError') {
-      d.aiMessage = 'Scan cancelled.';
+      d.aiMessage = 'Scan stopped.';
     } else {
       d.aiMessage = err?.message || 'Could not scan photo — you can still enter items manually.';
     }
@@ -479,7 +479,7 @@ async function scanAllDrawers({ autoSave = false } = {}) {
     }
     if (!controller.signal.aborted) {
       if (autoSave) {
-        showToast(`Auto-inserted ${pluralize(savedItems, 'item')} across ${pluralize(savedDrawers, 'drawer')}.`);
+        showToast(`Saved ${pluralize(savedItems, 'item')} across ${pluralize(savedDrawers, 'drawer')}.`);
       } else {
         showToast(`Finished scanning ${pluralize(targets.length, 'drawer')}.`);
       }
@@ -683,7 +683,7 @@ function renderPhase1Choose() {
     subtitle: 'Dresser, cabinet, desk, closet, shelving, or parts organizer',
     body: `
       <div class="form-field" style="margin-bottom: 1rem;">
-        <label for="usw-room-select">Destination space</label>
+        <label for="usw-room-select">Space</label>
         <select id="usw-room-select" class="form-select">
           <option value="">Decide later (Needs a home)</option>
           ${rooms.map((r) => `
@@ -1017,7 +1017,7 @@ function renderPhase3Review() {
               <div class="usw-batch-status">${escapeHtml(wizardState.batchProgressText)}</div>
             ` : `
               <button type="button" id="usw-scan-autoinsert-btn" class="btn btn-primary btn-sm" style="width: 100%;">
-                ${lucideIcon('camera', '', 15)} Scan &amp; Auto-Insert All
+                ${lucideIcon('camera', '', 15)} Scan &amp; Save All
               </button>
               <button type="button" id="usw-scan-all-btn" class="btn btn-secondary btn-sm" style="width: 100%; margin-top: 0.35rem;">
                 Scan All (Review Only)

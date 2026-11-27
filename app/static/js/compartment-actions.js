@@ -175,7 +175,7 @@ export async function updateCompartmentLabel(locationId, { name, label, descript
   const safeId = Number(locationId);
   const trimmedName = String(name || '').trim();
   if (!safeId || !trimmedName) {
-    showToast('Label cannot be empty.', 'error');
+    showToast('Name cannot be empty.', 'error');
     return false;
   }
   const payload = { name: trimmedName };
@@ -186,12 +186,12 @@ export async function updateCompartmentLabel(locationId, { name, label, descript
     payload.description = String(description || '').trim() || null;
   }
   try {
-    await apiPatch(`/api/v1/locations/${safeId}`, payload, 'Could not update label.');
-    showToast('Label updated!');
+    await apiPatch(`/api/v1/locations/${safeId}`, payload, 'Could not update name.');
+    showToast('Name updated!');
     await loadAllData();
     return true;
   } catch (err) {
-    showToast(err.message || 'Could not update label.', 'error');
+    showToast(err.message || 'Could not update name.', 'error');
     return false;
   }
 }
@@ -200,7 +200,7 @@ export async function quickAddItemsToCompartment(locationId, rawInput) {
   const safeId = Number(locationId);
   const raw = String(rawInput || '').trim();
   if (!safeId || !raw) {
-    showToast('Type an item name, comma/line list, or paste JSON first.', 'error');
+    showToast('Type an item name or paste a list first.', 'error');
     return null;
   }
 
@@ -235,7 +235,7 @@ export async function quickAddItemsToCompartment(locationId, rawInput) {
         });
       }
       if (!itemsToCreate.length) {
-        showToast('All items in that JSON list are already in this compartment.');
+        showToast('All of those items are already in this compartment.');
         return { created: [], skipped };
       }
       const created = await apiPost('/api/v1/items/bulk', { location_id: safeId, items: itemsToCreate }, 'Could not add items.');
@@ -409,7 +409,7 @@ export async function submitGridCellQuickAdd(locationId, e = null) {
   const input = document.getElementById(`grid-cell-add-${safeId}`);
   const raw = (input?.value || '').trim();
   if (!raw) {
-    showToast('Enter an item name (e.g. "2x Buck Converter") first.', 'error');
+    showToast('Enter an item name (e.g., "2x AA batteries") first.', 'error');
     input?.focus();
     return null;
   }
