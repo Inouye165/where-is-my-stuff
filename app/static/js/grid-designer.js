@@ -112,6 +112,93 @@ export function getSlotPhotos(drawer) {
   return list;
 }
 
+let gridHoverBound = false;
+let gridHoverActiveSlot = null;
+
+function hideGridHoverPreview() {
+  gridHoverActiveSlot = null;
+  const pop = document.getElementById('cgrid-hover-preview');
+  if (pop) pop.classList.remove('is-visible');
+}
+
+function showGridHoverPreview(slotEl) {
+  if (!slotEl || typeof document === 'undefined' || typeof window === 'undefined') return;
+  const photo = sanitizePhotoUrl(slotEl.dataset?.hoverPhoto || '');
+  if (!photo) {
+    hideGridHoverPreview();
+    return;
+  }
+  let pop = document.getElementById('cgrid-hover-preview');
+  if (!pop) {
+    pop = document.createElement('div');
+    pop.id = 'cgrid-hover-preview';
+    pop.className = 'cgrid-hover-preview';
+    pop.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(pop);
+  }
+
+  const coord = slotEl.dataset.hoverCoord || '';
+  const title = slotEl.dataset.hoverTitle || '';
+  const sub = slotEl.dataset.hoverSub || '';
+  pop.innerHTML = `
+    <div class="cgrid-hover-preview-img-wrap">
+      <img src="${escapeHtml(photo)}" alt="${escapeHtml(title)}">
+    </div>
+    <div class="cgrid-hover-preview-meta">
+      <div class="cgrid-hover-preview-top">
+        ${coord ? `<span class="cgrid-hover-preview-coord">${escapeHtml(coord)}</span>` : ''}
+        ${sub ? `<span class="cgrid-hover-preview-sub">${escapeHtml(sub)}</span>` : ''}
+      </div>
+      ${title && title !== coord ? `<div class="cgrid-hover-preview-title">${escapeHtml(title)}</div>` : ''}
+    </div>
+  `;
+
+  pop.classList.add('is-visible');
+  const rect = slotEl.getBoundingClientRect();
+  const popW = pop.offsetWidth || 260;
+  const popH = pop.offsetHeight || 240;
+  const margin = 12;
+  let left = rect.left + (rect.width - popW) / 2;
+  left = Math.max(margin, Math.min(window.innerWidth - popW - margin, left));
+  let top = rect.top - popH - 10;
+  if (top < margin) {
+    top = rect.bottom + 10;
+  }
+  if (top + popH > window.innerHeight - margin) {
+    top = Math.max(margin, window.innerHeight - popH - margin);
+  }
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+
+function bindGridSlotHoverPreview() {
+  if (gridHoverBound || typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  gridHoverBound = true;
+
+  document.addEventListener('mouseover', (e) => {
+    const slot = e.target?.closest?.('.cgrid-slot[data-hover-photo]');
+    if (!slot) {
+      if (gridHoverActiveSlot) hideGridHoverPreview();
+      return;
+    }
+    if (slot === gridHoverActiveSlot) return;
+    gridHoverActiveSlot = slot;
+    showGridHoverPreview(slot);
+  });
+
+  document.addEventListener('mouseout', (e) => {
+    if (!gridHoverActiveSlot) return;
+    const toSlot = e.relatedTarget?.closest?.('.cgrid-slot[data-hover-photo]');
+    if (toSlot !== gridHoverActiveSlot) {
+      hideGridHoverPreview();
+    }
+  });
+
+  document.addEventListener('click', hideGridHoverPreview, true);
+  document.addEventListener('dragstart', hideGridHoverPreview, true);
+  window.addEventListener('scroll', hideGridHoverPreview, true);
+}
+
 export function colToLetter(colIndex) {
   if (!colIndex || colIndex < 1 || colIndex > 26) return String(colIndex || '');
   return String.fromCharCode(64 + colIndex);
@@ -518,6 +605,11 @@ export function renderContainerGridHtml(unit, options = {}) {
           ? `<span class="cgrid-slot-count">${childBoxCount} ${childBoxCount === 1 ? 'box' : 'boxes'}</span>`
           : '';
 
+    const primaryHoverPhoto = slotPhotos.length > 0 ? sanitizePhotoUrl(slotPhotos[0].url || slotPhotos[0].thumb || '') : '';
+    const hoverAttrs = (!isInlineActive && primaryHoverPhoto)
+      ? `data-hover-photo="${escapeHtml(primaryHoverPhoto)}" data-hover-coord="${escapeHtml(coord)}" data-hover-title="${escapeHtml(displayTitle || coord)}" data-hover-sub="${escapeHtml(itemCount > 0 ? `${itemCount} ${itemCount === 1 ? 'item' : 'items'}` : (childBoxCount > 0 ? `${childBoxCount} ${childBoxCount === 1 ? 'box' : 'boxes'}` : ''))}"`
+      : '';
+
     return `
       <div
         role="button"
@@ -528,6 +620,7 @@ export function renderContainerGridHtml(unit, options = {}) {
         onclick="${cellClickAttr}"
         onkeydown="${cellKeydownAttr}"
         ${cellDragAttrs}
+        ${hoverAttrs}
         title="${escapeHtml(slotTooltip)}"
       >
         <div class="cgrid-slot-head">
@@ -538,12 +631,14 @@ export function renderContainerGridHtml(unit, options = {}) {
           </span>
         </div>
         ${isInlineActive ? inlineFormHtml : `
-          <div class="cgrid-slot-info">
-            ${displayTitle ? `<span class="cgrid-slot-name">${escapeHtml(displayTitle)}</span>` : ''}
-            ${secondaryPreview ? `<span class="cgrid-slot-sub">${escapeHtml(secondaryPreview)}</span>` : ''}
-            ${isEmptySlot ? `<span class="cgrid-slot-empty-tag">Empty</span>` : ''}
+          <div class="cgrid-slot-main">
+            <div class="cgrid-slot-info">
+              ${displayTitle ? `<span class="cgrid-slot-name">${escapeHtml(displayTitle)}</span>` : ''}
+              ${secondaryPreview ? `<span class="cgrid-slot-sub">${escapeHtml(secondaryPreview)}</span>` : ''}
+              ${isEmptySlot ? `<span class="cgrid-slot-empty-tag">Empty</span>` : ''}
+            </div>
+            ${slotCarouselHtml}
           </div>
-          ${slotCarouselHtml}
         `}
       </div>
     `;
@@ -551,6 +646,7 @@ export function renderContainerGridHtml(unit, options = {}) {
 
   if (!compact && !diagram && typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(syncAllSlotCarousels);
+    bindGridSlotHoverPreview();
   }
 
   const wrapIdAttr = (!compact && !diagram && safeUnitId) ? `id="cgrid-wrap-${safeUnitId}"` : '';

@@ -339,11 +339,31 @@ export function triggerCompartmentUploadAndScan(locationId) {
   if (input) input.click();
 }
 
+export function triggerCompartmentUploadPdf(locationId) {
+  const input = document.getElementById(`compartment-upload-pdf-${Number(locationId)}`);
+  if (input) input.click();
+}
+
+export async function handleCompartmentUploadPdf(locationId, e) {
+  const file = e?.target?.files?.[0];
+  if (e?.target) e.target.value = '';
+  if (!file) return;
+  await openRapidEntryModal(Number(locationId), { pdfFile: file, autoScan: true });
+}
+
 export async function handleCompartmentUploadAndScan(locationId, e) {
   const files = Array.from(e?.target?.files || []).filter(Boolean);
   if (e?.target) e.target.value = '';
   if (!files.length) return;
-  await uploadPhotosToCompartment(locationId, files, { autoScan: true });
+  const pdfFile = files.find(f => (f.type === 'application/pdf') || /\.pdf$/i.test(f.name || ''));
+  if (pdfFile && files.length === 1) {
+    await openRapidEntryModal(Number(locationId), { pdfFile, autoScan: true });
+    return;
+  }
+  const imageFiles = files.filter(f => f !== pdfFile);
+  if (imageFiles.length > 0) {
+    await uploadPhotosToCompartment(locationId, imageFiles, { autoScan: true });
+  }
 }
 
 // =========================================================================

@@ -294,6 +294,93 @@ export async function openLocationPhoneCaptureModal({ locationId, locationName =
   }
 }
 
+export async function openItemPhoneCaptureModal({ itemId, itemName = 'Item', onDone }) {
+  stopPolling();
+  activeInputId = null;
+  activeLabel = itemName;
+  activeCallback = null;
+  activeLocationId = null;
+  activeLocationDoneCb = onDone;
+  activeMultiPhotos = [];
+  activeCaptureSaveMode = 'separate';
+  userPickedPhoneMode = false;
+
+  const modal = document.getElementById('phone-photo-modal');
+  const titleEl = document.getElementById('phone-photo-title');
+  const qrImg = document.getElementById('phone-photo-qr-img');
+  const statusEl = document.getElementById('phone-photo-status');
+  const retryBtn = document.getElementById('phone-photo-retry-btn');
+  const urlHintEl = document.getElementById('phone-photo-url-hint');
+  const computerBtn = document.getElementById('phone-photo-computer-btn');
+  const cancelBtn = document.getElementById('phone-photo-cancel-btn');
+  const doneBtn = document.getElementById('phone-photo-done-btn');
+  const scanBtn = document.getElementById('phone-photo-scan-btn');
+
+  if (titleEl) titleEl.textContent = `Add photos to ${itemName}`;
+  if (statusEl) {
+    statusEl.textContent = 'Generating QR code...';
+    statusEl.className = 'phone-qr-status';
+  }
+  if (retryBtn) retryBtn.style.display = 'none';
+  if (computerBtn) computerBtn.style.display = 'none';
+  if (cancelBtn) cancelBtn.style.display = 'inline-flex';
+  if (doneBtn) doneBtn.style.display = 'none';
+  if (scanBtn) scanBtn.style.display = 'none';
+  renderReceivedPhoneThumbs([]);
+
+  if (qrImg) {
+    qrImg.style.display = 'none';
+    qrImg.removeAttribute('src');
+  }
+  if (urlHintEl) urlHintEl.textContent = '';
+
+  modal?.classList.add('open');
+  const seq = ++openSeq;
+
+  try {
+    const session = await apiPost(
+      '/api/v1/photos/capture-sessions',
+      { label: itemName },
+      'Could not start phone camera session.'
+    );
+    if (seq !== openSeq) return;
+    activeToken = session.token;
+    if (qrImg) {
+      qrImg.style.display = 'block';
+      qrImg.src = `${session.qr_url}?t=${Date.now()}`;
+    }
+    if (urlHintEl) {
+      urlHintEl.textContent = session.capture_url;
+    }
+    if (statusEl) {
+      statusEl.textContent = 'Scan with your phone to add 1 or more photos...';
+    }
+
+    startSessionPolling(session.token, (res) => {
+      const list = Array.isArray(res.photos) && res.photos.length
+        ? res.photos
+        : (res.photo ? [res.photo] : []);
+      if (list.length === 0) return;
+      activeMultiPhotos = list;
+      renderReceivedPhoneThumbs(list);
+      if (statusEl) {
+        statusEl.textContent = `Received ${list.length} ${list.length === 1 ? 'photo' : 'photos'}. Keep snapping or click Done.`;
+      }
+      if (cancelBtn) cancelBtn.style.display = 'none';
+      if (doneBtn) doneBtn.style.display = 'inline-flex';
+      if (scanBtn) scanBtn.style.display = 'none';
+    });
+  } catch (err) {
+    if (seq !== openSeq) return;
+    if (statusEl) {
+      statusEl.textContent = err.message || 'Could not start phone camera session.';
+      statusEl.className = 'phone-qr-status expired';
+    }
+    if (retryBtn) retryBtn.style.display = 'inline-flex';
+    showToast(err.message || 'Could not start phone camera session.', 'error');
+  }
+}
+
 export async function openPhonePhotoModal({ inputId, label = 'Take a photo', onPhotoReceived }) {
   stopPolling();
   activeInputId = inputId;

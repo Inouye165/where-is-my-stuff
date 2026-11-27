@@ -341,6 +341,19 @@ export function populateLocationDropdowns() {
     if (prev) itemSelect.value = prev;
   }
 
+  const bundleSelect = document.getElementById('bundle-location-select');
+  if (bundleSelect) {
+    const prev = bundleSelect.value;
+    bundleSelect.innerHTML = '<option value="">Choose a drawer, container, or space</option>';
+    for (const loc of allLocations) {
+      const opt = document.createElement('option');
+      opt.value = loc.id;
+      opt.textContent = formatHumanPath(loc.full_path);
+      bundleSelect.appendChild(opt);
+    }
+    if (prev) bundleSelect.value = prev;
+  }
+
   const rapidSelect = document.getElementById('rapid-location-select');
   if (rapidSelect) {
     const prev = rapidSelect.value;

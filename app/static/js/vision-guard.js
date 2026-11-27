@@ -57,13 +57,13 @@ function renderNoModelModal(selectedProvider, meta) {
 
     <div class="nomodel-providers-list">
       ${['local', 'gemini', 'openai'].map((key) => {
-        const info = providers[key] || {};
-        const isReady = Boolean(info.available);
-        const label = info.label || key;
-        const sub = key === 'local'
-          ? (isReady ? `Running (${info.model || 'ready'})` : 'Not running')
-          : (isReady ? `Ready (${info.model || 'connected'})` : 'Not set up');
-        return `
+    const info = providers[key] || {};
+    const isReady = Boolean(info.available);
+    const label = info.label || key;
+    const sub = key === 'local'
+      ? (isReady ? `Running (${info.model || 'ready'})` : 'Not running')
+      : (isReady ? `Ready (${info.model || 'connected'})` : 'Not set up');
+    return `
           <div class="nomodel-provider-row ${isReady ? 'is-ready' : 'is-off'}">
             <div>
               <div class="nomodel-provider-name">${escapeHtml(label)}</div>
@@ -78,7 +78,7 @@ function renderNoModelModal(selectedProvider, meta) {
             `}
           </div>
         `;
-      }).join('')}
+  }).join('')}
     </div>
 
     ${availableAlternatives.length === 0 ? `

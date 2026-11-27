@@ -1173,5 +1173,57 @@ class LocationService:
         kwargs["context_hint"] = resolved_hint
         return await vision_service.analyze_images(saved_photo_files, **kwargs)
 
+    @classmethod
+    async def analyze_drawer_pdf(
+        cls,
+        db: Session,
+        location_id: int,
+        file: UploadFile,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        expected_count: Optional[int] = None,
+        context_hint: Optional[str] = None,
+    ) -> VisionAnalysisResponse:
+        import re
+
+        bind = db.get_bind()
+
+        def _prepare_pdf() -> Tuple[dict, Optional[str]]:
+            with session_scope(bind) as thread_db:
+                loc = cls.get_or_404(thread_db, location_id)
+                hint_parts: List[str] = []
+                raw_name = (loc.name or "").strip()
+                if raw_name and not re.match(
+                    r"^(drawer|bin|shelf|compartment|cubby|slot)\s+\d+$|^[A-Z]{1,2}\d+(?:[\u2013\u2014\-][A-Z]{1,2}\d+)?$",
+                    raw_name,
+                    re.IGNORECASE,
+                ):
+                    hint_parts.append(raw_name)
+                if loc.description and loc.description.strip():
+                    hint_parts.append(loc.description.strip()[:140])
+                default_hint = " — ".join(hint_parts) if hint_parts else None
+                meta = photo_service.process_and_save_attachment(file)
+                if meta.get("attachment_type") != "pdf":
+                    saved_p = photo_service.resolve_safe_upload_path(meta["file_path"])
+                    saved_p.unlink(missing_ok=True)
+                    raise BadRequestError("Please upload a valid PDF file.")
+                return meta, default_hint
+
+        meta, default_hint = await anyio.to_thread.run_sync(_prepare_pdf)
+        pdf_disk_path = photo_service.resolve_safe_upload_path(meta["file_path"])
+        resolved_hint = (context_hint or "").strip() or default_hint
+        result = await vision_service.analyze_pdf(
+            pdf_disk_path,
+            filename=meta.get("filename"),
+            provider=provider,
+            model=model,
+            expected_count=expected_count,
+            context_hint=resolved_hint,
+        )
+        result.source_attachment_path = meta["file_path"]
+        result.source_attachment_filename = meta["filename"]
+        result.source_attachment_size_bytes = meta.get("size_bytes", 0)
+        return result
+
 
 location_service = LocationService()

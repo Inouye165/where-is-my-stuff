@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wims-shell-v65';
+const CACHE_NAME = 'wims-shell-v66';
 const NEVER_CACHE_PATHS = new Set(['/docs', '/redoc', '/openapi.json', '/docs/oauth2-redirect']);
 const APP_SHELL_URLS = [
   '/',
@@ -20,6 +20,7 @@ const APP_SHELL_URLS = [
   '/js/events.js',
   '/js/grid-designer.js',
   '/js/icons.js',
+  '/js/item-bundle.js',
   '/js/label-capture-page.js',
   '/js/label-scan.js',
   '/js/mobile-unit-setup.js',

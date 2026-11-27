@@ -8,19 +8,23 @@ from app.schemas.item import (
     FindItemImageResponse,
     ItemAttachmentRead,
     ItemBulkCreate,
+    ItemBundleAnalysisResponse,
     ItemConvertToBoxRequest,
     ItemCreate,
     ItemDetailRead,
+    ItemFromBundleCreate,
     ItemGroupIntoBoxRequest,
     ItemGroupIntoBoxResponse,
     ItemImagesToPdfRequest,
     ItemPageResponse,
+    ItemPhotoAttachmentCreate,
     ItemRead,
     ItemUpdate,
 )
 from app.schemas.location import LocationRead
 from app.services.image_lookup_service import import_image_for_item
 from app.services.inventory_service import inventory_service
+from app.services.item_bundle_service import item_bundle_service
 
 router = APIRouter(prefix="/items", tags=["Items"])
 
@@ -35,6 +39,35 @@ def create_item(data: ItemCreate, db: Session = Depends(get_db)) -> ItemRead:
 def create_items_bulk(data: ItemBulkCreate, db: Session = Depends(get_db)) -> List[ItemRead]:
     items = inventory_service.bulk_create(db, data)
     return inventory_service.serialize_many(db, items)
+
+
+@router.post("/analyze-bundle", response_model=ItemBundleAnalysisResponse)
+async def analyze_item_bundle(
+    location_id: Optional[int] = Form(default=None),
+    urls: Optional[str] = Form(default=None, max_length=10_000),
+    pasted_text: Optional[str] = Form(default=None, max_length=50_000),
+    photo_paths: Optional[List[str]] = Form(default=None),
+    provider: Optional[str] = Form(default=None),
+    model: Optional[str] = Form(default=None),
+    files: Optional[List[UploadFile]] = File(default=None),
+) -> ItemBundleAnalysisResponse:
+    return await item_bundle_service.analyze_bundle(
+        location_id=location_id,
+        files=files,
+        photo_paths=photo_paths,
+        urls=urls,
+        pasted_text=pasted_text,
+        provider=provider,
+        model=model,
+    )
+
+
+@router.post("/from-bundle", response_model=ItemDetailRead, status_code=status.HTTP_201_CREATED)
+def create_item_from_bundle(
+    data: ItemFromBundleCreate,
+    db: Session = Depends(get_db),
+) -> ItemDetailRead:
+    return item_bundle_service.create_item_from_bundle(db, data)
 
 
 @router.post("/group-into-box", response_model=ItemGroupIntoBoxResponse, status_code=status.HTTP_201_CREATED)
@@ -132,6 +165,20 @@ def upload_item_attachment(
     db: Session = Depends(get_db),
 ) -> ItemAttachmentRead:
     att = inventory_service.add_attachment(db=db, item_id=item_id, file=file, title=title)
+    return ItemAttachmentRead.model_validate(att)
+
+
+@router.post(
+    "/{item_id}/attachments/from-photo",
+    response_model=ItemAttachmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def attach_photo_to_item(
+    item_id: int,
+    data: ItemPhotoAttachmentCreate,
+    db: Session = Depends(get_db),
+) -> ItemAttachmentRead:
+    att = inventory_service.add_photo_attachment(db=db, item_id=item_id, data=data)
     return ItemAttachmentRead.model_validate(att)
 
 

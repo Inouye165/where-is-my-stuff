@@ -202,6 +202,11 @@
       <form id="add-item-form" onsubmit="handleItemFormSubmit(event)">
         <input type="hidden" id="edit-item-id" value="">
         <div class="modal-body-scroll">
+          <div id="item-smart-import-banner" style="margin-bottom: 0.65rem;">
+            <button type="button" class="btn btn-secondary btn-xs" onclick="switchManualItemToSmartImport()">
+              Have PDFs, screenshots, web links, or copied text? Use Smart Import (AI) →
+            </button>
+          </div>
           <div class="form-field">
             <label for="item-name">Item name *</label>
             <input type="text" id="item-name" placeholder="e.g., Phillips screwdriver, USB-C cable, AA batteries, or M3 screws" required>
@@ -229,11 +234,12 @@
             <div class="form-field">
               <label>Photo (Optional)</label>
               <label for="item-photo-input" class="upload-dropzone compact">
+                <img id="item-photo-preview" alt="Item photo preview" style="display: none; max-height: 72px; max-width: 100%; border-radius: 6px; object-fit: contain; margin-bottom: 4px;" />
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
                   <circle cx="12" cy="13" r="4"></circle>
                 </svg>
-                <span id="item-photo-input-label">Add photo</span>
+                <span id="item-photo-input-label">Add photo or paste (Ctrl+V)</span>
                 <input type="file" id="item-photo-input" accept="image/*" capture="environment" style="display: none;" onchange="handleItemPhotoPreview(event)">
               </label>
             </div>
@@ -467,6 +473,7 @@
       </div>
       <div class="modal-body-scroll">
         <input type="file" id="rapid-photo-input" accept="image/*" multiple style="display: none;" onchange="handleRapidPhotoSelected(event)">
+        <input type="file" id="rapid-pdf-input" accept="application/pdf,.pdf" style="display: none;" onchange="handleRapidPdfSelected(event)">
 
         <div id="rapid-location-pill-bar" class="rapid-location-pill-bar" style="display: none;">
           <span class="rapid-location-pill-text">
@@ -503,6 +510,14 @@
               </span>
               <span class="rapid-capture-card-title">Upload Photo</span>
               <span class="rapid-capture-card-desc">Pick a photo of a part, kit, or open drawer</span>
+            </button>
+
+            <button type="button" class="rapid-capture-card" onclick="triggerRapidPdfAndScan()">
+              <span class="rapid-capture-icon" aria-hidden="true">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg>
+              </span>
+              <span class="rapid-capture-card-title">Import PDF</span>
+              <span class="rapid-capture-card-desc">Datasheet, manual, or invoice — AI fills the item &amp; attaches PDF</span>
             </button>
           </div>
 
@@ -552,6 +567,7 @@
               <span id="rapid-photo-filename" class="file-hint-label">No photo selected</span>
               <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
                 <button type="button" class="btn btn-secondary btn-xs" onclick="triggerRapidPhotoAndScan()">+ Add photo</button>
+                <button type="button" class="btn btn-secondary btn-xs" onclick="triggerRapidPdfAndScan()">+ Import PDF</button>
                 <button type="button" class="btn btn-secondary btn-xs" onclick="startRapidPhoneCapture()">+ Phone camera</button>
               </div>
             </div>
@@ -691,6 +707,8 @@
         </div>
       </div>
       <div class="modal-bottom">
+        <button type="button" class="btn btn-secondary btn-sm" onclick="startQuickPhotoPhoneCapture()" title="Take a photo with your phone">Phone</button>
+        <div style="flex: 1;"></div>
         <button type="button" class="btn btn-secondary" onclick="closeModal('quick-photo-modal')">Cancel</button>
         <button type="button" class="btn btn-primary" id="quick-photo-save-btn" onclick="submitQuickPhoto()">Save photo</button>
       </div>
@@ -1654,6 +1672,165 @@
         <button type="button" class="btn btn-secondary" onclick="closeDocumentStudioModal()">Cancel</button>
         <button type="button" id="doc-goto-enhance-btn" class="btn btn-primary" disabled>Next: Enhance &amp; Save →</button>
         <button type="button" class="btn btn-primary" id="doc-studio-save-btn" style="display: none;" disabled>Save Document to Item</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Multi-Source Smart Item Import -->
+  <div id="item-bundle-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'item-bundle-modal')">
+    <div class="modal-card" style="max-width: 720px;">
+      <div class="modal-top">
+        <div>
+          <h3 class="modal-title">Smart Item Import (AI)</h3>
+          <p id="bundle-modal-subtitle" class="modal-subtitle">Add PDFs, files, pasted screenshots, photos, links &amp; text — then click Scan &amp; Autofill</p>
+        </div>
+        <button class="modal-close-btn" onclick="closeModal('item-bundle-modal')" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+
+      <div class="modal-body-scroll">
+        <input type="file" id="bundle-files-input" multiple accept="image/*,.pdf,.svg,.csv,.txt,.md,.json,.xlsx,.xls,.doc,.docx,.zip" style="display: none;" onchange="handleBundleFilesSelected(event)">
+
+        <div class="form-field">
+          <label for="bundle-location-select">Where is this item kept?</label>
+          <select id="bundle-location-select">
+            <option value="">Choose a drawer, container, or space</option>
+          </select>
+        </div>
+
+        <!-- Step 1: Gather All Sources -->
+        <div id="bundle-stage-gather" class="bundle-stage">
+          <div id="bundle-dropzone" class="bundle-dropzone" tabindex="0">
+            <p class="bundle-dropzone-title">Drop PDFs, photos, or files here — or press <kbd>Ctrl+V</kbd> to paste screenshots</p>
+            <div class="bundle-source-buttons">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="triggerBundleFileInput()">+ Add PDFs / Files / Photos</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="pasteBundleImage()">Paste Image</button>
+              <button type="button" class="btn btn-secondary btn-sm" onclick="startBundlePhoneCapture()">Phone Camera</button>
+            </div>
+          </div>
+
+          <div class="bundle-staged-section">
+            <div class="bundle-section-head">
+              <span>Images → Item Photos (<span id="bundle-images-count">0</span>)</span>
+              <span class="bundle-section-hint">Click any image to set as Main</span>
+            </div>
+            <div id="bundle-staged-images-grid" class="bundle-thumbs-grid"></div>
+          </div>
+
+          <div class="bundle-staged-section">
+            <div class="bundle-section-head">
+              <span>PDFs &amp; Files → Item Documents (<span id="bundle-docs-count">0</span>)</span>
+            </div>
+            <div id="bundle-staged-docs-list" class="bundle-docs-list"></div>
+          </div>
+
+          <div class="form-field">
+            <label for="bundle-urls-input">Web Links (Amazon, Adafruit, manufacturer pages — one per line)</label>
+            <textarea id="bundle-urls-input" class="rapid-dark-textarea" rows="2" placeholder="https://www.amazon.com/dp/...&#10;https://www.adafruit.com/product/..."></textarea>
+          </div>
+
+          <div class="form-field">
+            <label for="bundle-text-input">Copied Text / Order Details / Specs / Notes</label>
+            <textarea id="bundle-text-input" class="rapid-dark-textarea" rows="4" placeholder="Paste product descriptions, specs, quantities ordered, pinouts, or setup notes..."></textarea>
+          </div>
+
+          <div class="bundle-ai-bar">
+            <label for="bundle-vision-provider">AI Model:</label>
+            <select id="bundle-vision-provider" style="max-width: 210px;">
+              <option value="local">Local Model (Ollama)</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="openai">OpenAI</option>
+            </select>
+            <span id="bundle-vision-status" class="ai-provider-pill">Checking...</span>
+          </div>
+
+          <div id="bundle-scan-banner" class="rapid-scanning-banner" style="display: none;">
+            <span class="app-boot-spinner" style="width: 18px; height: 18px; border-width: 2px;" aria-hidden="true"></span>
+            <span>Scanning PDFs, images, links &amp; text with AI...</span>
+          </div>
+
+          <div id="bundle-gather-error" class="bundle-review-alert danger-text" role="alert" style="display: none;"></div>
+        </div>
+
+        <!-- Step 2: Review Autofilled Item -->
+        <div id="bundle-stage-review" class="bundle-stage" style="display: none;">
+          <div id="bundle-review-alert" class="bundle-review-alert" style="display: none;"></div>
+
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label for="bundle-item-name">Item name *</label>
+              <input type="text" id="bundle-item-name" placeholder="Product or component name" required>
+            </div>
+            <div class="form-field">
+              <label for="bundle-item-part">Brand / Model / Part #</label>
+              <input type="text" id="bundle-item-part" placeholder="Model, MPN, SKU, ASIN">
+            </div>
+          </div>
+
+          <div class="form-grid-3">
+            <div class="form-field">
+              <label for="bundle-item-qty">Quantity (if known)</label>
+              <input type="number" id="bundle-item-qty" min="0" placeholder="Blank if unknown">
+            </div>
+            <div class="form-field">
+              <label for="bundle-item-unit">Unit</label>
+              <input type="text" id="bundle-item-unit" value="pcs" placeholder="pcs, pair, pack">
+            </div>
+            <div class="form-field">
+              <label for="bundle-item-category">Category</label>
+              <input type="text" id="bundle-item-category" list="item-category-datalist" placeholder="Sensors, Tools, Cables">
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label for="bundle-item-tags">Search tags</label>
+            <input type="text" id="bundle-item-tags" placeholder="ir, sensor, 5V, break-beam">
+          </div>
+
+          <div class="form-field">
+            <label for="bundle-item-specs">Key Specs</label>
+            <textarea id="bundle-item-specs" class="rapid-dark-textarea" rows="2" placeholder="Voltage, range, dimensions, ratings..."></textarea>
+          </div>
+
+          <div class="form-field">
+            <label for="bundle-item-usecase">Use Case</label>
+            <textarea id="bundle-item-usecase" class="rapid-dark-textarea" rows="2" placeholder="What this item is used for..."></textarea>
+          </div>
+
+          <div class="form-field">
+            <label for="bundle-item-setup">Setup &amp; Usage Information</label>
+            <textarea id="bundle-item-setup" class="rapid-dark-textarea" rows="3" placeholder="Wiring, pinout, assembly, pull-up resistors, setup notes..."></textarea>
+          </div>
+
+          <div class="form-field">
+            <label for="bundle-item-links">Links</label>
+            <textarea id="bundle-item-links" class="rapid-dark-textarea" rows="2" placeholder="https://..."></textarea>
+          </div>
+
+          <div class="bundle-staged-section">
+            <div class="bundle-section-head">
+              <span>Images to save (click to pick Main Image)</span>
+            </div>
+            <div id="bundle-review-images-grid" class="bundle-thumbs-grid"></div>
+          </div>
+
+          <div class="bundle-staged-section">
+            <div class="bundle-section-head">
+              <span>PDFs &amp; Files to attach</span>
+            </div>
+            <div id="bundle-review-docs-list" class="bundle-docs-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-bottom">
+        <button type="button" id="bundle-back-btn" class="btn btn-secondary" style="display: none;" onclick="backToBundleSources()">← Back to Sources</button>
+        <button type="button" id="bundle-skip-ai-btn" class="btn btn-secondary" onclick="skipBundleAiToManual()">Fill Manually</button>
+        <div style="flex: 1;"></div>
+        <button type="button" class="btn btn-secondary" onclick="closeModal('item-bundle-modal')">Cancel</button>
+        <button type="button" id="bundle-scan-btn" class="btn btn-primary" onclick="runItemBundleScan()">Scan &amp; Autofill</button>
+        <button type="button" id="bundle-save-btn" class="btn btn-primary" style="display: none;" onclick="submitItemBundle()">Save Item</button>
       </div>
     </div>
   </div>

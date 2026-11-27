@@ -146,6 +146,27 @@ async def analyze_drawer_photo(
     )
 
 
+@router.post("/{location_id}/analyze-pdf", response_model=VisionAnalysisResponse)
+async def analyze_drawer_pdf(
+    location_id: int,
+    file: UploadFile = File(...),
+    provider: Optional[str] = Form(default=None),
+    model: Optional[str] = Form(default=None),
+    expected_count: Optional[int] = Form(default=None, ge=1, le=500),
+    context_hint: Optional[str] = Form(default=None, max_length=300),
+    db: Session = Depends(get_db),
+) -> VisionAnalysisResponse:
+    return await location_service.analyze_drawer_pdf(
+        db=db,
+        location_id=location_id,
+        file=file,
+        provider=provider,
+        model=model,
+        expected_count=expected_count,
+        context_hint=context_hint,
+    )
+
+
 @router.post("/{location_id}/find-item-images", response_model=FindLocationItemImagesResponse)
 async def find_location_item_images(
     location_id: int,

@@ -34,8 +34,8 @@ import {
   renderInlineGridDesignerHtml
 } from './grid-designer.js';
 import { chooseAddAction, openAddItemModal, openEditStorageModal, openGroupIntoBoxModal, openQuickPhotoModal, openRapidEntryModal, parseJsonInventoryInput } from './modals.js';
-import { openLocationPhoneCaptureModal, registerDesktopPhotoHandler, requestPhotoForInput } from './phone-capture.js';
-import { compressImageFile } from './photo-compress.js';
+import { openItemPhoneCaptureModal, openLocationPhoneCaptureModal, registerDesktopPhotoHandler, requestPhotoForInput } from './phone-capture.js';
+import { compressImageFile, uploadPhotoAndGetPath } from './photo-compress.js';
 import { openPhotoEditorModal } from './photo-editor.js';
 import {
   renderLimitedItemView,
@@ -3577,7 +3577,8 @@ export function renderDrawerView(drawerId) {
           `}
         </div>
         <input type="file" id="drawer-direct-upload-${safeDrawerId}" accept="image/*" multiple style="display: none;" onchange="handleDrawerDirectPhotoUpload(${safeDrawerId}, event)">
-        <input type="file" id="compartment-upload-scan-${safeDrawerId}" accept="image/*" multiple style="display: none;" onchange="handleCompartmentUploadAndScan(${safeDrawerId}, event)">
+        <input type="file" id="compartment-upload-scan-${safeDrawerId}" accept="image/*,application/pdf,.pdf" multiple style="display: none;" onchange="handleCompartmentUploadAndScan(${safeDrawerId}, event)">
+        <input type="file" id="compartment-upload-pdf-${safeDrawerId}" accept="application/pdf,.pdf" style="display: none;" onchange="handleCompartmentUploadPdf(${safeDrawerId}, event)">
       </div>
 
       <div class="drawer-quick-add-wrap">
@@ -3605,8 +3606,14 @@ export function renderDrawerView(drawerId) {
               onclick="toggleQuickAddMoreMenu(event)"
             >${lucideIcon('moreHorizontal', '', 15)}</button>
             <div id="drawer-quick-add-more-menu" class="unit-more-menu" role="menu" hidden>
+              <button type="button" class="unit-more-item" role="menuitem" onclick="toggleQuickAddMoreMenu(event); openItemBundleModal(${safeDrawerId})">
+                ${lucideIcon('fileText', '', 14)} Smart Item Import (PDF, Links, Photos, Text)
+              </button>
               <button type="button" class="unit-more-item" role="menuitem" onclick="toggleQuickAddMoreMenu(event); openAddItemModal(${safeDrawerId})">
                 ${lucideIcon('plus', '', 14)} Detailed add form
+              </button>
+              <button type="button" class="unit-more-item" role="menuitem" onclick="toggleQuickAddMoreMenu(event); triggerCompartmentUploadPdf(${safeDrawerId})">
+                ${lucideIcon('fileText', '', 14)} Import PDF &amp; AI populate
               </button>
               <button type="button" class="unit-more-item" role="menuitem" onclick="toggleQuickAddMoreMenu(event); openRapidEntryModal(${safeDrawerId}, { openLlmPanel: true })">
                 ${lucideIcon('list', '', 14)} Paste list from Gemini / ChatGPT
@@ -3668,6 +3675,12 @@ export function renderDrawerView(drawerId) {
                 onclick="scanCompartmentPhotosWithAi(${safeDrawerId})"
                 title="Detect and add items from these photos using AI"
               >${lucideIcon('camera', '', 13)} AI Scan</button>
+              <button
+                type="button"
+                class="btn btn-secondary btn-xs"
+                onclick="triggerCompartmentUploadPdf(${safeDrawerId})"
+                title="Upload a PDF datasheet, manual, or invoice to populate items with AI"
+              >${lucideIcon('fileText', '', 13)} Import PDF</button>
               <button
                 type="button"
                 class="btn btn-secondary btn-xs"
@@ -3776,6 +3789,12 @@ export function renderDrawerView(drawerId) {
               <button type="button" class="btn btn-secondary btn-xs" onclick="triggerDrawerDirectPhotoUpload(${safeDrawerId})">
                 ${lucideIcon('upload', '', 13)} Upload photo
               </button>
+              <button type="button" class="btn btn-secondary btn-xs" onclick="triggerCompartmentUploadPdf(${safeDrawerId})">
+                ${lucideIcon('fileText', '', 13)} Import PDF
+              </button>
+              <button type="button" class="btn btn-secondary btn-xs" onclick="openItemBundleModal(${safeDrawerId})" title="Add PDF, images, links &amp; text and let AI autofill">
+                ${lucideIcon('plus', '', 13)} Smart Import
+              </button>
               <button type="button" class="btn btn-primary btn-xs" onclick="triggerCompartmentUploadAndScan(${safeDrawerId})">
                 ${lucideIcon('camera', '', 13)} Upload &amp; AI Scan
               </button>
@@ -3829,7 +3848,10 @@ export function renderDrawerView(drawerId) {
                   ${lucideIcon('camera', '', 15)} AI Scan ${pluralize(overallCarouselEntries.length, 'saved photo')}
                 </button>
               ` : `
-                <button type="button" class="btn btn-primary btn-sm" onclick="openAddItemModal(${safeDrawerId})">
+                <button type="button" class="btn btn-primary btn-sm" onclick="openItemBundleModal(${safeDrawerId})">
+                  ${lucideIcon('fileText', '', 15)} Smart Import (AI)
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="openAddItemModal(${safeDrawerId})">
                   ${lucideIcon('plus', '', 15)} Add item with details
                 </button>
               `}
@@ -3906,6 +3928,184 @@ export async function deleteItemAttachment(itemId, attachmentId) {
 }
 
 let itemAttachmentsLoadSeq = 0;
+const itemImageAttachmentsByItem = new Map();
+let itemViewPasteBound = false;
+
+function extractImageFileFromClipboardData(clipboardData) {
+  if (!clipboardData) return null;
+  const items = clipboardData.items ? Array.from(clipboardData.items) : [];
+  for (const item of items) {
+    if (item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+      const blob = item.getAsFile();
+      if (blob) {
+        const ext = (blob.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+        return blob.name ? blob : new File([blob], `pasted-screenshot.${ext}`, { type: blob.type || 'image/png' });
+      }
+    }
+  }
+  const files = clipboardData.files ? Array.from(clipboardData.files) : [];
+  for (const file of files) {
+    if (file && (!file.type || file.type.startsWith('image/'))) return file;
+  }
+  return null;
+}
+
+async function readClipboardImageFile() {
+  if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+    return null;
+  }
+  try {
+    const clipboardItems = await navigator.clipboard.read();
+    for (const clipItem of clipboardItems) {
+      const imgType = (clipItem.types || []).find(t => t.startsWith('image/'));
+      if (imgType) {
+        const blob = await clipItem.getType(imgType);
+        if (blob) {
+          const ext = (imgType.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+          return new File([blob], `pasted-screenshot.${ext}`, { type: imgType });
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function uploadAndAttachItemImage(itemId, file, { setAsMain = false, title = null } = {}) {
+  const safeId = Number(itemId);
+  if (!safeId || !file) return false;
+  const uploadedPath = await uploadPhotoAndGetPath(file);
+  await apiPost(
+    `/api/v1/items/${safeId}/attachments/from-photo`,
+    {
+      photo_path: uploadedPath,
+      title: title || null,
+      set_as_main: Boolean(setAsMain),
+    },
+    'Could not save item photo.'
+  );
+  showToast(setAsMain ? 'Pasted screenshot as main item photo!' : 'Photo added to item!');
+  await loadAllData();
+  await loadItemAttachmentsIntoView(safeId);
+  return true;
+}
+
+function bindItemViewGlobalPaste() {
+  if (itemViewPasteBound || typeof document === 'undefined') return;
+  itemViewPasteBound = true;
+  document.addEventListener('paste', async (e) => {
+    if (state.currentView !== 'item' || !state.currentLocationId) return;
+    if (document.querySelector('.modal-scrim.open')) return;
+    const active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) {
+      return;
+    }
+    const imgFile = extractImageFileFromClipboardData(e.clipboardData);
+    if (!imgFile) return;
+    e.preventDefault();
+    const safeId = Number(state.currentLocationId);
+    const item = state.items.find(i => Number(i.id) === safeId);
+    if (!item) return;
+    const setAsMain = !item.item_photo;
+    try {
+      await uploadAndAttachItemImage(safeId, imgFile, { setAsMain, title: 'Pasted screenshot' });
+    } catch (err) {
+      showToast(err.message || 'Could not paste image.', 'error');
+    }
+  });
+}
+
+export async function pasteItemMainPhoto(itemId) {
+  const safeId = Number(itemId);
+  if (!safeId) return;
+  const imgFile = await readClipboardImageFile();
+  if (imgFile) {
+    try {
+      await uploadAndAttachItemImage(safeId, imgFile, { setAsMain: true, title: 'Pasted screenshot' });
+      return;
+    } catch (err) {
+      showToast(err.message || 'Could not paste screenshot.', 'error');
+      return;
+    }
+  }
+  openQuickPhotoModal({ kind: 'item', id: safeId, title: 'Paste or choose main photo' });
+  showToast('Press Ctrl+V to paste your screenshot.');
+}
+
+export async function pasteItemExtraPhoto(itemId) {
+  const safeId = Number(itemId);
+  if (!safeId) return;
+  const imgFile = await readClipboardImageFile();
+  if (imgFile) {
+    try {
+      await uploadAndAttachItemImage(safeId, imgFile, { setAsMain: false, title: 'Pasted photo' });
+      return;
+    } catch (err) {
+      showToast(err.message || 'Could not paste photo.', 'error');
+      return;
+    }
+  }
+  openQuickPhotoModal({ kind: 'item-extra', id: safeId, title: 'Paste or choose additional photo' });
+  showToast('Press Ctrl+V to paste your image.');
+}
+
+export function triggerItemExtraPhotoUpload(itemId) {
+  const input = document.getElementById(`item-extra-photo-input-${Number(itemId)}`);
+  if (input) input.click();
+}
+
+export async function handleItemExtraPhotoUpload(itemId, e) {
+  const safeId = Number(itemId);
+  const files = Array.from(e?.target?.files || []).filter(Boolean);
+  if (e?.target) e.target.value = '';
+  if (!safeId || !files.length) return;
+  try {
+    for (const file of files) {
+      const compressed = await compressImageFile(file);
+      const fd = new FormData();
+      fd.append('file', compressed);
+      await apiUpload(`/api/v1/items/${safeId}/attachments`, fd, 'Photo upload failed.');
+    }
+    showToast(`Added ${pluralize(files.length, 'photo')}!`);
+    await loadAllData();
+    await loadItemAttachmentsIntoView(safeId);
+  } catch (err) {
+    showToast(err.message || 'Could not upload photo.', 'error');
+  }
+}
+
+export function openItemPhoneCapture(itemId) {
+  const safeId = Number(itemId);
+  const item = state.items.find(i => Number(i.id) === safeId);
+  if (!safeId || !item) return;
+  openItemPhoneCaptureModal({
+    itemId: safeId,
+    itemName: item.name || 'Item',
+    onDone: async ({ photos }) => {
+      if (!photos || !photos.length) return;
+      try {
+        for (const p of photos) {
+          if (!p || !p.original_path) continue;
+          await apiPost(
+            `/api/v1/items/${safeId}/attachments/from-photo`,
+            {
+              photo_path: p.original_path,
+              thumbnail_path: p.thumbnail_path || null,
+              set_as_main: false,
+            },
+            'Could not save phone photo.'
+          );
+        }
+        showToast(`Added ${pluralize(photos.length, 'phone photo')}!`);
+        await loadAllData();
+        await loadItemAttachmentsIntoView(safeId);
+      } catch (err) {
+        showToast(err.message || 'Could not attach phone photos.', 'error');
+      }
+    },
+  });
+}
 
 function syncItemAttachmentsVisibility(itemId, count) {
   const card = document.getElementById(`item-attachments-card-${itemId}`);
@@ -3921,7 +4121,7 @@ const itemPdfRemoveSourceByItem = new Map();
 function collectItemSavedPhotos(item, loc) {
   const seen = new Set();
   const list = [];
-  const pushPhoto = (rawUrl, rawThumb, label) => {
+  const pushPhoto = (rawUrl, rawThumb, label, attachmentId = null) => {
     const url = sanitizePhotoUrl(rawUrl || '');
     if (!url || seen.has(url)) return;
     seen.add(url);
@@ -3929,8 +4129,17 @@ function collectItemSavedPhotos(item, loc) {
       url,
       thumb: sanitizePhotoUrl(rawThumb || '') || url,
       label: label || (item ? item.name : 'Saved photo'),
+      attachmentId: attachmentId || null,
     });
   };
+  const itemId = item ? Number(item.id) : 0;
+  const imgAtts = itemId ? (itemImageAttachmentsByItem.get(itemId) || []) : [];
+  for (const att of imgAtts) {
+    pushPhoto(att.file_path, att.thumbnail_path, att.title || att.filename, Number(att.id) || null);
+  }
+  if (item && item.item_photo) {
+    pushPhoto(item.item_photo, null, item.name);
+  }
   if (loc && Array.isArray(loc.photos)) {
     for (const p of loc.photos) {
       pushPhoto(p.photo_path, p.thumbnail_path, p.caption || loc.name);
@@ -3938,9 +4147,6 @@ function collectItemSavedPhotos(item, loc) {
   }
   if (loc && loc.container_photo) {
     pushPhoto(loc.container_photo, null, loc.name);
-  }
-  if (item && item.item_photo) {
-    pushPhoto(item.item_photo, null, item.name);
   }
   return list;
 }
@@ -4307,13 +4513,20 @@ async function loadItemAttachmentsIntoView(itemId) {
     if (reqSeq !== itemAttachmentsLoadSeq) return;
     const target = document.getElementById(`item-attachments-list-${itemId}`);
     if (!target) return;
-    const count = Array.isArray(attachments) ? attachments.length : 0;
+    const allAtts = Array.isArray(attachments) ? attachments : [];
+    const imageAtts = allAtts.filter(a => a && a.attachment_type === 'image');
+    const docAtts = allAtts.filter(a => a && a.attachment_type !== 'image');
+
+    itemImageAttachmentsByItem.set(Number(itemId), imageAtts);
+    refreshItemSavedPhotosGallery(Number(itemId));
+
+    const count = docAtts.length;
     syncItemAttachmentsVisibility(itemId, count);
     if (count === 0) {
       target.innerHTML = `<p class="drawer-empty-hint" style="margin: 0.25rem 0 0;">No manuals, receipts, or files attached yet.</p>`;
       return;
     }
-    target.innerHTML = attachments.map(att => {
+    target.innerHTML = docAtts.map(att => {
       const safeUrl = sanitizePhotoUrl(att.file_path || '');
       const safeThumb = sanitizePhotoUrl(att.thumbnail_path || '');
       const isImg = att.attachment_type === 'image' && safeUrl;
@@ -4364,7 +4577,89 @@ async function loadItemAttachmentsIntoView(itemId) {
   }
 }
 
+function renderItemSavedPhotoTilesHtml(item, savedPhotos, selectedPdfPaths, isPdfSelectMode) {
+  const safeItemId = Number(item.id);
+  const itemPhoto = sanitizePhotoUrl(item.item_photo || '');
+  if (!savedPhotos.length) {
+    return `<p class="drawer-empty-hint" style="margin: 0.2rem 0 0; grid-column: 1 / -1;">No extra photos yet. Add photos from your phone, pick files, or paste (Ctrl+V).</p>`;
+  }
+  return savedPhotos.map((p, idx) => {
+    const pageOrder = selectedPdfPaths.indexOf(p.url);
+    const isSelected = pageOrder !== -1;
+    const isMain = Boolean(itemPhoto && p.url === itemPhoto);
+    if (isPdfSelectMode) {
+      return `
+        <button
+          type="button"
+          class="item-saved-photo-tile is-selectable ${isSelected ? 'is-selected' : ''}"
+          onclick="toggleItemPdfPhotoSelection(${safeItemId}, '${escapeJsStr(p.url)}', ${isSelected ? 'false' : 'true'})"
+          aria-pressed="${isSelected ? 'true' : 'false'}"
+          title="${isSelected ? `Page ${pageOrder + 1} (click to deselect)` : 'Click to add page to PDF'}"
+        >
+          <img src="${escapeHtml(p.thumb || p.url)}" alt="Photo ${idx + 1}" loading="lazy">
+          <span class="item-pdf-page-badge ${isSelected ? 'is-checked' : ''}" aria-hidden="true">
+            ${isSelected ? (pageOrder + 1) : ''}
+          </span>
+          ${isMain ? `<span class="item-saved-photo-corner-pill">Main</span>` : ''}
+        </button>
+      `;
+    }
+    return `
+      <div class="item-saved-photo-tile ${isMain ? 'is-main' : ''}">
+        <img
+          src="${escapeHtml(p.thumb || p.url)}"
+          alt="Photo ${idx + 1}"
+          loading="lazy"
+          onclick="openLightbox('${escapeJsStr(p.url)}', '${escapeJsStr(`${item.name} (${idx + 1}/${savedPhotos.length})`)}')"
+        >
+        ${isMain ? `<span class="item-saved-photo-corner-pill">Main</span>` : ''}
+        <div class="item-saved-photo-hover-bar">
+          ${!isMain ? `
+            <button
+              type="button"
+              class="item-saved-photo-hover-btn"
+              onclick="setItemMainPhotoFromSaved(${safeItemId}, '${escapeJsStr(p.url)}', event)"
+              title="Set as main item photo"
+            >Set main</button>
+          ` : `<span class="item-saved-photo-hover-label">Main photo</span>`}
+          <button
+            type="button"
+            class="item-saved-photo-hover-btn"
+            onclick="event.stopPropagation(); editExistingPhoto({ kind: 'item', id: ${safeItemId}, photoUrl: '${escapeJsStr(p.url)}', title: 'Crop as item photo' })"
+            title="Crop photo"
+          >${lucideIcon('scissors', '', 11)} Crop</button>
+          ${p.attachmentId ? `
+            <button
+              type="button"
+              class="item-saved-photo-hover-btn danger-text"
+              onclick="event.stopPropagation(); deleteItemAttachment(${safeItemId}, ${Number(p.attachmentId)})"
+              title="Remove photo"
+            >✕</button>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function refreshItemSavedPhotosGallery(itemId) {
+  const safeId = Number(itemId);
+  const grid = document.getElementById(`item-saved-photos-grid-${safeId}`);
+  const countEl = document.getElementById(`item-photos-count-${safeId}`);
+  if (!grid) return;
+  const item = state.items.find(i => Number(i.id) === safeId);
+  if (!item) return;
+  const loc = item.location_id ? state.locationMap.get(item.location_id) : null;
+  const savedPhotos = collectItemSavedPhotos(item, loc);
+  const savedUrlSet = new Set(savedPhotos.map(p => p.url));
+  const selectedPdfPaths = (itemPdfSelectionByItem.get(safeId) || []).filter(u => savedUrlSet.has(u));
+  const isPdfSelectMode = Boolean(itemPdfSelectModeByItem.get(safeId));
+  if (countEl) countEl.textContent = String(savedPhotos.length);
+  grid.innerHTML = renderItemSavedPhotoTilesHtml(item, savedPhotos, selectedPdfPaths, isPdfSelectMode);
+}
+
 export function renderItemView(itemId) {
+  bindItemViewGlobalPaste();
   if (shouldUseLimitedItemView(itemId)) {
     renderLimitedItemView(itemId);
     return;
@@ -4525,6 +4820,7 @@ export function renderItemView(itemId) {
             `}
             <span class="detail-photo-caption">Item photo</span>
             <div class="detail-photo-actions">
+              <button type="button" class="detail-photo-edit-btn" onclick="pasteItemMainPhoto(${safeItemId})" title="Paste screenshot from clipboard (Ctrl+V)">${lucideIcon('clipboard', '', 13)} Paste</button>
               ${itemPhoto ? `<button type="button" class="detail-photo-edit-btn" onclick="editExistingPhoto({ kind: 'item', id: ${safeItemId}, photoUrl: '${escapeJsStr(itemPhoto)}', title: 'Edit item photo' })">${lucideIcon('scissors', '', 13)} Crop</button>` : ''}
               ${itemPhoto ? `<button type="button" class="detail-photo-edit-btn" onclick="openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Replace item photo' })">${lucideIcon('camera', '', 13)} Replace</button>` : ''}
               <button type="button" class="detail-photo-edit-btn" onclick="findAndImportItemPhoto(${safeItemId})">${lucideIcon('search', '', 13)} Auto-find</button>
@@ -4582,60 +4878,79 @@ export function renderItemView(itemId) {
           </div>
         </div>
 
-        ${savedPhotos.length > 0 ? `
-          <div class="item-saved-photos-section ${isPdfSelectMode ? 'is-select-mode' : ''}">
-            ${isPdfSelectMode ? `
-              <div class="item-saved-photos-select-bar" role="toolbar" aria-label="Create PDF from photos">
-                <div class="item-saved-photos-select-left">
-                  <span class="item-pdf-select-status">
-                    ${selectedPdfPaths.length > 0
+        <div class="item-saved-photos-section ${isPdfSelectMode ? 'is-select-mode' : ''}">
+          <input type="file" id="item-extra-photo-input-${safeItemId}" accept="image/*" multiple style="display: none;" onchange="handleItemExtraPhotoUpload(${safeItemId}, event)">
+          ${isPdfSelectMode ? `
+            <div class="item-saved-photos-select-bar" role="toolbar" aria-label="Create PDF from photos">
+              <div class="item-saved-photos-select-left">
+                <span class="item-pdf-select-status">
+                  ${selectedPdfPaths.length > 0
           ? `${selectedPdfPaths.length} ${selectedPdfPaths.length === 1 ? 'page' : 'pages'} selected`
           : 'Tap photos in page order'}
-                  </span>
-                </div>
-                <div class="item-saved-photos-toolbar">
-                  <input
-                    type="text"
-                    id="item-pdf-title-${safeItemId}"
-                    class="item-pdf-title-input"
-                    value="${escapeHtml(pdfDraftTitle)}"
-                    placeholder="PDF title (optional)"
-                    oninput="updateItemPdfDraftTitle(${safeItemId}, this.value)"
-                  >
-                  <label class="item-pdf-remove-label" title="Remove the original photos from this container after creating the PDF">
-                    <input
-                      type="checkbox"
-                      id="item-pdf-remove-src-${safeItemId}"
-                      ${pdfRemoveSource ? 'checked' : ''}
-                      onchange="toggleItemPdfRemoveSource(${safeItemId}, this.checked)"
-                    >
-                    <span>Remove original photos</span>
-                  </label>
-                  <button
-                    type="button"
-                    class="btn btn-secondary btn-xs"
-                    onclick="selectAllItemPdfPhotos(${safeItemId}, ${selectedPdfPaths.length < savedPhotos.length ? 'true' : 'false'})"
-                  >${selectedPdfPaths.length < savedPhotos.length ? 'Select all' : 'Deselect all'}</button>
-                  <button
-                    type="button"
-                    class="btn btn-primary btn-xs"
-                    id="item-convert-pdf-btn-${safeItemId}"
-                    onclick="convertSelectedItemPhotosToPdf(${safeItemId})"
-                    ${selectedPdfPaths.length === 0 ? 'disabled' : ''}
-                  >${lucideIcon('fileText', '', 13)} Create PDF${selectedPdfPaths.length > 0 ? ` (${selectedPdfPaths.length})` : ''}</button>
-                  <button
-                    type="button"
-                    class="btn btn-secondary btn-xs"
-                    onclick="toggleItemPdfSelectMode(${safeItemId}, false)"
-                  >Cancel</button>
-                </div>
+                </span>
               </div>
-            ` : `
-              <div class="item-saved-photos-header">
-                <div class="item-saved-photos-heading">
-                  <span class="detail-section-title" style="margin-bottom: 0;">Photos</span>
-                  <span class="drawer-carousel-count">${savedPhotos.length}</span>
-                </div>
+              <div class="item-saved-photos-toolbar">
+                <input
+                  type="text"
+                  id="item-pdf-title-${safeItemId}"
+                  class="item-pdf-title-input"
+                  value="${escapeHtml(pdfDraftTitle)}"
+                  placeholder="PDF title (optional)"
+                  oninput="updateItemPdfDraftTitle(${safeItemId}, this.value)"
+                >
+                <label class="item-pdf-remove-label" title="Remove the original photos from this container after creating the PDF">
+                  <input
+                    type="checkbox"
+                    id="item-pdf-remove-src-${safeItemId}"
+                    ${pdfRemoveSource ? 'checked' : ''}
+                    onchange="toggleItemPdfRemoveSource(${safeItemId}, this.checked)"
+                  >
+                  <span>Remove original photos</span>
+                </label>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-xs"
+                  onclick="selectAllItemPdfPhotos(${safeItemId}, ${selectedPdfPaths.length < savedPhotos.length ? 'true' : 'false'})"
+                >${selectedPdfPaths.length < savedPhotos.length ? 'Select all' : 'Deselect all'}</button>
+                <button
+                  type="button"
+                  class="btn btn-primary btn-xs"
+                  id="item-convert-pdf-btn-${safeItemId}"
+                  onclick="convertSelectedItemPhotosToPdf(${safeItemId})"
+                  ${selectedPdfPaths.length === 0 ? 'disabled' : ''}
+                >${lucideIcon('fileText', '', 13)} Create PDF${selectedPdfPaths.length > 0 ? ` (${selectedPdfPaths.length})` : ''}</button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-xs"
+                  onclick="toggleItemPdfSelectMode(${safeItemId}, false)"
+                >Cancel</button>
+              </div>
+            </div>
+          ` : `
+            <div class="item-saved-photos-header">
+              <div class="item-saved-photos-heading">
+                <span class="detail-section-title" style="margin-bottom: 0;">Photos</span>
+                <span class="drawer-carousel-count" id="item-photos-count-${safeItemId}">${savedPhotos.length}</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-xs"
+                  onclick="openItemPhoneCapture(${safeItemId})"
+                  title="Add photos from your phone camera"
+                >${lucideIcon('smartphone', '', 13)} Phone</button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-xs"
+                  onclick="triggerItemExtraPhotoUpload(${safeItemId})"
+                  title="Add photo file(s) from computer"
+                >${lucideIcon('upload', '', 13)} File</button>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-xs"
+                  onclick="pasteItemExtraPhoto(${safeItemId})"
+                  title="Paste image from clipboard (Ctrl+V)"
+                >${lucideIcon('clipboard', '', 13)} Paste</button>
                 <div class="drawer-row-more-wrap">
                   <button
                     type="button"
@@ -4644,7 +4959,7 @@ export function renderItemView(itemId) {
                     aria-haspopup="menu"
                     aria-expanded="false"
                     aria-label="Photo actions"
-                    title="Photo actions"
+                    title="More photo actions"
                     onclick="toggleItemPhotosMoreMenu(${safeItemId}, event)"
                   >${lucideIcon('moreHorizontal', '', 15)}</button>
                   <div id="item-photos-more-menu-${safeItemId}" class="unit-more-menu drawer-row-menu" role="menu" hidden>
@@ -4660,69 +4975,15 @@ export function renderItemView(itemId) {
                       role="menuitem"
                       onclick="toggleItemPhotosMoreMenu(${safeItemId}, event); openItemSavedPhotosInDocumentStudio(${safeItemId})"
                     >${lucideIcon('maximize', '', 14)} Enhance &amp; Scan as Document…</button>
-                    <button
-                      type="button"
-                      class="unit-more-item"
-                      role="menuitem"
-                      onclick="toggleItemPhotosMoreMenu(${safeItemId}, event); openQuickPhotoModal({ kind: 'item', id: ${safeItemId}, title: 'Add photo' })"
-                    >${lucideIcon('plus', '', 14)} Add photo…</button>
                   </div>
                 </div>
               </div>
-            `}
-            <div class="item-saved-photos-grid">
-              ${savedPhotos.map((p, idx) => {
-            const pageOrder = selectedPdfPaths.indexOf(p.url);
-            const isSelected = pageOrder !== -1;
-            const isMain = Boolean(itemPhoto && p.url === itemPhoto);
-            if (isPdfSelectMode) {
-              return `
-                    <button
-                      type="button"
-                      class="item-saved-photo-tile is-selectable ${isSelected ? 'is-selected' : ''}"
-                      onclick="toggleItemPdfPhotoSelection(${safeItemId}, '${escapeJsStr(p.url)}', ${isSelected ? 'false' : 'true'})"
-                      aria-pressed="${isSelected ? 'true' : 'false'}"
-                      title="${isSelected ? `Page ${pageOrder + 1} (click to deselect)` : 'Click to add page to PDF'}"
-                    >
-                      <img src="${escapeHtml(p.thumb || p.url)}" alt="Photo ${idx + 1}" loading="lazy">
-                      <span class="item-pdf-page-badge ${isSelected ? 'is-checked' : ''}" aria-hidden="true">
-                        ${isSelected ? (pageOrder + 1) : ''}
-                      </span>
-                      ${isMain ? `<span class="item-saved-photo-corner-pill">Main</span>` : ''}
-                    </button>
-                  `;
-            }
-            return `
-                  <div class="item-saved-photo-tile ${isMain ? 'is-main' : ''}">
-                    <img
-                      src="${escapeHtml(p.thumb || p.url)}"
-                      alt="Photo ${idx + 1}"
-                      loading="lazy"
-                      onclick="openLightbox('${escapeJsStr(p.url)}', '${escapeJsStr(`${item.name} (${idx + 1}/${savedPhotos.length})`)}')"
-                    >
-                    ${isMain ? `<span class="item-saved-photo-corner-pill">Main</span>` : ''}
-                    <div class="item-saved-photo-hover-bar">
-                      ${!isMain ? `
-                        <button
-                          type="button"
-                          class="item-saved-photo-hover-btn"
-                          onclick="setItemMainPhotoFromSaved(${safeItemId}, '${escapeJsStr(p.url)}', event)"
-                          title="Set as main item photo"
-                        >Set main</button>
-                      ` : `<span class="item-saved-photo-hover-label">Main photo</span>`}
-                      <button
-                        type="button"
-                        class="item-saved-photo-hover-btn"
-                        onclick="event.stopPropagation(); editExistingPhoto({ kind: 'item', id: ${safeItemId}, photoUrl: '${escapeJsStr(p.url)}', title: 'Crop as item photo' })"
-                        title="Crop photo"
-                      >${lucideIcon('scissors', '', 11)} Crop</button>
-                    </div>
-                  </div>
-                `;
-          }).join('')}
             </div>
+          `}
+          <div class="item-saved-photos-grid" id="item-saved-photos-grid-${safeItemId}">
+            ${renderItemSavedPhotoTilesHtml(item, savedPhotos, selectedPdfPaths, isPdfSelectMode)}
           </div>
-        ` : ''}
+        </div>
 
         <div class="item-where-grid">
           <button
@@ -5508,6 +5769,36 @@ export async function saveItemPartsList(itemId) {
   });
 }
 
+function linkifyNoteText(raw) {
+  const str = String(raw || '');
+  const urlRe = /https?:\/\/[^\s<>"']+/gi;
+  let out = '';
+  let lastIdx = 0;
+  let match;
+  while ((match = urlRe.exec(str)) !== null) {
+    out += escapeHtml(str.slice(lastIdx, match.index));
+    let url = match[0];
+    let trailing = '';
+    while (/[.,);!?]$/.test(url)) {
+      trailing = url.slice(-1) + trailing;
+      url = url.slice(0, -1);
+    }
+    const safeHref = escapeHtml(url);
+    out += `<a class="item-note-link" href="${safeHref}" target="_blank" rel="noopener noreferrer">${safeHref}</a>${escapeHtml(trailing)}`;
+    lastIdx = match.index + match[0].length;
+  }
+  out += escapeHtml(str.slice(lastIdx));
+  return out;
+}
+
+const NOTE_SECTION_HEADINGS = new Set([
+  'specs',
+  'use case',
+  'setup & usage',
+  'links',
+  'reference links',
+]);
+
 function renderItemNotesSection(item) {
   if (!item.description || !item.description.trim()) return '';
   const parsed = parseItemDescriptionAndParts(item.description);
@@ -5520,17 +5811,18 @@ function renderItemNotesSection(item) {
     const plainLines = [];
 
     for (const line of lines) {
-      const idx = line.indexOf(':');
+      const isUrlLine = /^https?:\/\//i.test(line);
+      const idx = isUrlLine ? -1 : line.indexOf(':');
       if (idx > 0 && idx < 36) {
         const k = line.slice(0, idx).trim();
         const v = line.slice(idx + 1).trim();
         if (v) {
           kvRows.push({ k, v });
         } else {
-          plainLines.push(k);
+          plainLines.push({ text: k, isHeading: NOTE_SECTION_HEADINGS.has(k.toLowerCase()) });
         }
       } else {
-        plainLines.push(line);
+        plainLines.push({ text: line, isHeading: NOTE_SECTION_HEADINGS.has(line.toLowerCase()) });
       }
     }
 
@@ -5542,14 +5834,18 @@ function renderItemNotesSection(item) {
             ${kvRows.map(r => `
               <div class="spec-parsed-row">
                 <dt class="spec-parsed-k">${escapeHtml(r.k)}</dt>
-                <dd class="spec-parsed-v">${escapeHtml(r.v)}</dd>
+                <dd class="spec-parsed-v">${linkifyNoteText(r.v)}</dd>
               </div>
             `).join('')}
           </dl>
         ` : ''}
         ${plainLines.length > 0 ? `
           <div class="item-notes-box">
-            ${plainLines.map(l => `<p>${escapeHtml(l)}</p>`).join('')}
+            ${plainLines.map(entry => (
+              entry.isHeading
+                ? `<p class="item-note-heading">${escapeHtml(entry.text)}</p>`
+                : `<p>${linkifyNoteText(entry.text)}</p>`
+            )).join('')}
           </div>
         ` : ''}
       </div>
@@ -5559,7 +5855,7 @@ function renderItemNotesSection(item) {
   return `
     <div class="detail-section">
       <span class="detail-section-title">Notes</span>
-      <div class="item-notes-box">${escapeHtml(text)}</div>
+      <div class="item-notes-box">${linkifyNoteText(text)}</div>
     </div>
   `;
 }

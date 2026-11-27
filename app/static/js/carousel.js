@@ -43,7 +43,7 @@ export function renderSlotCarouselHtml(photos, options = {}) {
     `
     : '';
   return `
-    <div class="cgrid-slot-carousel-wrap${extraClass}" onclick="event.stopPropagation()">
+    <div class="cgrid-slot-carousel-wrap${extraClass}">
       <button
         type="button"
         class="cgrid-carousel-arrow prev"

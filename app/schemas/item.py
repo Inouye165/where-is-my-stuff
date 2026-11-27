@@ -40,12 +40,15 @@ class ItemBulkCreate(BaseModel):
     assortment_label: Optional[str] = Field(default=None, max_length=40)
     assortment_photo: Optional[str] = Field(default=None, max_length=300)
     source_photo_ids: Optional[List[int]] = None
+    source_attachment_path: Optional[str] = Field(default=None, max_length=300)
+    source_attachment_filename: Optional[str] = Field(default=None, max_length=255)
+    source_attachment_title: Optional[str] = Field(default=None, max_length=200)
     category: Optional[str] = Field(default=None, max_length=80)
     items: Optional[List[ItemCreate]] = None
     raw_lines: Optional[str] = Field(default=None, max_length=50_000)
     raw_text: Optional[str] = Field(default=None, max_length=50_000)
 
-    @field_validator("assortment_photo")
+    @field_validator("assortment_photo", "source_attachment_path")
     @classmethod
     def check_assortment_photo(cls, v: Optional[str]) -> Optional[str]:
         return validate_safe_photo_ref(v)
@@ -151,6 +154,18 @@ class ItemAttachmentRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ItemPhotoAttachmentCreate(BaseModel):
+    photo_path: str = Field(..., max_length=300)
+    thumbnail_path: Optional[str] = Field(default=None, max_length=300)
+    title: Optional[str] = Field(default=None, max_length=200)
+    set_as_main: bool = False
+
+    @field_validator("photo_path", "thumbnail_path")
+    @classmethod
+    def check_photo_paths(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_photo_ref(v)
+
+
 class ItemImagesToPdfRequest(BaseModel):
     photo_paths: List[str] = Field(..., min_length=1, max_length=50)
     title: Optional[str] = Field(default=None, max_length=160)
@@ -203,3 +218,95 @@ class VisionAnalysisResponse(BaseModel):
     model_used: Optional[str] = None
     message: str = ""
     instructions: str = "Snap an open drawer photo or type items directly into the quick-entry box."
+    source_attachment_path: Optional[str] = None
+    source_attachment_filename: Optional[str] = None
+    source_attachment_size_bytes: Optional[int] = None
+
+
+class BundleSavedImage(BaseModel):
+    file_path: str
+    thumbnail_path: Optional[str] = None
+    filename: str
+
+
+class BundleSavedDocument(BaseModel):
+    file_path: str
+    filename: str
+    attachment_type: str = "document"
+    size_bytes: int = 0
+    title: Optional[str] = None
+
+
+class ItemBundleAnalysisResponse(BaseModel):
+    status: str = "fallback"
+    name: Optional[str] = None
+    part_number: Optional[str] = None
+    category: Optional[str] = None
+    quantity: Optional[int] = None
+    unit: Optional[str] = "pcs"
+    tags: Optional[str] = None
+    specs: Optional[str] = None
+    use_case: Optional[str] = None
+    setup_info: Optional[str] = None
+    reference_links: List[str] = Field(default_factory=list)
+    description: Optional[str] = None
+    saved_images: List[BundleSavedImage] = Field(default_factory=list)
+    saved_documents: List[BundleSavedDocument] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    provider_used: Optional[str] = None
+    model_used: Optional[str] = None
+    message: str = ""
+
+
+class ItemBundleDocumentRef(BaseModel):
+    file_path: str = Field(..., max_length=300)
+    filename: Optional[str] = Field(default=None, max_length=255)
+    title: Optional[str] = Field(default=None, max_length=200)
+
+    @field_validator("file_path")
+    @classmethod
+    def check_doc_path(cls, v: str) -> str:
+        res = validate_safe_photo_ref(v)
+        if not res:
+            raise ValueError("Document file_path is required.")
+        return res
+
+
+class ItemFromBundleCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=160)
+    location_id: Optional[int] = Field(default=None, ge=1)
+    quantity: Optional[int] = Field(default=None, ge=0, le=1_000_000)
+    unit: Optional[str] = Field(default="pcs", max_length=30)
+    category: Optional[str] = Field(default=None, max_length=80)
+    serial_or_part_number: Optional[str] = Field(default=None, max_length=120)
+    tags: Optional[str] = Field(default=None, max_length=300)
+    specs: Optional[str] = Field(default=None, max_length=8000)
+    use_case: Optional[str] = Field(default=None, max_length=6000)
+    setup_info: Optional[str] = Field(default=None, max_length=8000)
+    reference_links: List[str] = Field(default_factory=list)
+    description: Optional[str] = Field(default=None, max_length=20_000)
+    main_photo_path: Optional[str] = Field(default=None, max_length=300)
+    image_paths: List[str] = Field(default_factory=list)
+    documents: List[ItemBundleDocumentRef] = Field(default_factory=list)
+
+    @field_validator("name")
+    @classmethod
+    def check_bundle_name(cls, v: Optional[str]) -> Optional[str]:
+        return validate_name(v)
+
+    @field_validator("main_photo_path")
+    @classmethod
+    def check_main_photo(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_photo_ref(v)
+
+    @field_validator("image_paths")
+    @classmethod
+    def check_image_paths(cls, v: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for raw in v:
+            safe = validate_safe_photo_ref(raw)
+            if safe and safe not in seen:
+                seen.add(safe)
+                cleaned.append(safe)
+        return cleaned

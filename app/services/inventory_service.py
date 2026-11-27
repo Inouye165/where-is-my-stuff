@@ -23,6 +23,7 @@ from app.schemas.item import (
     ItemGroupIntoBoxResponse,
     ItemImagesToPdfRequest,
     ItemPageResponse,
+    ItemPhotoAttachmentCreate,
     ItemRead,
     ItemUpdate,
     LocationPhotos,
@@ -341,6 +342,7 @@ class InventoryService:
                 cls.create(db, it_data.model_copy(update={"location_id": child_box.id}))
                 for it_data in items_to_create
             ]
+            cls._link_source_attachment(db, box_items, data)
             db.flush()
             return box_items
 
@@ -378,12 +380,42 @@ class InventoryService:
                 status="stored",
             )
             created_kit = cls.create(db, kit_data)
+            cls._link_source_attachment(db, [created_kit], data)
             db.flush()
             return [created_kit]
 
         created_items = [cls.create(db, it_data) for it_data in items_to_create]
+        cls._link_source_attachment(db, created_items, data)
         db.flush()
         return created_items
+
+    @classmethod
+    def _link_source_attachment(cls, db: Session, items: List[Item], data: ItemBulkCreate) -> None:
+        if not items or not data.source_attachment_path:
+            return
+        disk_path = photo_service.resolve_safe_upload_path(data.source_attachment_path)
+        if not disk_path.exists() or not disk_path.is_file():
+            return
+        ext = disk_path.suffix.lower()
+        att_type = "pdf" if ext == ".pdf" else ("image" if ext in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"} else "document")
+        content_type = "application/pdf" if ext == ".pdf" else None
+        filename = (data.source_attachment_filename or disk_path.name).strip()[:255] or disk_path.name
+        title = (data.source_attachment_title or "").strip()[:200] or None
+        size_bytes = disk_path.stat().st_size
+        photo_service.register_pending_reference(db, data.source_attachment_path)
+        for item in items:
+            db.add(
+                ItemAttachment(
+                    item_id=item.id,
+                    file_path=data.source_attachment_path,
+                    thumbnail_path=None,
+                    filename=filename,
+                    content_type=content_type,
+                    attachment_type=att_type,
+                    title=title,
+                    size_bytes=size_bytes,
+                )
+            )
 
     @classmethod
     def group_items_into_box(cls, db: Session, data: ItemGroupIntoBoxRequest) -> ItemGroupIntoBoxResponse:
@@ -626,6 +658,68 @@ class InventoryService:
         db.add(att)
         if att.attachment_type == "image" and not item.item_photo:
             item.item_photo = att.file_path
+        db.flush()
+        db.refresh(att)
+        return att
+
+    @classmethod
+    def add_photo_attachment(
+        cls,
+        db: Session,
+        item_id: int,
+        data: ItemPhotoAttachmentCreate,
+    ) -> ItemAttachment:
+        item = item_repository.get_by_id(db, item_id)
+        if not item:
+            raise NotFoundError("Item not found.")
+        disk_path = photo_service.resolve_safe_upload_path(data.photo_path)
+        if not disk_path.exists() or not disk_path.is_file():
+            raise NotFoundError("Uploaded photo file not found.")
+
+        thumb_path = data.thumbnail_path
+        if not thumb_path and data.photo_path.startswith("/uploads/originals/"):
+            candidate_thumb = f"/uploads/thumbnails/{disk_path.stem}_thumb.webp"
+            if photo_service.resolve_safe_upload_path(candidate_thumb).exists():
+                thumb_path = candidate_thumb
+
+        photo_service.register_pending_reference(db, data.photo_path)
+        existing = db.execute(
+            select(ItemAttachment).where(
+                ItemAttachment.item_id == item.id,
+                ItemAttachment.file_path == data.photo_path,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if data.title and not existing.title:
+                existing.title = data.title.strip()[:200] or None
+            if data.set_as_main or not item.item_photo:
+                item.item_photo = data.photo_path
+            db.flush()
+            db.refresh(existing)
+            return existing
+
+        ext = disk_path.suffix.lower()
+        mime_map = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+        }
+        att = ItemAttachment(
+            item_id=item.id,
+            file_path=data.photo_path,
+            thumbnail_path=thumb_path,
+            filename=disk_path.name,
+            content_type=mime_map.get(ext, "image/jpeg"),
+            attachment_type="image",
+            title=(data.title or "").strip()[:200] or None,
+            size_bytes=disk_path.stat().st_size,
+        )
+        db.add(att)
+        if data.set_as_main or not item.item_photo:
+            item.item_photo = data.photo_path
         db.flush()
         db.refresh(att)
         return att

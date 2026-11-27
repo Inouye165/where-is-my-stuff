@@ -64,6 +64,24 @@ _MULTI_ANGLE_VISION_PROMPT = (
 )
 
 
+_PDF_EXTRACTION_PROMPT = (
+    "You are extracting physical inventory item(s) from a PDF document (such as a product datasheet, manual, "
+    "order invoice, packing slip, bill of materials, or specification sheet). "
+    "RULES:\n"
+    "1. If the PDF is a datasheet, manual, or product page for ONE specific product/component/sensor/tool, output 1 item "
+    "object in \"items\" with a clear, descriptive \"name\", exact \"part_number\" (model/SKU/MPN if present), "
+    "appropriate \"category\", \"estimated_qty\" (default 1 unless a pack count is stated), and rich \"brief_specs\" "
+    "summarizing key technical specifications (e.g., supply voltage, range, dimensions, pinout, interface, ratings).\n"
+    "2. If the PDF is an invoice, packing list, order confirmation, BOM, or assortment table listing MULTIPLE distinct items, "
+    "output ONE separate item object in \"items\" for EACH distinct line item with its exact ordered/listed quantity in \"estimated_qty\".\n"
+    "3. Only include part numbers, specs, brands, and quantities explicitly present in the document text. NEVER fabricate or guess missing values.\n"
+    "4. If the items form a cohesive kit or assortment, set \"suggested_group_name\" and \"suggested_category\"; otherwise leave \"suggested_group_name\" empty.\n"
+    "Avoid unescaped double quotes inside string values (write 'in' or 'inch' instead of '\"').\n"
+    "Return ONLY valid JSON matching: "
+    '{"suggested_group_name": "...", "suggested_category": "...", "items": [{"name": "...", "part_number": "...", "category": "...", "estimated_qty": 1, "brief_specs": "..."}]}'
+)
+
+
 _MIME_BY_SUFFIX = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -687,6 +705,264 @@ class VisionService:
                 logger.warning("Vision search query extraction (openai) failed: %s", exc)
 
         return "", has_vision_api
+
+    @staticmethod
+    def _build_pdf_prompt(
+        extracted_text: str,
+        *,
+        filename: Optional[str] = None,
+        expected_count: Optional[int] = None,
+        context_hint: Optional[str] = None,
+    ) -> str:
+        parts = [_PDF_EXTRACTION_PROMPT]
+        clean_name = re.sub(r"\s+", " ", (filename or "")).strip()[:160]
+        if clean_name:
+            parts.append(f"SOURCE FILENAME: {clean_name}")
+        clean_hint = re.sub(r"\s+", " ", (context_hint or "")).strip()[:240]
+        if clean_hint:
+            parts.append(
+                f"LOCATION CONTEXT: Stored in {clean_hint!r}. Use only as context; report ONLY items supported by the PDF."
+            )
+        if expected_count and expected_count > 0:
+            parts.append(f"HINT: The user expects approximately {expected_count} distinct item(s).")
+        parts.append("PDF DOCUMENT TEXT:\n" + extracted_text[:16000])
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _extract_pdf_text_and_images(pdf_path: Path, max_pages: int = 12, max_images: int = 4) -> tuple[str, List[Path]]:
+        from pypdf import PdfReader
+        import tempfile
+
+        reader = PdfReader(str(pdf_path))
+        text_chunks: List[str] = []
+        for idx, page in enumerate(reader.pages[:max_pages]):
+            try:
+                page_text = (page.extract_text() or "").strip()
+            except Exception:
+                page_text = ""
+            if page_text:
+                text_chunks.append(f"--- Page {idx + 1} ---\n{page_text}")
+        combined_text = "\n\n".join(text_chunks).strip()
+        if len(combined_text) >= 40:
+            return combined_text, []
+
+        # Scanned / image-only PDF fallback: extract embedded images to temporary files
+        extracted_images: List[Path] = []
+        tmp_dir = Path(tempfile.mkdtemp(prefix="wims_pdf_img_"))
+        for p_idx, page in enumerate(reader.pages[:max_pages]):
+            if len(extracted_images) >= max_images:
+                break
+            try:
+                imgs = list(getattr(page, "images", []) or [])
+            except Exception:
+                imgs = []
+            for i_idx, img_obj in enumerate(imgs):
+                if len(extracted_images) >= max_images:
+                    break
+                data = getattr(img_obj, "data", None)
+                if not data:
+                    continue
+                suffix = Path(getattr(img_obj, "name", "") or "img.jpg").suffix.lower()
+                if suffix not in _MIME_BY_SUFFIX:
+                    suffix = ".jpg"
+                out_path = tmp_dir / f"p{p_idx + 1}_{i_idx + 1}{suffix}"
+                out_path.write_bytes(data)
+                extracted_images.append(out_path)
+        return combined_text, extracted_images
+
+    async def _analyze_pdf_text(
+        self,
+        extracted_text: str,
+        *,
+        filename: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        expected_count: Optional[int] = None,
+        context_hint: Optional[str] = None,
+    ) -> VisionAnalysisResponse:
+        selected = (provider or os.environ.get("VISION_PROVIDER") or settings.VISION_PROVIDER or "").strip().lower()
+        gemini_key = self._effective_gemini_key()
+        openai_key = self._effective_openai_key()
+        if not selected or selected == "auto":
+            selected = "gemini" if gemini_key else ("openai" if openai_key else "local")
+
+        prompt = self._build_pdf_prompt(
+            extracted_text,
+            filename=filename,
+            expected_count=expected_count,
+            context_hint=context_hint,
+        )
+
+        try:
+            if selected == "gemini":
+                if not gemini_key:
+                    return VisionAnalysisResponse(
+                        status="fallback",
+                        items=[],
+                        has_vision_api=False,
+                        provider_used="gemini",
+                        message="GEMINI_API_KEY is not configured. Add it to .env or switch to Local Model (Ollama).",
+                    )
+                safe_model = _validate_model_name(model or settings.GEMINI_VISION_MODEL, "gemini")
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:generateContent"
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"response_mime_type": "application/json"},
+                }
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(url, json=payload, headers={"x-goog-api-key": gemini_key})
+                if resp.status_code != 200:
+                    return VisionAnalysisResponse(
+                        status="fallback",
+                        items=[],
+                        has_vision_api=True,
+                        provider_used="gemini",
+                        model_used=safe_model,
+                        message=f"Gemini returned HTTP {resp.status_code} while reading PDF.",
+                    )
+                raw_content = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            elif selected == "openai":
+                if not openai_key:
+                    return VisionAnalysisResponse(
+                        status="fallback",
+                        items=[],
+                        has_vision_api=False,
+                        provider_used="openai",
+                        message="OPENAI_API_KEY is not configured. Add it to .env or switch to Local Model (Ollama).",
+                    )
+                safe_model = _validate_model_name(model or settings.OPENAI_VISION_MODEL, "openai")
+                payload = {
+                    "model": safe_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                }
+                headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
+                if resp.status_code != 200:
+                    return VisionAnalysisResponse(
+                        status="fallback",
+                        items=[],
+                        has_vision_api=True,
+                        provider_used="openai",
+                        model_used=safe_model,
+                        message=f"OpenAI returned HTTP {resp.status_code} while reading PDF.",
+                    )
+                raw_content = resp.json()["choices"][0]["message"]["content"]
+            else:
+                safe_model = _validate_model_name(self._effective_ollama_model(model), "local")
+                ollama_url = self._effective_ollama_url()
+                payload = {
+                    "model": safe_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "format": "json",
+                    "stream": False,
+                    "options": {"num_predict": 4096, "temperature": 0.1},
+                }
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(f"{ollama_url}/api/chat", json=payload)
+                if resp.status_code != 200:
+                    err_detail = ""
+                    try:
+                        err_detail = resp.json().get("error", "")
+                    except Exception:
+                        pass
+                    suffix = f" ({err_detail})" if err_detail else ""
+                    return VisionAnalysisResponse(
+                        status="fallback",
+                        items=[],
+                        has_vision_api=False,
+                        provider_used="local",
+                        model_used=safe_model,
+                        message=f"Local model ({safe_model}) returned HTTP {resp.status_code}{suffix}.",
+                    )
+                resp_data = resp.json()
+                raw_content = (resp_data.get("message") or {}).get("content") or resp_data.get("response") or ""
+
+            parsed = _extract_json_object(raw_content)
+            detected = _parse_detected_items(parsed)
+            group_name, group_cat = _parse_group_metadata(parsed)
+            return VisionAnalysisResponse(
+                status="success",
+                items=detected,
+                suggested_group_name=group_name,
+                suggested_category=group_cat,
+                has_vision_api=True,
+                provider_used=selected,
+                model_used=safe_model,
+                message=f"Extracted {len(detected)} item(s) from PDF ({safe_model}).",
+            )
+        except BadRequestError:
+            raise
+        except (httpx.RequestError, httpx.TimeoutException, ConnectionError, OSError) as exc:
+            logger.warning("PDF AI analysis (%s) connection failed: %s", selected, exc)
+            return VisionAnalysisResponse(
+                status="fallback",
+                items=[],
+                has_vision_api=selected in ("gemini", "openai"),
+                provider_used=selected,
+                message=f"Could not reach {selected} AI model ({exc.__class__.__name__}). You can still enter items manually.",
+            )
+        except (json.JSONDecodeError, ValueError, KeyError) as exc:
+            logger.warning("PDF AI analysis (%s) response parse failed: %s", selected, exc)
+            return VisionAnalysisResponse(
+                status="fallback",
+                items=[],
+                has_vision_api=selected in ("gemini", "openai"),
+                provider_used=selected,
+                message=f"{selected.capitalize()} AI model returned an unreadable response ({exc.__class__.__name__}).",
+            )
+
+    async def analyze_pdf(
+        self,
+        pdf_path: Path,
+        *,
+        filename: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        expected_count: Optional[int] = None,
+        context_hint: Optional[str] = None,
+    ) -> VisionAnalysisResponse:
+        import shutil
+
+        if not pdf_path or not pdf_path.exists():
+            return VisionAnalysisResponse(
+                status="fallback",
+                items=[],
+                message="PDF file could not be read.",
+            )
+
+        extracted_text, extracted_images = await anyio.to_thread.run_sync(
+            self._extract_pdf_text_and_images, pdf_path
+        )
+        try:
+            if len(extracted_text) >= 40:
+                return await self._analyze_pdf_text(
+                    extracted_text,
+                    filename=filename,
+                    provider=provider,
+                    model=model,
+                    expected_count=expected_count,
+                    context_hint=context_hint,
+                )
+            if extracted_images:
+                result = await self.analyze_images(
+                    extracted_images,
+                    provider=provider,
+                    model=model,
+                    expected_count=expected_count,
+                    context_hint=context_hint,
+                )
+                # Temp image crops shouldn't leak broken paths if any failed; crop_many_and_save writes to /uploads/originals/
+                return result
+            return VisionAnalysisResponse(
+                status="fallback",
+                items=[],
+                message="This PDF had no readable text or images. You can enter item details manually and the PDF will still be attached.",
+            )
+        finally:
+            if extracted_images:
+                shutil.rmtree(extracted_images[0].parent, ignore_errors=True)
 
 
 vision_service = VisionService()
