@@ -1609,6 +1609,7 @@ export function renderStorageUnitView(unitId) {
       menuItem('package', 'Add a Box / Kit', `openGroupIntoBoxModal(${safeUnitId}, { createOnly: true })`),
       isEditingGrid ? '' : menuItem('grid', hasGrid ? 'Edit drawer grid' : 'Design drawer / shelf grid', `openInlineGridDesigner(${safeUnitId})`),
       menuItem('qrCode', 'Auto-label compartments from photo', `openLabelScanModal(${safeUnitId})`),
+      drawers.length > 0 ? menuItem('smartphone', 'Capture drawer contents (Phone QR)', `openExistingUnitCaptureWizard(${safeUnitId})`) : '',
       MENU_DIVIDER,
       menuItem('camera', photo ? 'Change photo' : 'Add photo', `openQuickPhotoModal({ kind: 'bin', id: ${safeUnitId}, title: '${photo ? 'Replace photo' : 'Add a photo'}' })`),
       photo ? menuItem('scissors', 'Crop photo', `editExistingPhoto({ kind: 'bin', id: ${safeUnitId}, photoUrl: '${escapeJsStr(photo)}', title: 'Crop' })`) : '',
@@ -1730,6 +1731,11 @@ export function renderStorageUnitView(unitId) {
               <div class="unit-grid-chassis-hdr">
                 <span class="unit-grid-chassis-title">${lucideIcon('grid', '', 14)} Drawer layout</span>
                 <div class="unit-grid-chassis-right">
+                  ${drawers.length > 0 ? `
+                    <button type="button" class="btn btn-secondary btn-xs" onclick="openExistingUnitCaptureWizard(${safeUnitId})" title="Walk through drawers on your phone to snap 1+ photos of contents">
+                      ${lucideIcon('smartphone', '', 13)} Capture contents
+                    </button>
+                  ` : ''}
                   ${(drawers.length >= 12 || (Number(unit.grid_rows) * Number(unit.grid_cols) >= 12)) ? `
                     <button type="button" class="btn btn-secondary btn-xs" onclick="openLabelScanModal(${safeUnitId})" title="Auto-label compartments from one photo via QR or upload">
                       ${lucideIcon('qrCode', '', 13)} Auto-label

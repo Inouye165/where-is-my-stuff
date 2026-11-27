@@ -48,6 +48,22 @@ _VISION_PROMPT = (
 )
 
 
+_MULTI_ANGLE_VISION_PROMPT = (
+    "You are inspecting MULTIPLE photos taken from different angles or close-ups of the contents inside ONE single storage drawer/bin. "
+    "Combine visual details across ALL provided photos (wide overview + side/nameplate/label close-ups) to identify every distinct part, motor, electronic component, fastener, or tool inside this drawer. "
+    "CRITICAL MULTI-ANGLE RULES:\n"
+    "1. If multiple photos show DIFFERENT SIDES or close-ups of the SAME physical item (for example, photo 1 shows a motor and photo 2 shows its side nameplate/label), merge them into ONE single item entry — DO NOT duplicate the same physical object across angles.\n"
+    "2. Identify the specific device/part/motor type whenever any angle shows readable markings, labels, or a nameplate (put exact model/part code in \"part_number\" and clear descriptive title in \"name\").\n"
+    "3. Put ALL readable special information from any angle — voltage, current, RPM, gear ratio, specs, pinout, dimensions, package type, or markings — into \"brief_specs\" so it is saved in the item notes.\n"
+    "4. Only include part numbers, ratings, or markings that are clearly readable in at least one photo; NEVER guess or invent unreadable digits.\n"
+    "5. If the drawer actually contains multiple distinct items or an assortment, output one separate object in \"items\" per distinct item with its count in \"estimated_qty\".\n"
+    "6. For each item, include \"bbox\": [x_min, y_min, x_max, y_max] as integers 0-1000 referencing the first photo where it appears.\n"
+    "Avoid unescaped double quotes inside string values (write 'in' or 'inch' instead of '\"'). "
+    "Return ONLY valid JSON matching: "
+    '{"suggested_group_name": "...", "suggested_category": "...", "items": [{"name": "...", "part_number": "...", "category": "...", "estimated_qty": 1, "brief_specs": "...", "bbox": [x_min, y_min, x_max, y_max]}]}'
+)
+
+
 _MIME_BY_SUFFIX = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -58,14 +74,24 @@ _MIME_BY_SUFFIX = {
 }
 
 
-def _build_vision_prompt(expected_count: Optional[int] = None) -> str:
+def _build_vision_prompt(
+    expected_count: Optional[int] = None,
+    image_count: int = 1,
+    context_hint: Optional[str] = None,
+) -> str:
+    base = _MULTI_ANGLE_VISION_PROMPT if image_count > 1 else _VISION_PROMPT
+    parts = [base]
+    clean_hint = re.sub(r"\s+", " ", (context_hint or "")).strip()[:240]
+    if clean_hint:
+        parts.append(
+            f"CONTEXT: The drawer label is {clean_hint!r}. Use this only as helpful context; report ONLY items visibly present in the photos."
+        )
     if expected_count and expected_count > 0:
-        return (
-            f"{_VISION_PROMPT} "
+        parts.append(
             f"HINT: The user indicates there are approximately {expected_count} distinct item types/values/compartments here. "
             f"Inspect every row, column, and compartment carefully so all {expected_count} distinct items are listed."
         )
-    return _VISION_PROMPT
+    return " ".join(parts)
 
 
 def _try_parse_json_dict(candidate: str) -> Optional[Dict[str, Any]]:
@@ -257,17 +283,36 @@ class VisionService:
             },
         }
 
+    @staticmethod
+    def _normalize_image_inputs(
+        images_or_b64: Any, mime_type: str = "image/jpeg"
+    ) -> List[tuple[str, str]]:
+        if isinstance(images_or_b64, str):
+            return [(images_or_b64, mime_type or "image/jpeg")]
+        return [
+            (str(b64), str(mt or "image/jpeg"))
+            for b64, mt in (images_or_b64 or [])
+            if b64
+        ]
+
     async def _analyze_with_ollama(
-        self, b64_data: str, model: str, expected_count: Optional[int] = None
+        self,
+        images_or_b64: Any,
+        model: str,
+        expected_count: Optional[int] = None,
+        context_hint: Optional[str] = None,
     ) -> VisionAnalysisResponse:
         ollama_url = self._effective_ollama_url()
+        img_list = self._normalize_image_inputs(images_or_b64)
         payload = {
             "model": model,
             "messages": [
                 {
                     "role": "user",
-                    "content": _build_vision_prompt(expected_count),
-                    "images": [b64_data],
+                    "content": _build_vision_prompt(
+                        expected_count, image_count=len(img_list), context_hint=context_hint
+                    ),
+                    "images": [b64 for b64, _ in img_list],
                 }
             ],
             "format": "json",
@@ -310,48 +355,46 @@ class VisionService:
                 message=f"Local model ({model}) detected {len(detected)} item(s).",
             )
 
-    @staticmethod
-    def _build_gemini_payload(prompt: str, b64_data: str, mime_type: str) -> dict[str, Any]:
+    @classmethod
+    def _build_gemini_payload(
+        cls, prompt: str, images_or_b64: Any, mime_type: str = "image/jpeg"
+    ) -> dict[str, Any]:
+        parts: List[dict[str, Any]] = [{"text": prompt}]
+        for b64, mt in cls._normalize_image_inputs(images_or_b64, mime_type):
+            parts.append({"inline_data": {"mime_type": mt, "data": b64}})
         return {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": mime_type or "image/jpeg", "data": b64_data}},
-                    ]
-                }
-            ],
+            "contents": [{"parts": parts}],
             "generationConfig": {"response_mime_type": "application/json"},
         }
 
-    @staticmethod
-    def _build_openai_payload(prompt: str, model: str, b64_data: str, mime_type: str) -> dict[str, Any]:
+    @classmethod
+    def _build_openai_payload(
+        cls, prompt: str, model: str, images_or_b64: Any, mime_type: str = "image/jpeg"
+    ) -> dict[str, Any]:
+        content: List[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for b64, mt in cls._normalize_image_inputs(images_or_b64, mime_type):
+            content.append({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}})
         return {
             "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime_type or 'image/jpeg'};base64,{b64_data}"},
-                        },
-                    ],
-                }
-            ],
+            "messages": [{"role": "user", "content": content}],
             "response_format": {"type": "json_object"},
         }
 
     async def _analyze_with_gemini(
-        self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None,
+        self,
+        images_or_b64: Any,
+        model: str,
+        api_key: str,
+        expected_count: Optional[int] = None,
         mime_type: str = "image/jpeg",
+        context_hint: Optional[str] = None,
     ) -> VisionAnalysisResponse:
         safe_model = _validate_model_name(model, "gemini")
-        prompt = _build_vision_prompt(expected_count)
+        img_list = self._normalize_image_inputs(images_or_b64, mime_type)
+        prompt = _build_vision_prompt(expected_count, image_count=len(img_list), context_hint=context_hint)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:generateContent"
-        payload = self._build_gemini_payload(prompt, b64_data, mime_type)
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        payload = self._build_gemini_payload(prompt, img_list)
+        async with httpx.AsyncClient(timeout=45.0) as client:
             resp = await client.post(url, json=payload, headers={"x-goog-api-key": api_key})
             if resp.status_code != 200:
                 return VisionAnalysisResponse(
@@ -379,13 +422,20 @@ class VisionService:
             )
 
     async def _analyze_with_openai(
-        self, b64_data: str, model: str, api_key: str, expected_count: Optional[int] = None,
+        self,
+        images_or_b64: Any,
+        model: str,
+        api_key: str,
+        expected_count: Optional[int] = None,
         mime_type: str = "image/jpeg",
+        context_hint: Optional[str] = None,
     ) -> VisionAnalysisResponse:
         safe_model = _validate_model_name(model, "openai")
-        payload = self._build_openai_payload(_build_vision_prompt(expected_count), safe_model, b64_data, mime_type)
+        img_list = self._normalize_image_inputs(images_or_b64, mime_type)
+        prompt = _build_vision_prompt(expected_count, image_count=len(img_list), context_hint=context_hint)
+        payload = self._build_openai_payload(prompt, safe_model, img_list)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=45.0) as client:
             resp = await client.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
             if resp.status_code != 200:
                 return VisionAnalysisResponse(
@@ -418,14 +468,38 @@ class VisionService:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         expected_count: Optional[int] = None,
+        context_hint: Optional[str] = None,
     ) -> VisionAnalysisResponse:
-        def _read_encoded_image() -> Optional[str]:
-            if not image_path or not image_path.exists():
-                return None
-            return base64.b64encode(image_path.read_bytes()).decode("utf-8")
+        return await self.analyze_images(
+            [image_path] if image_path else [],
+            provider=provider,
+            model=model,
+            expected_count=expected_count,
+            context_hint=context_hint,
+        )
 
-        b64_data = await anyio.to_thread.run_sync(_read_encoded_image)
-        if b64_data is None:
+    async def analyze_images(
+        self,
+        image_paths: List[Path],
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        expected_count: Optional[int] = None,
+        context_hint: Optional[str] = None,
+    ) -> VisionAnalysisResponse:
+        valid_paths = [p for p in (image_paths or []) if p is not None]
+
+        def _read_encoded_images() -> List[tuple[Path, str, str]]:
+            encoded: List[tuple[Path, str, str]] = []
+            for p in valid_paths:
+                if not p.exists():
+                    continue
+                b64 = base64.b64encode(p.read_bytes()).decode("utf-8")
+                mime = _MIME_BY_SUFFIX.get(p.suffix.lower(), "image/jpeg")
+                encoded.append((p, b64, mime))
+            return encoded
+
+        encoded_items = await anyio.to_thread.run_sync(_read_encoded_images)
+        if not encoded_items:
             return VisionAnalysisResponse(
                 status="fallback",
                 items=[],
@@ -433,7 +507,8 @@ class VisionService:
                 message="Photo uploaded. Enter items line-by-line below to batch-add them to this drawer.",
             )
 
-        mime_type = _MIME_BY_SUFFIX.get(image_path.suffix.lower(), "image/jpeg") if image_path else "image/jpeg"
+        primary_path = encoded_items[0][0]
+        encoded_pairs = [(b64, mime) for _, b64, mime in encoded_items]
         selected = (provider or os.environ.get("VISION_PROVIDER") or settings.VISION_PROVIDER or "").strip().lower()
         gemini_key = self._effective_gemini_key()
         openai_key = self._effective_openai_key()
@@ -460,7 +535,11 @@ class VisionService:
                         message="GEMINI_API_KEY is not configured. Add it to .env or switch to Local Model (Ollama).",
                     )
                 result = await self._analyze_with_gemini(
-                    b64_data, target_model, gemini_key, expected_count=expected_count, mime_type=mime_type,
+                    encoded_pairs,
+                    target_model,
+                    gemini_key,
+                    expected_count=expected_count,
+                    context_hint=context_hint,
                 )
             elif selected == "openai":
                 if not openai_key:
@@ -472,13 +551,22 @@ class VisionService:
                         message="OPENAI_API_KEY is not configured. Add it to .env or switch to Local Model (Ollama).",
                     )
                 result = await self._analyze_with_openai(
-                    b64_data, target_model, openai_key, expected_count=expected_count, mime_type=mime_type,
+                    encoded_pairs,
+                    target_model,
+                    openai_key,
+                    expected_count=expected_count,
+                    context_hint=context_hint,
                 )
             else:
                 # Default: local (Ollama)
-                result = await self._analyze_with_ollama(b64_data, target_model, expected_count=expected_count)
+                result = await self._analyze_with_ollama(
+                    encoded_pairs,
+                    target_model,
+                    expected_count=expected_count,
+                    context_hint=context_hint,
+                )
 
-            if result.status == "success" and result.items and image_path and image_path.exists():
+            if result.status == "success" and result.items and primary_path.exists():
                 def _crop_all() -> int:
                     all_coords = [c for it in result.items if it.bbox for c in it.bbox]
                     batch_mode = "auto"
@@ -491,7 +579,7 @@ class VisionService:
                         else:
                             batch_mode = "norm_1000"
                     crops = photo_service.crop_many_and_save(
-                        image_path,
+                        primary_path,
                         [it.bbox for it in result.items],
                         coord_mode=batch_mode,
                     )
@@ -504,8 +592,9 @@ class VisionService:
 
                 cropped_count = await anyio.to_thread.run_sync(_crop_all)
                 logger.info(
-                    "Vision (%s) detected %d item(s), cropped %d bounding box(es).",
+                    "Vision (%s) analyzed %d image(s), detected %d item(s), cropped %d bounding box(es).",
                     selected,
+                    len(encoded_pairs),
                     len(result.items),
                     cropped_count,
                 )

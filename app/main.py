@@ -3,18 +3,22 @@ from contextlib import asynccontextmanager, suppress
 import mimetypes
 from typing import AsyncIterator, Optional
 import anyio
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 from app.api import auth, items, label_scan, locations, photos, search, system, unit_setup
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import engine, get_db
 from app.core.exceptions import NotFoundError, register_exception_handlers
 from app.core.logging_config import configure_logging, logger
 from app.core.middleware import RequestContextMiddleware, SecurityAndRateLimitMiddleware
 from app.core.network import get_lan_ip
+from app.core.security import is_auth_enabled
 from app.db.backup import backup_service
 from app.db.migrations import run_migrations
+from app.services.unit_setup_service import unit_setup_service
 
 
 class SafeUploadsStaticFiles(StaticFiles):
@@ -112,6 +116,20 @@ def create_app() -> FastAPI:
     application.include_router(search.router, prefix="/api/v1")
     application.include_router(unit_setup.router, prefix="/api/v1")
     application.include_router(label_scan.router, prefix="/api/v1")
+
+    @application.get("/phone", include_in_schema=False)
+    def phone_capture_shortcut(
+        request: Request,
+        db: Session = Depends(get_db),
+    ) -> RedirectResponse:
+        if not is_auth_enabled():
+            active = unit_setup_service.get_latest_active_session(
+                db=db,
+                host_header=request.headers.get("host"),
+            )
+            if active is not None:
+                return RedirectResponse(url=active["mobile_url"], status_code=status.HTTP_302_FOUND)
+        return RedirectResponse(url="/setup.html", status_code=status.HTTP_302_FOUND)
 
     application.mount("/uploads", uploads_mount, name="uploads")
 

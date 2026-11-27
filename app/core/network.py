@@ -93,6 +93,53 @@ def resolve_effective_base_url(host_header: Optional[str] = None, base_url_param
     return f"http://{clean_host}"
 
 
+def is_https_active() -> bool:
+    """Return True when the local server process is actively serving LAN HTTPS."""
+    return os.environ.get("WIMS_HTTPS_ACTIVE") == "1"
+
+
+def _resolve_active_https_port() -> int:
+    raw = (os.environ.get("WIMS_HTTPS_PORT") or "").strip()
+    if raw:
+        try:
+            port = int(raw)
+            if 1 <= port <= 65535:
+                return port
+        except ValueError:
+            pass
+    return settings.HTTPS_PORT
+
+
+def resolve_mobile_camera_base_url(
+    host_header: Optional[str] = None,
+    base_url_param: Optional[str] = None,
+) -> str:
+    """
+    Resolve base URL for mobile camera pages (/setup.html).
+    Uses local HTTPS when active so mobile browsers allow getUserMedia() camera streams,
+    unless overridden by an explicit base_url_param or PUBLIC_BASE_URL.
+    """
+    if base_url_param and base_url_param.strip():
+        return resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
+
+    public_override = os.environ.get("PUBLIC_BASE_URL") or settings.PUBLIC_BASE_URL
+    if public_override:
+        return resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
+
+    if is_https_active():
+        target_host = get_lan_ip()
+        if host_header:
+            clean_host = host_header.strip().replace("\r", "").replace("\n", "")
+            parsed = urlsplit(f"//{clean_host}")
+            req_host = (parsed.hostname or "").lower()
+            if req_host and req_host not in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+                target_host = parsed.hostname or target_host
+        host_part = f"[{target_host}]" if ":" in target_host and not target_host.startswith("[") else target_host
+        return f"https://{host_part}:{_resolve_active_https_port()}"
+
+    return resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
+
+
 def build_qr_png(target_url: str) -> bytes:
     qr = qrcode.QRCode(
         version=1,

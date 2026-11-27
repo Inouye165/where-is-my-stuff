@@ -39,11 +39,41 @@ function setStatus(msg, kind) {
   statusArea.appendChild(pill);
 }
 
-function showExpired(msg) {
+function isSafeHttpUrl(url) {
+  return typeof url === 'string' && /^https?:\/\/[^/\s]+/i.test(url);
+}
+
+async function tryAutoJoinActiveSetupSession() {
+  try {
+    const res = await fetch('/api/v1/unit-setup/active');
+    if (!res.ok) return false;
+    const active = await res.json().catch(() => null);
+    if (!active || !isSafeHttpUrl(active.mobile_url)) return false;
+
+    const unitSuffix = active.unit_name ? `: ${active.unit_name}` : '';
+    subtitleEl.textContent = `Found active capture session${unitSuffix} — connecting…`;
+    statusArea.innerHTML = '';
+    const link = document.createElement('a');
+    link.href = active.mobile_url;
+    link.className = 'status-pill info';
+    link.style.display = 'inline-block';
+    link.style.textDecoration = 'none';
+    link.textContent = 'Open Active Session →';
+    statusArea.appendChild(link);
+    window.location.replace(active.mobile_url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function showExpired(msg) {
   if (pollTimer) clearInterval(pollTimer);
   triggerEl.style.display = 'none';
   galleryTriggerEl.style.display = 'none';
   zoneBanner.classList.remove('active');
+  const redirected = await tryAutoJoinActiveSetupSession();
+  if (redirected) return;
   subtitleEl.textContent = msg || 'This QR link has expired. Generate a new one on your computer.';
   setStatus('Session expired', 'error');
 }

@@ -8,7 +8,12 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from app.core.exceptions import AppError, BadRequestError, NotFoundError
-from app.core.network import build_qr_png, resolve_effective_base_url
+from app.core.network import (
+    build_qr_png,
+    is_https_active,
+    resolve_effective_base_url,
+    resolve_mobile_camera_base_url,
+)
 from app.models.location import Location
 from app.models.session import UnitSetupSessionRecord
 from app.repositories.location_repository import location_repository
@@ -77,11 +82,26 @@ class UnitSetupService:
         self,
         db: Session,
         room_id: Optional[int] = None,
+        unit_id: Optional[int] = None,
         host_header: Optional[str] = None,
         base_url_param: Optional[str] = None,
     ) -> dict:
         room_name: Optional[str] = None
-        if room_id is not None:
+        unit_name: Optional[str] = None
+        initial_status = "waiting_for_phone"
+
+        if unit_id is not None:
+            unit = location_repository.get_by_id(db, unit_id)
+            if not unit:
+                raise NotFoundError(f"Container {unit_id} does not exist.")
+            unit_name = unit.name[:120]
+            initial_status = "capturing_drawers"
+            if unit.parent_id is not None:
+                parent_loc = location_repository.get_by_id(db, unit.parent_id)
+                if parent_loc:
+                    room_id = parent_loc.id
+                    room_name = parent_loc.name
+        elif room_id is not None:
             room = location_repository.get_by_id(db, room_id)
             if not room:
                 raise NotFoundError(f"Room {room_id} does not exist.")
@@ -106,7 +126,9 @@ class UnitSetupService:
             token=token,
             room_id=room_id,
             room_name=room_name,
-            status="waiting_for_phone",
+            status=initial_status,
+            unit_id=unit_id,
+            unit_name=unit_name,
             current_drawer_index=0,
             unit_creating=False,
             created_at=_db_ts(db, now),
@@ -115,13 +137,15 @@ class UnitSetupService:
         db.add(rec)
         db.flush()
 
-        effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
+        effective_base = resolve_mobile_camera_base_url(host_header=host_header, base_url_param=base_url_param)
         mobile_url = f"{effective_base}/setup.html?token={token}"
         return {
             "token": token,
             "room_id": room_id,
             "room_name": room_name,
-            "status": "waiting_for_phone",
+            "unit_id": unit_id,
+            "unit_name": unit_name,
+            "status": initial_status,
             "expires_in_seconds": self.TTL_SECONDS,
             "mobile_url": mobile_url,
             "qr_url": f"/api/v1/unit-setup/sessions/{token}/qr",
@@ -149,7 +173,12 @@ class UnitSetupService:
             )
         return sess
 
-    def _build_enriched_response(self, db: Session, sess: UnitSetupSession) -> UnitSetupSessionStatusResponse:
+    def _build_enriched_response(
+        self,
+        db: Session,
+        sess: UnitSetupSession,
+        host_header: Optional[str] = None,
+    ) -> UnitSetupSessionStatusResponse:
         unit_read: Optional[LocationRead] = None
         drawers: List[UnitSetupDrawerSummary] = []
 
@@ -173,13 +202,28 @@ class UnitSetupService:
                         LocationPhotoRead.model_validate(p)
                         for p in snapshot.photos_by_location.get(ch.id, [])
                     ]
+                    coord_str = (
+                        location_service._default_slot_name(
+                            ch.grid_row,
+                            ch.grid_col,
+                            max(1, ch.grid_row_span or 1),
+                            max(1, ch.grid_col_span or 1),
+                        )
+                        if ch.grid_row is not None and ch.grid_col is not None
+                        else None
+                    )
                     drawers.append(
                         UnitSetupDrawerSummary(
                             id=ch.id,
                             name=ch.name,
+                            label=ch.label,
+                            description=ch.description,
                             location_type=ch.location_type,
                             grid_row=ch.grid_row,
                             grid_col=ch.grid_col,
+                            grid_row_span=ch.grid_row_span,
+                            grid_col_span=ch.grid_col_span,
+                            coord=coord_str,
                             photo_count=len(photo_models),
                             item_count=snapshot.total_items_for(ch.id),
                             photos=photo_models,
@@ -187,6 +231,11 @@ class UnitSetupService:
                     )
 
         remaining_seconds = max(0, int((sess.expires_at - datetime.now(timezone.utc)).total_seconds()))
+        https_url = (
+            f"{resolve_mobile_camera_base_url(host_header=host_header)}/setup.html?token={sess.token}"
+            if is_https_active()
+            else None
+        )
         return UnitSetupSessionStatusResponse(
             token=sess.token,
             status=sess.status,  # type: ignore[arg-type]
@@ -196,25 +245,69 @@ class UnitSetupService:
             unit_name=unit_read.name if unit_read else sess.unit_name,
             current_drawer_index=sess.current_drawer_index,
             expires_in_seconds=remaining_seconds,
+            https_url=https_url,
             unit=unit_read,
             drawers=drawers,
         )
 
-    def get_session_status(self, db: Session, token: str) -> UnitSetupSessionStatusResponse:
+    def get_session_status(
+        self,
+        db: Session,
+        token: str,
+        host_header: Optional[str] = None,
+    ) -> UnitSetupSessionStatusResponse:
         sess = self.get_session(db, token)
-        return self._build_enriched_response(db, sess)
+        return self._build_enriched_response(db, sess, host_header=host_header)
 
-    def connect_phone(self, db: Session, token: str) -> UnitSetupSessionStatusResponse:
+    def connect_phone(
+        self,
+        db: Session,
+        token: str,
+        host_header: Optional[str] = None,
+    ) -> UnitSetupSessionStatusResponse:
         self.require_active_session(db, token)
         now = datetime.now(timezone.utc)
         rec = db.get(UnitSetupSessionRecord, token)
         if not rec:
             raise NotFoundError("Unit setup session not found.")
         if rec.status == "waiting_for_phone":
-            rec.status = "creating_unit"
+            rec.status = "capturing_drawers" if rec.unit_id is not None else "creating_unit"
         rec.expires_at = _db_ts(db, now + timedelta(seconds=self.TTL_SECONDS))
         db.flush()
-        return self._build_enriched_response(db, self._to_snapshot(rec))
+        return self._build_enriched_response(db, self._to_snapshot(rec), host_header=host_header)
+
+    def get_latest_active_session(
+        self,
+        db: Session,
+        host_header: Optional[str] = None,
+    ) -> Optional[dict]:
+        now = datetime.now(timezone.utc)
+        self._prune_expired(db, now)
+        rec = (
+            db.execute(
+                select(UnitSetupSessionRecord)
+                .where(
+                    UnitSetupSessionRecord.status.in_(
+                        ("waiting_for_phone", "creating_unit", "capturing_drawers")
+                    ),
+                    UnitSetupSessionRecord.expires_at > _db_ts(db, now),
+                )
+                .order_by(UnitSetupSessionRecord.created_at.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        if not rec:
+            return None
+        return {
+            "token": rec.token,
+            "status": rec.status,
+            "unit_id": rec.unit_id,
+            "unit_name": rec.unit_name,
+            "mobile_url": f"{resolve_mobile_camera_base_url(host_header=host_header)}/setup.html?token={rec.token}",
+            "http_url": f"{resolve_effective_base_url(host_header=host_header)}/setup.html?token={rec.token}",
+        }
 
     def create_unit_for_session(
         self,
@@ -349,7 +442,7 @@ class UnitSetupService:
         base_url_param: Optional[str] = None,
     ) -> bytes:
         self.require_active_session(db, token)
-        effective_base = resolve_effective_base_url(host_header=host_header, base_url_param=base_url_param)
+        effective_base = resolve_mobile_camera_base_url(host_header=host_header, base_url_param=base_url_param)
         mobile_url = f"{effective_base}/setup.html?token={token}"
         return build_qr_png(mobile_url)
 

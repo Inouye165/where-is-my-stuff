@@ -23,6 +23,7 @@ UnitSetupActiveStatus = Literal[
 
 class UnitSetupSessionCreate(BaseModel):
     room_id: Optional[int] = Field(default=None, ge=1)
+    unit_id: Optional[int] = Field(default=None, ge=1)
     base_url: Optional[str] = Field(default=None, max_length=300)
 
 
@@ -43,16 +44,21 @@ class UnitSetupCreateUnitRequest(BaseModel):
 
 
 class UnitSetupProgressUpdate(BaseModel):
-    current_drawer_index: Optional[int] = Field(default=None, ge=0, le=50)
+    current_drawer_index: Optional[int] = Field(default=None, ge=0, le=500)
     status: Optional[UnitSetupActiveStatus] = None
 
 
 class UnitSetupDrawerSummary(BaseModel):
     id: int
     name: str
+    label: Optional[str] = None
+    description: Optional[str] = None
     location_type: str
     grid_row: Optional[int] = None
     grid_col: Optional[int] = None
+    grid_row_span: Optional[int] = None
+    grid_col_span: Optional[int] = None
+    coord: Optional[str] = None
     photo_count: int = 0
     item_count: int = 0
     photos: List[LocationPhotoRead] = Field(default_factory=list)
@@ -62,6 +68,8 @@ class UnitSetupSessionCreateResponse(BaseModel):
     token: str
     room_id: Optional[int] = None
     room_name: Optional[str] = None
+    unit_id: Optional[int] = None
+    unit_name: Optional[str] = None
     status: UnitSetupStatus
     expires_in_seconds: int
     mobile_url: str
@@ -77,5 +85,15 @@ class UnitSetupSessionStatusResponse(BaseModel):
     unit_name: Optional[str] = None
     current_drawer_index: int = 0
     expires_in_seconds: int
+    https_url: Optional[str] = None
     unit: Optional[LocationRead] = None
     drawers: List[UnitSetupDrawerSummary] = Field(default_factory=list)
+
+
+class UnitSetupActiveSessionResponse(BaseModel):
+    token: str
+    status: UnitSetupStatus
+    unit_id: Optional[int] = None
+    unit_name: Optional[str] = None
+    mobile_url: str
+    http_url: str
