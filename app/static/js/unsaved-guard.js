@@ -4,7 +4,7 @@
  * on navigation, modal close, or browser tab close/refresh.
  */
 
-const TRACKED_MODAL_IDS = ['add-item-modal', 'add-storage-modal', 'drawer-rapid-entry-modal'];
+const TRACKED_MODAL_IDS = ['add-item-modal', 'add-storage-modal', 'drawer-rapid-entry-modal', 'attachment-viewer-modal'];
 
 let gridDirtyCheckFn = null;
 let gridSaveFn = null;
@@ -134,7 +134,10 @@ export async function guardModalClose(modalId, forceCloseFn) {
     return true;
   }
 
-  if (choice === 'save') return submitModalSave(modalId);
+  if (choice === 'save') {
+    if (modalEl && modalEl.dataset) modalEl.dataset.closeAfterSave = 'true';
+    return submitModalSave(modalId);
+  }
   return false;
 }
 

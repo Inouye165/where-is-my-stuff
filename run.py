@@ -4,6 +4,7 @@ import socket
 from typing import Optional
 import uvicorn
 from app.core.config import settings
+from app.core.logging_config import install_global_exception_logging, logger
 from app.core.tls import ensure_lan_tls_cert
 from app.main import get_local_ip
 
@@ -89,31 +90,38 @@ if __name__ == "__main__":
     print("=" * 65)
     print(" Press Ctrl+C to stop server.\n")
 
-    if cert_pair is not None and active_https_port is not None:
-        cert_path, key_path = cert_pair
-        http_config = uvicorn.Config(
-            "app.main:app",
-            host=settings.HOST,
-            port=port,
-            reload=False,
-        )
-        https_config = uvicorn.Config(
-            "app.main:app",
-            host=settings.HOST,
-            port=active_https_port,
-            reload=False,
-            ssl_certfile=str(cert_path),
-            ssl_keyfile=str(key_path),
-            lifespan="off",
-        )
-        http_server = uvicorn.Server(http_config)
-        https_server = uvicorn.Server(https_config)
-        https_server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
-        asyncio.run(_serve_dual(http_server, https_server))
-    else:
-        uvicorn.run(
-            "app.main:app",
-            host=settings.HOST,
-            port=port,
-            reload=False,
-        )
+    install_global_exception_logging()
+    try:
+        if cert_pair is not None and active_https_port is not None:
+            cert_path, key_path = cert_pair
+            http_config = uvicorn.Config(
+                "app.main:app",
+                host=settings.HOST,
+                port=port,
+                reload=False,
+            )
+            https_config = uvicorn.Config(
+                "app.main:app",
+                host=settings.HOST,
+                port=active_https_port,
+                reload=False,
+                ssl_certfile=str(cert_path),
+                ssl_keyfile=str(key_path),
+                lifespan="off",
+            )
+            http_server = uvicorn.Server(http_config)
+            https_server = uvicorn.Server(https_config)
+            https_server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+            asyncio.run(_serve_dual(http_server, https_server))
+        else:
+            uvicorn.run(
+                "app.main:app",
+                host=settings.HOST,
+                port=port,
+                reload=False,
+            )
+    except KeyboardInterrupt:
+        logger.info("WIMS runner stopped via KeyboardInterrupt")
+    except Exception:
+        logger.exception("WIMS runner crashed with an unhandled exception")
+        raise

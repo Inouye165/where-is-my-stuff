@@ -9773,11 +9773,134 @@ button.detail-photo-thumb {
   transition: width 0.18s ease, max-width 0.18s ease, height 0.18s ease, max-height 0.18s ease, border-radius 0.18s ease;
 }
 
+#attachment-viewer-modal.is-fullscreen {
+  padding: 0;
+}
+
 .attachment-viewer-card.is-fullscreen {
-  width: 98vw;
-  max-width: 98vw;
-  height: 95vh;
-  max-height: 95vh;
+  width: 100vw;
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-radius: 0;
+  border: none;
+  flex-direction: row;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-body {
+  order: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border-top: none;
+  border-bottom: none;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-top {
+  order: 2;
+  width: 210px;
+  flex-shrink: 0;
+  height: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0.9rem;
+  padding: 0.85rem;
+  border-bottom: none;
+  border-left: 1px solid var(--border-subtle);
+  overflow-y: auto;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-title-wrap {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-title {
+  white-space: normal;
+  word-break: break-word;
+  font-size: 0.98rem;
+  line-height: 1.25;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-meta {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-toolbar .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-toolbar .modal-close-btn {
+  order: -1;
+  align-self: flex-end;
+  margin-bottom: 0.25rem;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-img-wrap {
+  padding: 0.25rem;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-img-wrap img {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+.attachment-viewer-card.is-fullscreen .attachment-viewer-bottom {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .attachment-viewer-card.is-fullscreen {
+    flex-direction: column;
+  }
+
+  .attachment-viewer-card.is-fullscreen .attachment-viewer-top {
+    order: 1;
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    padding: 0.5rem 0.65rem;
+    border-left: none;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .attachment-viewer-card.is-fullscreen .attachment-viewer-body {
+    order: 2;
+  }
+
+  .attachment-viewer-card.is-fullscreen .attachment-viewer-toolbar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: auto;
+  }
+
+  .attachment-viewer-card.is-fullscreen .attachment-viewer-toolbar .btn {
+    width: auto;
+  }
+
+  .attachment-viewer-card.is-fullscreen .attachment-viewer-toolbar .modal-close-btn {
+    order: 0;
+    align-self: center;
+    margin-bottom: 0;
+  }
 }
 
 .attachment-viewer-top {

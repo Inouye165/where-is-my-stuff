@@ -6,6 +6,7 @@ import {
   closeModal,
   escapeHtml,
   escapeJsStr,
+  forceCloseModal,
   formatDate,
   pluralize,
   registerModalForceCloseHook,
@@ -4056,25 +4057,104 @@ export async function convertSelectedItemPhotosToPdf(itemId) {
   });
 }
 
-function resetAttachmentViewerDOM() {
+let attachmentViewerState = {
+  itemId: null,
+  attachmentId: null,
+  url: '',
+  attachmentType: 'pdf',
+  pendingRotationDeg: 0,
+};
+
+function syncAttachmentViewerRotationUI() {
+  const modal = document.getElementById('attachment-viewer-modal');
+  const saveBtn = document.getElementById('attachment-viewer-save-btn');
   const frame = document.getElementById('attachment-viewer-frame');
-  if (frame) frame.src = 'about:blank';
+  const img = document.getElementById('attachment-viewer-img');
+  const { itemId, attachmentId, url, attachmentType, pendingRotationDeg } = attachmentViewerState;
+  const deg = pendingRotationDeg % 360;
+  const isDirty = deg !== 0;
+
+  if (modal) modal.dataset.dirty = isDirty ? 'true' : 'false';
+  if (saveBtn) {
+    saveBtn.disabled = !isDirty;
+    saveBtn.textContent = isDirty ? `Save (${deg}°)` : 'Save';
+  }
+
+  const lowerUrl = (url || '').toLowerCase();
+  const isPdf = attachmentType === 'pdf' || lowerUrl.endsWith('.pdf');
+  if (isPdf) {
+    if (frame) {
+      frame.style.transform = '';
+      if (itemId && attachmentId) {
+        const previewSrc = deg === 0
+          ? `${url}?t=${Date.now()}#toolbar=0&navpanes=0&view=Fit`
+          : `/api/v1/items/${itemId}/attachments/${attachmentId}/preview?rotation_deg=${deg}&t=${Date.now()}#toolbar=0&navpanes=0&view=Fit`;
+        frame.src = previewSrc;
+      }
+    }
+  } else if (img) {
+    img.style.transform = deg ? `rotate(${deg}deg)` : '';
+    img.style.transformOrigin = 'center center';
+  }
+}
+
+function resetAttachmentViewerDOM() {
+  attachmentViewerState = {
+    itemId: null,
+    attachmentId: null,
+    url: '',
+    attachmentType: 'pdf',
+    pendingRotationDeg: 0,
+  };
+  const modal = document.getElementById('attachment-viewer-modal');
+  if (modal) {
+    modal.dataset.dirty = 'false';
+    delete modal.dataset.closeAfterSave;
+  }
+  const frame = document.getElementById('attachment-viewer-frame');
+  if (frame) {
+    frame.src = 'about:blank';
+    frame.style.transform = '';
+  }
   const img = document.getElementById('attachment-viewer-img');
   if (img) {
     img.src = '';
+    img.style.transform = '';
     if (typeof img.removeAttribute === 'function') img.removeAttribute('src');
+  }
+  const saveBtn = document.getElementById('attachment-viewer-save-btn');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Save';
   }
   const card = document.getElementById('attachment-viewer-card');
   if (card) card.classList.remove('is-fullscreen');
+  if (modal) modal.classList.remove('is-fullscreen');
   const expandBtn = document.getElementById('attachment-viewer-expand-btn');
   if (expandBtn) expandBtn.textContent = 'Full screen';
 }
 
 registerModalForceCloseHook('attachment-viewer-modal', resetAttachmentViewerDOM);
 
-export function openAttachmentViewer(url, title = 'Document', attachmentType = 'pdf', filename = '', sizeStr = '') {
+export function openAttachmentViewer(
+  url,
+  title = 'Document',
+  attachmentType = 'pdf',
+  filename = '',
+  sizeStr = '',
+  itemId = null,
+  attachmentId = null
+) {
   const safeUrl = sanitizePhotoUrl(url || '');
   if (!safeUrl) return;
+
+  attachmentViewerState = {
+    itemId: itemId ? Number(itemId) : null,
+    attachmentId: attachmentId ? Number(attachmentId) : null,
+    url: safeUrl,
+    attachmentType: attachmentType || 'pdf',
+    pendingRotationDeg: 0,
+  };
 
   const modal = document.getElementById('attachment-viewer-modal');
   const card = document.getElementById('attachment-viewer-card');
@@ -4085,10 +4165,13 @@ export function openAttachmentViewer(url, title = 'Document', attachmentType = '
   const imgWrapEl = document.getElementById('attachment-viewer-img-wrap');
   const imgEl = document.getElementById('attachment-viewer-img');
   const expandBtn = document.getElementById('attachment-viewer-expand-btn');
+  const rotCcwBtn = document.getElementById('attachment-viewer-rot-ccw-btn');
+  const rotCwBtn = document.getElementById('attachment-viewer-rot-cw-btn');
   const newTabEl = document.getElementById('attachment-viewer-newtab');
   const downloadEl = document.getElementById('attachment-viewer-download');
 
   if (card) card.classList.remove('is-fullscreen');
+  if (modal) modal.classList.remove('is-fullscreen');
   if (expandBtn) expandBtn.textContent = 'Full screen';
   if (badgeEl) badgeEl.textContent = String(attachmentType || 'doc').toUpperCase();
   if (titleEl) titleEl.textContent = title || filename || 'Document';
@@ -4104,6 +4187,13 @@ export function openAttachmentViewer(url, title = 'Document', attachmentType = '
 
   const lowerUrl = safeUrl.toLowerCase();
   const isImagePreview = attachmentType === 'image' || /\.(jpg|jpeg|png|webp|gif|bmp|svg)$/.test(lowerUrl);
+  const canRotate = Boolean(
+    attachmentViewerState.itemId
+    && attachmentViewerState.attachmentId
+    && (attachmentType === 'pdf' || lowerUrl.endsWith('.pdf') || (attachmentType === 'image' && !lowerUrl.endsWith('.svg')))
+  );
+  if (rotCcwBtn) rotCcwBtn.style.display = canRotate ? 'inline-flex' : 'none';
+  if (rotCwBtn) rotCwBtn.style.display = canRotate ? 'inline-flex' : 'none';
 
   if (isImagePreview) {
     if (frameEl) {
@@ -4120,27 +4210,92 @@ export function openAttachmentViewer(url, title = 'Document', attachmentType = '
     }
     if (frameEl) {
       frameEl.style.display = 'block';
+      frameEl.style.transform = '';
       const isPdf = attachmentType === 'pdf' || lowerUrl.endsWith('.pdf');
-      frameEl.src = isPdf ? `${safeUrl}#view=FitH&toolbar=1&navpanes=0` : safeUrl;
+      frameEl.src = isPdf ? `${safeUrl}#toolbar=0&navpanes=0&view=Fit` : safeUrl;
     }
   }
 
-  if (modal) modal.classList.add('open');
+  const saveBtn = document.getElementById('attachment-viewer-save-btn');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Save';
+  }
+  if (modal) {
+    modal.dataset.dirty = 'false';
+    delete modal.dataset.closeAfterSave;
+    modal.classList.add('open');
+  }
+}
+
+export function rotateAttachmentViewer(deltaDeg) {
+  attachmentViewerState.pendingRotationDeg = (attachmentViewerState.pendingRotationDeg + Number(deltaDeg || 0) + 360) % 360;
+  syncAttachmentViewerRotationUI();
+}
+
+export function discardAttachmentViewerRotation() {
+  attachmentViewerState.pendingRotationDeg = 0;
+  syncAttachmentViewerRotationUI();
+  showToast('Rotation discarded.');
+}
+
+export async function saveAttachmentViewerRotation() {
+  const { itemId, attachmentId, url, attachmentType, pendingRotationDeg } = attachmentViewerState;
+  const deg = pendingRotationDeg % 360;
+  if (!itemId || !attachmentId || deg === 0) return;
+
+  return withSubmitLock('attachment-viewer-save-btn', 'Saving...', async () => {
+    try {
+      await apiPost(
+        `/api/v1/items/${itemId}/attachments/${attachmentId}/rotate`,
+        { rotation_deg: deg },
+        'Could not save rotated file.'
+      );
+      attachmentViewerState.pendingRotationDeg = 0;
+      syncAttachmentViewerRotationUI();
+
+      const modal = document.getElementById('attachment-viewer-modal');
+      const shouldClose = modal && modal.dataset?.closeAfterSave === 'true';
+      if (modal) delete modal.dataset.closeAfterSave;
+
+      showToast('Saved rotation permanently!');
+      await loadItemAttachmentsIntoView(itemId);
+      await loadAllData();
+
+      if (shouldClose) {
+        forceCloseModal('attachment-viewer-modal');
+        return;
+      }
+
+      const bustUrl = `${url}?t=${Date.now()}`;
+      const frameEl = document.getElementById('attachment-viewer-frame');
+      const imgEl = document.getElementById('attachment-viewer-img');
+      if (attachmentType === 'image' && imgEl) {
+        imgEl.src = bustUrl;
+      } else if (frameEl) {
+        const isPdf = attachmentType === 'pdf' || url.toLowerCase().endsWith('.pdf');
+        frameEl.src = isPdf ? `${bustUrl}#toolbar=0&navpanes=0&view=Fit` : bustUrl;
+      }
+    } catch (err) {
+      showToast(err.message || 'Could not save rotation.', 'error');
+    }
+  });
 }
 
 export function toggleAttachmentViewerFullscreen() {
+  const modal = document.getElementById('attachment-viewer-modal');
   const card = document.getElementById('attachment-viewer-card');
   const expandBtn = document.getElementById('attachment-viewer-expand-btn');
   if (!card) return;
   const isFull = card.classList.toggle('is-fullscreen');
+  if (modal) modal.classList.toggle('is-fullscreen', isFull);
   if (expandBtn) {
     expandBtn.textContent = isFull ? 'Windowed' : 'Full screen';
   }
 }
 
 export function closeAttachmentViewerModal() {
-  resetAttachmentViewerDOM();
-  closeModal('attachment-viewer-modal', true);
+  closeModal('attachment-viewer-modal');
 }
 
 async function loadItemAttachmentsIntoView(itemId) {
@@ -4174,7 +4329,7 @@ async function loadItemAttachmentsIntoView(itemId) {
         )
       );
       const openCall = canPreviewInApp
-        ? `openAttachmentViewer('${escapeJsStr(safeUrl)}', '${escapeJsStr(displayTitle)}', '${escapeJsStr(att.attachment_type || 'pdf')}', '${escapeJsStr(att.filename || '')}', '${escapeJsStr(sizeStr || '')}')`
+        ? `openAttachmentViewer('${escapeJsStr(safeUrl)}', '${escapeJsStr(displayTitle)}', '${escapeJsStr(att.attachment_type || 'pdf')}', '${escapeJsStr(att.filename || '')}', '${escapeJsStr(sizeStr || '')}', ${Number(itemId)}, ${Number(att.id)})`
         : '';
       return `
         <div class="item-attachment-row">

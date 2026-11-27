@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
 import io
+import os
 from pathlib import Path
 import tempfile
 from typing import Optional
-from PIL import Image
-from pypdf import PdfReader
+from PIL import Image, ImageOps
+from pypdf import PdfReader, PdfWriter
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.models.audit import AuditLog
 from app.models.item import ItemAttachment
@@ -274,6 +276,137 @@ class DocumentWorkflowService:
             ocr_available=ocr_available,
             warnings=warnings,
         )
+
+    def rotate_attachment(
+        self,
+        db: Session,
+        item_id: int,
+        attachment_id: int,
+        rotation_deg: int,
+    ) -> ItemAttachmentRead:
+        """Permanently rotate a PDF or image attachment clockwise by 90/180/270 degrees."""
+        item = item_repository.get_by_id(db, item_id)
+        if not item:
+            raise NotFoundError("Item not found.")
+
+        att = db.execute(
+            select(ItemAttachment).where(
+                ItemAttachment.id == attachment_id,
+                ItemAttachment.item_id == item_id,
+            )
+        ).scalar_one_or_none()
+        if not att:
+            raise NotFoundError("Attachment not found.")
+
+        angle = int(rotation_deg) % 360
+        if angle not in (90, 180, 270):
+            raise BadRequestError("Rotation must be 90, 180, or 270 degrees.")
+
+        disk_path = self._resolve_existing_upload(att.file_path)
+        tmp_path = disk_path.with_name(f".{disk_path.name}.rot.tmp")
+
+        if att.attachment_type == "pdf" or disk_path.suffix.lower() == ".pdf":
+            try:
+                reader = PdfReader(str(disk_path))
+                writer = PdfWriter()
+                for page in reader.pages:
+                    page.rotate(angle)
+                    writer.add_page(page)
+                with open(tmp_path, "wb") as fh:
+                    writer.write(fh)
+                os.replace(tmp_path, disk_path)
+            except Exception as exc:
+                tmp_path.unlink(missing_ok=True)
+                raise BadRequestError(f"Could not rotate PDF: {exc}") from exc
+        elif att.attachment_type == "image":
+            ext = disk_path.suffix.lower()
+            pil_fmt = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP", ".gif": "GIF", ".bmp": "BMP"}.get(ext)
+            if not pil_fmt:
+                raise BadRequestError("Unsupported image format for rotation.")
+            try:
+                with Image.open(disk_path) as raw:
+                    oriented = ImageOps.exif_transpose(raw)
+                    # PIL rotate is counter-clockwise, so clockwise angle maps to -angle
+                    rotated = oriented.rotate(-angle, expand=True)
+                    if pil_fmt == "JPEG" and rotated.mode not in ("RGB", "L"):
+                        rotated = rotated.convert("RGB")
+                    save_kw = {"quality": 92, "optimize": True} if pil_fmt == "JPEG" else {}
+                    rotated.save(tmp_path, format=pil_fmt, **save_kw)
+                os.replace(tmp_path, disk_path)
+
+                if att.thumbnail_path:
+                    thumb_disk = photo_service.resolve_safe_upload_path(att.thumbnail_path)
+                    tmp_thumb = thumb_disk.with_name(f".{thumb_disk.name}.rot.tmp")
+                    with Image.open(disk_path) as rot_im:
+                        thumb_im = rot_im.convert("RGB") if rot_im.mode not in ("RGB", "L") else rot_im.copy()
+                        thumb_im.thumbnail(
+                            (settings.THUMBNAIL_MAX_DIMENSION, settings.THUMBNAIL_MAX_DIMENSION),
+                            Image.Resampling.LANCZOS,
+                        )
+                        thumb_im.save(tmp_thumb, format="WEBP", quality=82)
+                    os.replace(tmp_thumb, thumb_disk)
+            except Exception as exc:
+                tmp_path.unlink(missing_ok=True)
+                raise BadRequestError(f"Could not rotate image: {exc}") from exc
+        else:
+            raise BadRequestError("Only PDF and image attachments can be rotated.")
+
+        att.size_bytes = disk_path.stat().st_size if disk_path.exists() else att.size_bytes
+        now = datetime.now(timezone.utc)
+        item.updated_at = now
+        db.add(
+            AuditLog(
+                item_id=item.id,
+                location_id=item.location_id,
+                action="document_rotated",
+                notes=f"Rotated '{att.title or att.filename}' by {angle}°",
+                recorded_at=now,
+            )
+        )
+        db.flush()
+        db.refresh(att)
+        return ItemAttachmentRead.model_validate(att)
+
+    def render_rotated_pdf_preview(
+        self,
+        db: Session,
+        item_id: int,
+        attachment_id: int,
+        rotation_deg: int = 0,
+    ) -> bytes:
+        """Return PDF bytes rotated in memory without modifying the stored file on disk."""
+        item = item_repository.get_by_id(db, item_id)
+        if not item:
+            raise NotFoundError("Item not found.")
+
+        att = db.execute(
+            select(ItemAttachment).where(
+                ItemAttachment.id == attachment_id,
+                ItemAttachment.item_id == item_id,
+            )
+        ).scalar_one_or_none()
+        if not att:
+            raise NotFoundError("Attachment not found.")
+
+        disk_path = self._resolve_existing_upload(att.file_path)
+        if att.attachment_type != "pdf" and disk_path.suffix.lower() != ".pdf":
+            raise BadRequestError("Preview rotation endpoint only applies to PDF attachments.")
+
+        angle = int(rotation_deg) % 360
+        if angle not in (0, 90, 180, 270):
+            raise BadRequestError("Rotation must be 0, 90, 180, or 270 degrees.")
+
+        if angle == 0:
+            return disk_path.read_bytes()
+
+        reader = PdfReader(str(disk_path))
+        writer = PdfWriter()
+        for page in reader.pages:
+            page.rotate(angle)
+            writer.add_page(page)
+        buf = io.BytesIO()
+        writer.write(buf)
+        return buf.getvalue()
 
 
 document_workflow_service = DocumentWorkflowService()

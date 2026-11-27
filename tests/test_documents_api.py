@@ -167,6 +167,34 @@ def test_create_typeset_pdf_from_existing_attachment(client):
     assert "Typeset" in ts_data["typeset_pdf"]["title"]
     assert len(client.get(f"/api/v1/items/{item['id']}/attachments").json()) == 2
 
+    # In-memory rotated preview returns rotated PDF without mutating the file on disk
+    preview_rot = client.get(
+        f"/api/v1/items/{item['id']}/attachments/{ts_data['typeset_pdf']['id']}/preview?rotation_deg=90"
+    )
+    assert preview_rot.status_code == 200
+    assert preview_rot.headers["content-type"] == "application/pdf"
+    assert int(PdfReader(io.BytesIO(preview_rot.content)).pages[0].get("/Rotate", 0)) % 360 == 90
+    disk_before = client.get(ts_data["typeset_pdf"]["file_path"])
+    assert int(PdfReader(io.BytesIO(disk_before.content)).pages[0].get("/Rotate", 0)) % 360 == 0
+
+    # Permanently rotate the Typeset PDF attachment by 90 degrees clockwise
+    rot_pdf_res = client.post(
+        f"/api/v1/items/{item['id']}/attachments/{ts_data['typeset_pdf']['id']}/rotate",
+        json={"rotation_deg": 90},
+    )
+    assert rot_pdf_res.status_code == 200, rot_pdf_res.text
+    dl_rot = client.get(rot_pdf_res.json()["file_path"])
+    assert dl_rot.status_code == 200
+    rotated_page = PdfReader(io.BytesIO(dl_rot.content)).pages[0]
+    assert int(rotated_page.get("/Rotate", 0)) % 360 == 90
+
+    # Permanently rotate the original image attachment by 90 degrees clockwise
+    rot_img_res = client.post(
+        f"/api/v1/items/{item['id']}/attachments/{att_id}/rotate",
+        json={"rotation_deg": 90},
+    )
+    assert rot_img_res.status_code == 200, rot_img_res.text
+
 
 def test_high_res_qr_capture_session_and_csp_headers(client):
     sess = client.post(

@@ -12,7 +12,7 @@ from app.api import auth, documents, items, label_scan, locations, photos, searc
 from app.core.config import settings
 from app.core.database import engine, get_db
 from app.core.exceptions import NotFoundError, register_exception_handlers
-from app.core.logging_config import configure_logging, logger
+from app.core.logging_config import configure_logging, install_global_exception_logging, logger
 from app.core.middleware import RequestContextMiddleware, SecurityAndRateLimitMiddleware
 from app.core.network import get_lan_ip
 from app.core.security import is_auth_enabled
@@ -45,6 +45,22 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
         configure_logging()
+        install_global_exception_logging()
+        loop = asyncio.get_running_loop()
+        prev_loop_handler = loop.get_exception_handler()
+
+        def _loop_exception_handler(ev_loop: asyncio.AbstractEventLoop, context: dict) -> None:
+            exc = context.get("exception")
+            msg = context.get("message", "Unhandled asyncio error")
+            if exc is not None:
+                logger.error("Asyncio loop error: %s", msg, exc_info=(type(exc), exc, exc.__traceback__))
+            else:
+                logger.error("Asyncio loop error: %s (%r)", msg, context)
+            if prev_loop_handler is not None:
+                prev_loop_handler(ev_loop, context)
+
+        loop.set_exception_handler(_loop_exception_handler)
+
         settings.init_directories()
         uploads_mount.directory = str(settings.UPLOAD_DIR)
         uploads_mount.all_directories = [str(settings.UPLOAD_DIR)]
@@ -78,13 +94,22 @@ def create_app() -> FastAPI:
 
             backup_task = asyncio.create_task(_auto_backup_loop())
 
+        clean_exit = True
         try:
             yield
+        except Exception:
+            clean_exit = False
+            logger.exception("WIMS server encountered an unhandled error")
+            raise
         finally:
             if backup_task is not None:
                 backup_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await backup_task
+            if clean_exit:
+                logger.info("WIMS shutdown complete (clean exit)")
+            else:
+                logger.error("WIMS shutdown after error")
 
     application = FastAPI(
         title=settings.APP_NAME,

@@ -97,7 +97,9 @@ class RequestContextMiddleware:
                 resp_headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
                 resp_headers["Permissions-Policy"] = "geolocation=(), microphone=()"
 
-                if lower_path.startswith("/uploads/") and lower_path.endswith(_EMBEDDABLE_DOC_EXTS):
+                if (lower_path.startswith("/uploads/") and lower_path.endswith(_EMBEDDABLE_DOC_EXTS)) or (
+                    lower_path.startswith("/api/v1/items/") and lower_path.endswith("/preview")
+                ):
                     resp_headers["X-Frame-Options"] = "SAMEORIGIN"
                     resp_headers["Content-Security-Policy"] = "frame-ancestors 'self'"
                 else:

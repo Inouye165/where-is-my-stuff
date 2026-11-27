@@ -3,6 +3,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
+import threading
 from app.core.config import settings
 
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="-")
@@ -70,4 +71,45 @@ def configure_logging() -> logging.Logger:
 
 
 logger = configure_logging()
+
+
+def install_global_exception_logging() -> None:
+    """Route uncaught process, thread, and uvicorn.error exceptions into wims.log."""
+    wims_logger = configure_logging()
+    file_handlers = [h for h in wims_logger.handlers if isinstance(h, RotatingFileHandler)]
+    if file_handlers:
+        fh = file_handlers[0]
+        for target_name in ("uvicorn.error", "asyncio"):
+            ext_logger = logging.getLogger(target_name)
+            if fh not in ext_logger.handlers:
+                ext_logger.addHandler(fh)
+
+    if getattr(sys, "_wims_excepthook_installed", False):
+        return
+
+    prev_excepthook = sys.excepthook
+
+    def _sys_excepthook(exc_type, exc_value, exc_tb) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            wims_logger.info("WIMS received KeyboardInterrupt; shutting down.")
+        else:
+            wims_logger.critical("Uncaught fatal exception", exc_info=(exc_type, exc_value, exc_tb))
+        prev_excepthook(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _sys_excepthook
+
+    if hasattr(threading, "excepthook"):
+        prev_thread_hook = threading.excepthook
+
+        def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
+            wims_logger.error(
+                "Uncaught exception in thread %s",
+                getattr(args.thread, "name", "unknown"),
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+            )
+            prev_thread_hook(args)
+
+        threading.excepthook = _thread_excepthook
+
+    setattr(sys, "_wims_excepthook_installed", True)
 

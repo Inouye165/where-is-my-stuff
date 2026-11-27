@@ -1,9 +1,10 @@
 import anyio
-from fastapi import APIRouter, Body, Depends, Response, status
+from fastapi import APIRouter, Body, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.exceptions import NotFoundError
 from app.schemas.document import (
+    AttachmentRotateRequest,
     AttachmentTypesetRequest,
     DocumentDetectCornersRequest,
     DocumentDetectCornersResponse,
@@ -18,6 +19,7 @@ from app.schemas.document import (
     ScannerScanRequest,
     ScannerScanResponse,
 )
+from app.schemas.item import ItemAttachmentRead
 from app.services.document_enhance_service import document_enhance_service
 from app.services.document_pdf_service import document_pdf_service
 from app.services.document_stitch_service import document_stitch_service
@@ -129,4 +131,46 @@ def create_typeset_from_attachment(
         item_id=item_id,
         attachment_id=attachment_id,
         data=payload,
+    )
+
+
+@router.get("/items/{item_id}/attachments/{attachment_id}/preview")
+def preview_rotated_item_attachment(
+    item_id: int,
+    attachment_id: int,
+    rotation_deg: int = Query(default=0),
+    db: Session = Depends(get_db),
+) -> Response:
+    pdf_bytes = document_workflow_service.render_rotated_pdf_preview(
+        db=db,
+        item_id=item_id,
+        attachment_id=attachment_id,
+        rotation_deg=rotation_deg,
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "X-Frame-Options": "SAMEORIGIN",
+            "Content-Security-Policy": "frame-ancestors 'self'",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post(
+    "/items/{item_id}/attachments/{attachment_id}/rotate",
+    response_model=ItemAttachmentRead,
+)
+def rotate_item_attachment(
+    item_id: int,
+    attachment_id: int,
+    payload: AttachmentRotateRequest,
+    db: Session = Depends(get_db),
+) -> ItemAttachmentRead:
+    return document_workflow_service.rotate_attachment(
+        db=db,
+        item_id=item_id,
+        attachment_id=attachment_id,
+        rotation_deg=payload.rotation_deg,
     )

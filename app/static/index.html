@@ -944,6 +944,29 @@
         <div class="attachment-viewer-toolbar">
           <button
             type="button"
+            id="attachment-viewer-rot-ccw-btn"
+            class="btn btn-secondary btn-xs"
+            onclick="rotateAttachmentViewer(-90)"
+            title="Rotate 90° counter-clockwise"
+          >↺ 90°</button>
+          <button
+            type="button"
+            id="attachment-viewer-rot-cw-btn"
+            class="btn btn-secondary btn-xs"
+            onclick="rotateAttachmentViewer(90)"
+            title="Rotate 90° clockwise"
+          >↻ 90°</button>
+          <button
+            type="button"
+            id="attachment-viewer-save-btn"
+            class="btn btn-primary btn-xs"
+            data-modal-save="true"
+            onclick="saveAttachmentViewerRotation()"
+            disabled
+            title="Save rotation permanently"
+          >Save</button>
+          <button
+            type="button"
             id="attachment-viewer-expand-btn"
             class="btn btn-secondary btn-xs"
             onclick="toggleAttachmentViewerFullscreen()"
@@ -1320,7 +1343,7 @@
   </div>
 
   <!-- Modal 12: Unsaved Changes Prompt -->
-  <div id="unsaved-confirm-modal" class="modal-scrim no-print" style="z-index: 1200;">
+  <div id="unsaved-confirm-modal" class="modal-scrim no-print" style="z-index: 3600;">
     <div class="modal-card" style="max-width: 420px;">
       <div class="modal-top">
         <h3 class="modal-title">Unsaved Changes</h3>

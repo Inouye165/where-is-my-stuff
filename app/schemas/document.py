@@ -175,6 +175,10 @@ class AttachmentTypesetRequest(BaseModel):
     enhance_first: bool = True
 
 
+class AttachmentRotateRequest(BaseModel):
+    rotation_deg: Literal[90, 180, 270]
+
+
 class DocumentTypesetPreviewRequest(BaseModel):
     photo_path: str = Field(..., min_length=1, max_length=300)
     typeset_mode: Literal["layout_matched", "clean_reflow"] = "layout_matched"
