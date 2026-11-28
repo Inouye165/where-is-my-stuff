@@ -94,7 +94,7 @@ class ItemRepository:
     def get_by_id(db: Session, item_id: int, include_audits: bool = False) -> Optional[Item]:
         stmt = select(Item).where(Item.id == item_id)
         if include_audits:
-            stmt = stmt.options(selectinload(Item.audit_logs))
+            stmt = stmt.options(selectinload(Item.audit_logs), selectinload(Item.attachments))
         return db.execute(stmt).scalar_one_or_none()
 
     @staticmethod

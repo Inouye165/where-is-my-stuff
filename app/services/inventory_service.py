@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from pathlib import Path
-import re
 from typing import List, Optional
 from fastapi import UploadFile
 from sqlalchemy import select

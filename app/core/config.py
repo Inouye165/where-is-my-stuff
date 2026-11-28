@@ -64,7 +64,7 @@ class Settings(BaseModel):
             "DATABASE_URL", f"sqlite:///{(DATA_DIR_DEFAULT / 'inventory.db').as_posix()}"
         )
     )
-    HOST: str = Field(default_factory=lambda: os.getenv("HOST", "0.0.0.0"))
+    HOST: str = Field(default_factory=lambda: os.getenv("HOST", "0.0.0.0"))  # noqa: S104
     PORT: int = Field(default_factory=lambda: _env_int("PORT", 8000))
     HTTPS_ENABLED: bool = Field(default_factory=lambda: _env_bool("HTTPS_ENABLED", True))
     HTTPS_PORT: int = Field(default_factory=lambda: _env_int("HTTPS_PORT", 8443))

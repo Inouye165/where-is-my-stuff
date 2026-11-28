@@ -146,14 +146,14 @@ class GridSlotSpec(BaseModel):
     grid_col: int = Field(..., ge=1, le=26)
     grid_row_span: int = Field(default=1, ge=1, le=26)
     grid_col_span: int = Field(default=1, ge=1, le=26)
-    merge_from_ids: List[int] = Field(default_factory=list)
+    merge_from_ids: List[int] = Field(default_factory=list, max_length=676)
 
 
 class LocationGridSave(BaseModel):
     grid_rows: int = Field(..., ge=1, le=26)
     grid_cols: int = Field(..., ge=1, le=26)
     grid_config: Optional[str] = Field(default=None, max_length=4000)
-    slots: List[GridSlotSpec] = Field(default_factory=list)
+    slots: List[GridSlotSpec] = Field(default_factory=list, max_length=676)
 
 
 class GridSlotMoveRequest(BaseModel):

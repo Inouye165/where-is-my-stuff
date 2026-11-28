@@ -1,73 +1,61 @@
-# WhereIsMyStuff (WIMS) — Network Inventory System
+# WhereIsMyStuff (WIMS)
 
-A self-hosted, local-network physical inventory tracker built with FastAPI, SQLAlchemy 2.0, SQLite (WAL), and a zero-build modular ES6 web interface. WIMS pairs hierarchical spatial organization and interactive 2D container grids with dual-photo visual verification, QR camera handoff, optional local/cloud AI vision cataloging, and a UTC presence audit trail.
+WhereIsMyStuff is a self-hosted, LAN-ready physical inventory tracker built on FastAPI, SQLAlchemy 2.0, SQLite (WAL mode), and zero-build native ES modules. It models real storage hierarchies—rooms/spaces, multi-drawer organizers as interactive 2D grids, bins, compartments, and nested boxes—with dual-photo context, QR phone camera handoff, a document capture/OCR studio, and an immutable UTC audit trail.
 
----
+## Quick Start (Under 2 Minutes)
 
-## Quick Start
-
-### 1. Set Up the Environment
+### 1. Create the virtual environment and install dependencies
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\pip.exe install -r requirements.txt
-Copy-Item .env.example .env  # Optional: customize port, LAN URL, or AI vision models
+Copy-Item .env.example .env  # Optional: adjust ports, LAN base URL, PIN lock, or AI models
 ```
 
-### 2. Start the Server
+### 2. Start the server
 
-Using the PowerShell management script (background process with health verification):
+Run with the PowerShell helper (starts Ollama automatically if installed unless `-NoOllama` is passed, runs WIMS in the foreground, and exits early if port `8000` is already listening):
 ```powershell
-.\inventory.ps1          # Start server (or report status if already running)
-.\inventory.ps1 -Open    # Start server and open http://localhost:8000 in browser
-.\inventory.ps1 status   # Check PID, health, and LAN URL
-.\inventory.ps1 stop     # Stop running server
+.\inventory.ps1                # Start server in the foreground
+.\inventory.ps1 -Open          # Start server and open http://localhost:8000 once healthy
+.\inventory.ps1 -NoOllama      # Skip launching Ollama
 ```
 
-Or run directly in the foreground:
+Or launch directly with Python:
 ```powershell
 .\.venv\Scripts\python.exe run.py
 ```
 
-By default, WIMS binds to `0.0.0.0:8000`:
-- **Desktop (Localhost):** `http://localhost:8000`
-- **Phone / Tablet on Wi-Fi:** `http://<your-lan-ip>:8000`
-- **OpenAPI / Swagger Docs:** `http://localhost:8000/docs`
+By default, WIMS binds to `0.0.0.0:8000` (HTTP) and—when `HTTPS_ENABLED=true`—starts a local HTTPS listener on `0.0.0.0:8443` using an auto-generated self-signed LAN certificate so phone browsers allow `getUserMedia` camera access over Wi-Fi:
+- Desktop browser: `http://localhost:8000`
+- Phone / tablet on the same Wi-Fi: `http://<your-lan-ip>:8000` (or `https://<your-lan-ip>:8443` for live camera flows)
+- OpenAPI / Swagger UI: `http://localhost:8000/docs`
 
----
+## How the App Works
 
-## Key Capabilities
-
-- **Hierarchical Spaces & Container Grid Designer**: Organize spaces, shelves, containers, bins, drawers, compartments, and cubbies to arbitrary depth. Model multi-drawer cabinets visually with customizable `rows × columns` grids, fixed-proportion cells, merged multi-span drawers (with automatic merged row headers for uniform rows), section dividers, drag-and-drop bin moves/swaps, and a sticky editor sidebar with **Save Grid**, **Cancel**, and **Undo / Redo** (`Ctrl+Z` / `Ctrl+Y`).
-- **Quick Container-Label Search & In-Page Locate**: Search drawers, nested boxes, labels (e.g. `M2`), and grid coordinates (e.g. `A1`, `D12`) from Home Search or directly inside any organizer/container page (`/` or `Ctrl+K`), with one-click links to open a drawer or scroll it into view and highlight it right on the organizer grid.
-- **Global View & Zoom Controls**: Built-in left-rail **View** controls across all pages—zoom stepper (`50%`–`125%`), **Width** (full-width expansion / fit-width grid scaling), and **View all** (auto-scale to fit the viewport)—synced with the organizer grid's zoom bar and persisted in `localStorage`.
-- **Dual-Photo Context & Perspective Editor**:
-  - **Context Photo (`context_photo`)**: Wide shot showing where a container or shelf sits.
-  - **Container Gallery (`container_photo` + `LocationPhoto`)**: Exterior and interior shots of bins and drawers.
-  - **Item Photo & Attachments**: Close-up item photos (with crop, fine rotation, and 4-corner perspective straighten) plus attached datasheets, charts, and documents (`PDF`, `SVG`, `CSV`, `TXT`, `MD`, `JSON`, Office docs, `ZIP`).
-- **Desktop-to-Phone QR Camera Handoff**: Click any photo upload on desktop to display a temporary QR code; scan with a phone on the same Wi-Fi to snap and stream single or batch photos straight into the active form or drawer.
-- **AI Vision Drawer Scanning & Photo Search**: Detect items, quantities, specs, and bounding-box thumbnails from drawer photos using local **Ollama** (`qwen3-vl:8b` default, offline-capable) or optional **Gemini** / **OpenAI** APIs, with multi-line quick-entry text parsing (`4x M3 Brass Standoffs`, `Needle Nose Pliers`) always available without AI.
-- **Instant Search**: Plain-language keyword and synonym search across item names, part/serial numbers, categories, tags, notes, and recursive location paths (`/api/v1/search`), plus visual photo search (`/api/v1/search/photo`).
-- **"Seen Today" Presence Auditing**: One-tap verification updates `last_seen_at` and records immutable UTC entries in `audit_logs` across creations, moves, status updates, and inspections.
-- **Printable QR Labels & Online Backups**: Generate single or bulk printable QR label sheets (`/api/v1/locations/{id}/qr`) that deep-link directly to a container or drawer, and create verified hot SQLite snapshots via `POST /api/v1/system/backup`.
-
----
+- **Hierarchical Spaces & 2D Container Grids:** Nest spaces, shelves, bins, drawers, compartments, and sub-boxes to arbitrary depth (`Location`). Multi-drawer cabinets render as customizable `rows × columns` 2D grids with multi-span merged cells, section breaks, drag-and-drop slot swaps, inline rename/quick-add, and undo/redo (`Ctrl+Z` / `Ctrl+Y`).
+- **Quick Label Lookup & In-Page Locate:** Search items, drawer names, container labels (`M2`), or grid coordinates (`A1`, `D12`) from Home search or directly inside a container page (`/` or `Ctrl+K`) to jump straight to or spotlight a compartment on its organizer photo/grid.
+- **Dual-Photo Context & Editor:** Attach context photos (`context_photo` showing where a shelf sits), container photos (`container_photo` + `LocationPhoto` galleries), and item photos. Built-in client/server tools handle EXIF orientation, cropping, fine tilt, 4-corner perspective straightening, and WebP thumbnail generation.
+- **Phone QR Camera Handoff & Guided Unit Setup:** Scan temporary QR codes from desktop to capture container photos, batch drawer shots, or label close-ups directly from a phone (`capture.html`, `setup.html`, `label-capture.html`).
+- **Document Capture, OCR & PDF Studio:** Acquire manuals/labels from connected scanners, webcam, uploaded files, or phone handoff; run perspective enhancement, grayscale/contrast filters, stitch multi-page scans, extract text via `rapidocr-onnxruntime`, and save dual PDF attachments (`ItemAttachment`).
+- **Smart Bundle Import & Optional Vision AI:** Extract item lists, bounding-box crops, or product specs from photos, PDFs, URLs, and pasted text using local Ollama (`qwen2.5vl:7b` default) or optional Gemini / OpenAI keys. Plain-text multi-line quick entry (`4x M3 Brass Standoffs`) and manual CRUD work completely offline without AI.
+- **Presence Auditing & Automated Backups:** Creations, moves, and one-tap "Verified" actions update `item.last_seen_at` and append UTC rows to `audit_logs`. `POST /api/v1/system/backup` (plus a 24h background scheduler) writes verified hot SQLite `.backup()` archives and asset zips under `data/backups/`.
 
 ## Configuration
 
-Copy [`.env.example`](file:///d:/inventory/.env.example) to `.env` to configure:
-- Network binding (`HOST`, `PORT`, `PUBLIC_BASE_URL`, `CORS_ALLOWED_ORIGINS`)
-- Upload bounds (`MAX_IMAGE_UPLOAD_SIZE_MB`, `MAX_IMAGE_DIMENSION`, `THUMBNAIL_MAX_DIMENSION`, `MAX_IMAGE_PIXELS`)
+See [.env.example](.env.example) for all supported settings, including:
+- Server & LAN binding (`HOST`, `PORT`, `HTTPS_ENABLED`, `HTTPS_PORT`, `PUBLIC_BASE_URL`, `CORS_ALLOWED_ORIGINS`)
+- Optional PIN auth & rate limits (`WIMS_ACCESS_PIN`, `WIMS_AUTH_BYPASS_LOCALHOST`, `WIMS_SESSION_SECRET`, `RATE_LIMIT_*`)
+- Image/upload bounds (`MAX_IMAGE_UPLOAD_SIZE_MB`, `MAX_IMAGE_DIMENSION`, `MAX_LABEL_SCAN_DIMENSION`, `MAX_IMAGE_PIXELS`)
 - Vision providers (`VISION_PROVIDER`, `OLLAMA_BASE_URL`, `OLLAMA_VISION_MODEL`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
-- Logging & backup retention (`LOG_LEVEL`, `BACKUP_RETENTION_COUNT`)
+- Logging & hot backups (`LOG_LEVEL`, `BACKUP_RETENTION_COUNT`, `AUTO_BACKUP_ENABLED`, `AUTO_BACKUP_INTERVAL_HOURS`)
 
-See [`ARCHITECTURE.md`](file:///d:/inventory/ARCHITECTURE.md) for full details on layered architecture, database migrations, photo reference counting, and security controls.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for system boundaries, schema migrations, query/performance invariants, and security controls.
 
----
+## Testing & Linting
 
-## Running the Test Suite
+Tests always run against isolated in-memory/temporary SQLite databases and temporary upload directories—never touching `data/inventory.db`:
 
 ```powershell
 .\.venv\Scripts\pytest.exe -v
+ruff check app run.py
 ```
-
-All tests run against isolated in-memory or temporary SQLite databases with `PRAGMA foreign_keys = ON` and temporary upload directories—never touching `data/inventory.db`.

@@ -4,6 +4,7 @@
 import { apiDelete, apiGet, apiPatch, apiPost, apiUpload } from './api.js';
 import {
   closeModal,
+  confirmAction,
   escapeHtml,
   escapeJsStr,
   forceCloseModal,
@@ -1510,7 +1511,7 @@ export async function deleteContainerFromMenu(unitId) {
   closeUnitMoreMenu(false);
   const unit = state.locationMap.get(unitId);
   if (!unit) return;
-  if (!window.confirm(`Delete "${unit.name}" and its drawers?`)) return;
+  if (!(await confirmAction(`Delete "${unit.name}" and its drawers?`, { title: 'Delete container?', confirmText: 'Delete' }))) return;
   try {
     await apiDelete(`/api/v1/locations/${unitId}`, 'Could not delete container.');
     showToast('Container deleted.');
@@ -1530,7 +1531,7 @@ export async function deleteSpaceFromMenu(roomId) {
   closeUnitMoreMenu(false);
   const room = state.locationMap.get(roomId);
   if (!room) return;
-  if (!window.confirm(`Delete "${room.name}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`)) return;
+  if (!(await confirmAction(`Delete "${room.name}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`, { title: 'Delete space?', confirmText: 'Delete' }))) return;
   try {
     await apiDelete(`/api/v1/locations/${roomId}`, 'Could not delete space.');
     showToast('Space deleted.');
@@ -2236,8 +2237,12 @@ export function renderCabinetHighlightVisual(unit, drawer, options = {}) {
     return `
       <div
         class="cabinet-highlight-frame ${compact ? 'is-compact' : ''}"
+        role="button"
+        tabindex="0"
+        aria-label="Locate ${escapeHtml(drawer.name)} in ${escapeHtml(unit.name)}"
         title="Where ${escapeHtml(drawer.name)} sits in ${escapeHtml(unit.name)}"
         onclick="locateDrawerInUnit(${safeUnitId}, ${safeDrawerId})"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();locateDrawerInUnit(${safeUnitId}, ${safeDrawerId});}"
       >
         <div class="cabinet-highlight-media">
           <img src="${escapeHtml(unitPhoto)}" alt="${escapeHtml(unit.name)}">
@@ -2268,8 +2273,12 @@ export function renderCabinetHighlightVisual(unit, drawer, options = {}) {
     return `
       <div
         class="drawer-hero-grid-thumb"
+        role="button"
+        tabindex="0"
+        aria-label="Locate ${escapeHtml(drawer.name)} in ${escapeHtml(unit.name)}"
         title="Where ${escapeHtml(drawer.name)} sits in ${escapeHtml(unit.name)}"
         onclick="locateDrawerInUnit(${Number(unit.id)}, ${Number(drawer.id)})"
+        onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();locateDrawerInUnit(${Number(unit.id)}, ${Number(drawer.id)});}"
       >
         ${renderContainerGridHtml(unit, { highlightDrawerId: Number(drawer.id), diagram: true })}
       </div>
@@ -2900,7 +2909,7 @@ export function toggleGenericReviewMode(drawerId) {
 export async function deleteDrawerFromMenu(drawerId) {
   const loc = state.locationMap.get(Number(drawerId));
   if (!loc) return;
-  if (!window.confirm(`Delete "${loc.name}"?`)) return;
+  if (!(await confirmAction(`Delete "${loc.name}"?`, { title: 'Delete drawer?', confirmText: 'Delete' }))) return;
   try {
     await apiDelete(`/api/v1/locations/${loc.id}`, 'Could not delete drawer.');
     showToast(`${loc.name} deleted.`);
@@ -2956,7 +2965,7 @@ export async function adjustDrawerItemQty(itemId, delta) {
     : (item.quantity === null || item.quantity === undefined ? 1 : Number(item.quantity));
   const nextQty = baseQty + delta;
 
-  if (nextQty <= 0 && !window.confirm(`Remove "${item.name}" from this bin?`)) return;
+  if (nextQty <= 0 && !(await confirmAction(`Remove "${item.name}" from this bin?`, { title: 'Remove item?', confirmText: 'Remove' }))) return;
 
   if (!entry) {
     entry = { targetQty: nextQty, running: false, deleting: false };
@@ -2997,7 +3006,7 @@ export async function adjustDrawerItemQty(itemId, delta) {
 export async function removeDrawerItem(itemId) {
   const item = state.items.find(i => i.id === itemId);
   if (!item) return;
-  if (!window.confirm(`Remove "${item.name}"?`)) return;
+  if (!(await confirmAction(`Remove "${item.name}"?`, { title: 'Remove item?', confirmText: 'Remove' }))) return;
   try {
     await apiDelete(`/api/v1/items/${itemId}`, 'Could not remove item.');
     showToast(`Removed ${item.name}.`);
@@ -5966,7 +5975,7 @@ export function editItemFromView(itemId, options = {}) {
 export async function deleteItemFromView(itemId) {
   const item = state.items.find(i => i.id === itemId);
   if (!item) return;
-  if (!confirm(`Delete "${item.name}"?`)) return;
+  if (!(await confirmAction(`Delete "${item.name}"?`, { title: 'Delete item?', confirmText: 'Delete' }))) return;
 
   try {
     await apiDelete(`/api/v1/items/${item.id}`, 'Could not delete item.');

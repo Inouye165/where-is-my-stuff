@@ -66,7 +66,7 @@ def configure_logging() -> logging.Logger:
 
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
-    setattr(logger, "_wims_configured", True)
+    logger._wims_configured = True  # type: ignore[attr-defined]
     return logger
 
 
@@ -111,5 +111,5 @@ def install_global_exception_logging() -> None:
 
         threading.excepthook = _thread_excepthook
 
-    setattr(sys, "_wims_excepthook_installed", True)
+    sys._wims_excepthook_installed = True  # type: ignore[attr-defined]
 

@@ -102,3 +102,15 @@
 - [x] **7. Global `+ Add` Action Sheet (`#add-action-sheet`)**:
   - [x] Trim overlapping storage cards down to 3 clear choices (*Scan with Camera*, *Add Item Manually*, *New Space or Container*) with automatic context pre-selection from the active view.
 
+## Phase 8: Production Readiness Audit & Remediation
+- [x] **Security & Input Hardening:** Validated local/LAN Host headers and `/phone` QR redirects (`network.py`, `location_service.py`, `main.py`), added post-connect socket peer IP SSRF checks and streaming byte caps (`image_lookup_service.py`, `item_bundle_service.py`), added rate limits to bundle/PDF vision and bulk endpoints, bounded list/form payload sizes across Pydantic schemas, and released SQLite sessions across async Vision calls in `label_scan_service.py` with slot locking.
+- [x] **Robustness & Modularity:** Fixed `AppError.detail` error reporting in `scanner_service.py`, lazy temp-dir allocation & shared Vision HTTP/error helpers in `vision_service.py`, atomic rollback & PDF page bounds in `document_workflow_service.py`, and resolved all `ruff` E/F/B/S lint findings across `app/` and `run.py`.
+- [x] **Backend & Frontend Performance:** Added migration `v10` indexes for all asset/photo path columns, eager-loaded item attachments in `ItemRepository.get_by_id()`, replaced iterative SQL loops with single recursive CTEs and depth-batched bulk SQL deletes in `LocationService`, added 10s positive-only caching for `/api/v1/health` disk probes, and memoized `state.js` indexes and dropdown `DocumentFragment` updates.
+- [x] **WCAG 2.2 AA Accessibility & UX:** Added `a11y.js` dialog focus trapping/restoration, static dialog ARIA semantics + skip link + lightbox close button, accessible `#app-confirm-modal` replacing all 7 `window.confirm()` calls in `modals.js`/`views.js`, ARIA roles on toasts/PIN overlay, keyboard activation on spatial cards, `:focus-visible` outlines, and `prefers-reduced-motion` support.
+- [x] **Documentation & Manifest Sync:** Synced `pyproject.toml`, `.env.example`, `README.md`, and `ARCHITECTURE.md` with exact live routes, modules, migrations `v1–v10`, defaults, and test coverage (`tests/test_phase1..4_*.py`).
+
+### Deferred Architectural Recommendations
+- Migrate remaining inline `onclick=` / `onchange=` attributes in `index.html`, `views.js`, and `modals.js` to delegated `data-action` handlers via `events.js` so the main SPA can drop `'unsafe-inline'` from `script-src` CSP completely.
+- Split large frontend feature renderers (`app/static/js/views.js` and `app/static/js/modals.js`) into focused per-view modules (`home-view.js`, `unit-view.js`, `drawer-view.js`, `item-detail-view.js`) once the inline event migration completes.
+
+

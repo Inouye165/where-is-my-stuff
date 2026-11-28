@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 from app.core.exceptions import BadRequestError, NotFoundError
+from app.core.logging_config import logger
 from app.schemas.document import DocumentEnhanceOptions
 from app.services.document_ocr_service import document_ocr_service
 from app.services.photo_service import photo_service
@@ -99,7 +100,7 @@ def _is_valid_document_quad(
     xs = ordered[:, 0] / max(1.0, float(img_w))
     ys = ordered[:, 1] / max(1.0, float(img_h))
     near_border_corners = sum(
-        1 for x, y in zip(xs, ys) if (x < 0.015 or x > 0.985) and (y < 0.015 or y > 0.985)
+        1 for x, y in zip(xs, ys, strict=True) if (x < 0.015 or x > 0.985) and (y < 0.015 or y > 0.985)
     )
     border_penalty = 0.72 if near_border_corners == 4 else 1.0
     rect_area = float(cv2.minAreaRect(ordered)[1][0] * cv2.minAreaRect(ordered)[1][1])
@@ -202,8 +203,8 @@ def _estimate_physical_aspect_ratio(ordered_px: np.ndarray, img_w: int, img_h: i
                     zhang_ratio = u_norm / v_norm
                     if 0.35 <= zhang_ratio <= 2.8 and abs(zhang_ratio - raw_ratio) / max(raw_ratio, 1e-3) < 0.35:
                         return float(zhang_ratio)
-    except Exception:
-        pass
+    except (ZeroDivisionError, ValueError, ArithmeticError) as exc:
+        logger.debug("Zhang aspect estimate fallback: %s", exc)
     return float(raw_ratio)
 
 

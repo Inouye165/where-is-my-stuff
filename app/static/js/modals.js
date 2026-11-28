@@ -4,7 +4,16 @@
 import { apiDelete, apiGet, apiPatch, apiPost, apiUpload } from './api.js';
 import { createSubBoxFromDetectedRow } from './box-actions.js';
 import { findFirstOpenGridCoord, inferUnitChildSlotType } from './compartment-actions.js';
-import { closeModal, escapeHtml, pluralize, registerModalForceCloseHook, sanitizePhotoUrl, showToast, withSubmitLock } from './dom.js';
+import {
+  closeModal,
+  confirmAction,
+  escapeHtml,
+  pluralize,
+  registerModalForceCloseHook,
+  sanitizePhotoUrl,
+  showToast,
+  withSubmitLock
+} from './dom.js';
 import { openInlineGridDesigner } from './grid-designer.js';
 import { openDesktopFilePickerDirect, openLocationPhoneCaptureModal, requestPhotoForInput, registerDesktopPhotoHandler } from './phone-capture.js';
 import { compressImageFile, uploadPhotoAndGetPath } from './photo-compress.js';
@@ -656,7 +665,7 @@ export async function handleStorageDelete() {
   const editId = document.getElementById('edit-storage-id').value;
   if (!editId) return;
   const loc = state.locationMap.get(parseInt(editId, 10));
-  if (!confirm(`Delete "${loc ? loc.name : 'this space'}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`)) return;
+  if (!(await confirmAction(`Delete "${loc ? loc.name : 'this space'}"? Any boxes or items inside will be moved to "Needs a home" so nothing is lost.`, { title: 'Delete space?', confirmText: 'Delete' }))) return;
 
   return withSubmitLock('storage-delete-btn', 'Deleting...', async () => {
     try {

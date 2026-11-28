@@ -231,6 +231,25 @@ class VisionService:
     """Identifies items in drawer/bin photos using a local (Ollama) or paid (Gemini/OpenAI) model."""
 
     @staticmethod
+    def _extract_error_detail(resp: httpx.Response) -> str:
+        try:
+            err = resp.json().get("error", "")
+            return str(err) if err else ""
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return ""
+
+    @staticmethod
+    async def _post_vision_json(
+        url: str,
+        payload: dict[str, Any],
+        *,
+        headers: Optional[dict[str, str]] = None,
+        timeout: float = 45.0,
+    ) -> httpx.Response:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.post(url, json=payload, headers=headers)
+
+    @staticmethod
     def _effective_gemini_key(override: Optional[str] = None) -> Optional[str]:
         return (override or os.environ.get("GEMINI_API_KEY") or settings.GEMINI_API_KEY or "").strip() or None
 
@@ -340,38 +359,33 @@ class VisionService:
                 "temperature": 0.1,
             },
         }
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(f"{ollama_url}/api/chat", json=payload)
-            if resp.status_code != 200:
-                err_detail = ""
-                try:
-                    err_detail = resp.json().get("error", "")
-                except Exception:
-                    pass
-                detail_suffix = f" ({err_detail})" if err_detail else ""
-                return VisionAnalysisResponse(
-                    status="fallback",
-                    items=[],
-                    has_vision_api=False,
-                    provider_used="local",
-                    model_used=model,
-                    message=f"Local model ({model}) returned HTTP {resp.status_code}{detail_suffix}.",
-                )
-            resp_data = resp.json()
-            raw_content = (resp_data.get("message") or {}).get("content") or resp_data.get("response") or ""
-            parsed = _extract_json_object(raw_content)
-            detected = _parse_detected_items(parsed)
-            group_name, group_cat = _parse_group_metadata(parsed)
+        resp = await self._post_vision_json(f"{ollama_url}/api/chat", payload, timeout=120.0)
+        if resp.status_code != 200:
+            err_detail = self._extract_error_detail(resp)
+            detail_suffix = f" ({err_detail})" if err_detail else ""
             return VisionAnalysisResponse(
-                status="success",
-                items=detected,
-                suggested_group_name=group_name,
-                suggested_category=group_cat,
-                has_vision_api=True,
+                status="fallback",
+                items=[],
+                has_vision_api=False,
                 provider_used="local",
                 model_used=model,
-                message=f"Local model ({model}) detected {len(detected)} item(s).",
+                message=f"Local model ({model}) returned HTTP {resp.status_code}{detail_suffix}.",
             )
+        resp_data = resp.json()
+        raw_content = (resp_data.get("message") or {}).get("content") or resp_data.get("response") or ""
+        parsed = _extract_json_object(raw_content)
+        detected = _parse_detected_items(parsed)
+        group_name, group_cat = _parse_group_metadata(parsed)
+        return VisionAnalysisResponse(
+            status="success",
+            items=detected,
+            suggested_group_name=group_name,
+            suggested_category=group_cat,
+            has_vision_api=True,
+            provider_used="local",
+            model_used=model,
+            message=f"Local model ({model}) detected {len(detected)} item(s).",
+        )
 
     @classmethod
     def _build_gemini_payload(
@@ -412,32 +426,36 @@ class VisionService:
         prompt = _build_vision_prompt(expected_count, image_count=len(img_list), context_hint=context_hint)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:generateContent"
         payload = self._build_gemini_payload(prompt, img_list)
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(url, json=payload, headers={"x-goog-api-key": api_key})
-            if resp.status_code != 200:
-                return VisionAnalysisResponse(
-                    status="fallback",
-                    items=[],
-                    has_vision_api=True,
-                    provider_used="gemini",
-                    model_used=safe_model,
-                    message=f"Gemini vision returned HTTP {resp.status_code}. Verify your GEMINI_API_KEY.",
-                )
-            resp_data = resp.json()
-            text_content = resp_data["candidates"][0]["content"]["parts"][0]["text"]
-            parsed = _extract_json_object(text_content)
-            detected = _parse_detected_items(parsed)
-            group_name, group_cat = _parse_group_metadata(parsed)
+        resp = await self._post_vision_json(
+            url,
+            payload,
+            headers={"x-goog-api-key": api_key},
+            timeout=45.0,
+        )
+        if resp.status_code != 200:
             return VisionAnalysisResponse(
-                status="success",
-                items=detected,
-                suggested_group_name=group_name,
-                suggested_category=group_cat,
+                status="fallback",
+                items=[],
                 has_vision_api=True,
                 provider_used="gemini",
                 model_used=safe_model,
-                message=f"Gemini ({safe_model}) detected {len(detected)} item(s).",
+                message=f"Gemini vision returned HTTP {resp.status_code}. Verify your GEMINI_API_KEY.",
             )
+        resp_data = resp.json()
+        text_content = resp_data["candidates"][0]["content"]["parts"][0]["text"]
+        parsed = _extract_json_object(text_content)
+        detected = _parse_detected_items(parsed)
+        group_name, group_cat = _parse_group_metadata(parsed)
+        return VisionAnalysisResponse(
+            status="success",
+            items=detected,
+            suggested_group_name=group_name,
+            suggested_category=group_cat,
+            has_vision_api=True,
+            provider_used="gemini",
+            model_used=safe_model,
+            message=f"Gemini ({safe_model}) detected {len(detected)} item(s).",
+        )
 
     async def _analyze_with_openai(
         self,
@@ -453,32 +471,36 @@ class VisionService:
         prompt = _build_vision_prompt(expected_count, image_count=len(img_list), context_hint=context_hint)
         payload = self._build_openai_payload(prompt, safe_model, img_list)
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
-            if resp.status_code != 200:
-                return VisionAnalysisResponse(
-                    status="fallback",
-                    items=[],
-                    has_vision_api=True,
-                    provider_used="openai",
-                    model_used=safe_model,
-                    message=f"OpenAI vision returned HTTP {resp.status_code}. Verify your OPENAI_API_KEY.",
-                )
-            resp_data = resp.json()
-            text_content = resp_data["choices"][0]["message"]["content"]
-            parsed = _extract_json_object(text_content)
-            detected = _parse_detected_items(parsed)
-            group_name, group_cat = _parse_group_metadata(parsed)
+        resp = await self._post_vision_json(
+            "https://api.openai.com/v1/chat/completions",
+            payload,
+            headers=headers,
+            timeout=45.0,
+        )
+        if resp.status_code != 200:
             return VisionAnalysisResponse(
-                status="success",
-                items=detected,
-                suggested_group_name=group_name,
-                suggested_category=group_cat,
+                status="fallback",
+                items=[],
                 has_vision_api=True,
                 provider_used="openai",
                 model_used=safe_model,
-                message=f"OpenAI ({safe_model}) detected {len(detected)} item(s).",
+                message=f"OpenAI vision returned HTTP {resp.status_code}. Verify your OPENAI_API_KEY.",
             )
+        resp_data = resp.json()
+        text_content = resp_data["choices"][0]["message"]["content"]
+        parsed = _extract_json_object(text_content)
+        detected = _parse_detected_items(parsed)
+        group_name, group_cat = _parse_group_metadata(parsed)
+        return VisionAnalysisResponse(
+            status="success",
+            items=detected,
+            suggested_group_name=group_name,
+            suggested_category=group_cat,
+            has_vision_api=True,
+            provider_used="openai",
+            model_used=safe_model,
+            message=f"OpenAI ({safe_model}) detected {len(detected)} item(s).",
+        )
 
     async def analyze_image(
         self,
@@ -602,7 +624,7 @@ class VisionService:
                         coord_mode=batch_mode,
                     )
                     cropped_count = 0
-                    for item, crop_path in zip(result.items, crops):
+                    for item, crop_path in zip(result.items, crops, strict=True):
                         item.crop_photo_path = crop_path
                         if crop_path:
                             cropped_count += 1
@@ -675,8 +697,12 @@ class VisionService:
                 model = _validate_model_name(settings.GEMINI_VISION_MODEL, "gemini")
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
                 payload = self._build_gemini_payload(prompt, b64_data, mime_type or "image/jpeg")
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    resp = await client.post(url, json=payload, headers={"x-goog-api-key": gemini_key})
+                resp = await self._post_vision_json(
+                    url,
+                    payload,
+                    headers={"x-goog-api-key": gemini_key},
+                    timeout=15.0,
+                )
                 if resp.status_code == 200:
                     text_content = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
                     query = str(_extract_json_object(text_content).get("query", "")).strip()
@@ -692,8 +718,12 @@ class VisionService:
                 model = _validate_model_name(settings.OPENAI_VISION_MODEL, "openai")
                 payload = self._build_openai_payload(prompt, model, b64_data, mime_type or "image/jpeg")
                 headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
-                async with httpx.AsyncClient(timeout=15.0) as client:
-                    resp = await client.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
+                resp = await self._post_vision_json(
+                    "https://api.openai.com/v1/chat/completions",
+                    payload,
+                    headers=headers,
+                    timeout=15.0,
+                )
                 if resp.status_code == 200:
                     text_content = resp.json()["choices"][0]["message"]["content"]
                     query = str(_extract_json_object(text_content).get("query", "")).strip()
@@ -731,6 +761,7 @@ class VisionService:
     @staticmethod
     def _extract_pdf_text_and_images(pdf_path: Path, max_pages: int = 12, max_images: int = 4) -> tuple[str, List[Path]]:
         from pypdf import PdfReader
+        import shutil
         import tempfile
 
         reader = PdfReader(str(pdf_path))
@@ -746,28 +777,35 @@ class VisionService:
         if len(combined_text) >= 40:
             return combined_text, []
 
-        # Scanned / image-only PDF fallback: extract embedded images to temporary files
+        # Scanned / image-only PDF fallback: extract embedded images to temporary files lazily
         extracted_images: List[Path] = []
-        tmp_dir = Path(tempfile.mkdtemp(prefix="wims_pdf_img_"))
-        for p_idx, page in enumerate(reader.pages[:max_pages]):
-            if len(extracted_images) >= max_images:
-                break
-            try:
-                imgs = list(getattr(page, "images", []) or [])
-            except Exception:
-                imgs = []
-            for i_idx, img_obj in enumerate(imgs):
+        tmp_dir: Optional[Path] = None
+        try:
+            for p_idx, page in enumerate(reader.pages[:max_pages]):
                 if len(extracted_images) >= max_images:
                     break
-                data = getattr(img_obj, "data", None)
-                if not data:
-                    continue
-                suffix = Path(getattr(img_obj, "name", "") or "img.jpg").suffix.lower()
-                if suffix not in _MIME_BY_SUFFIX:
-                    suffix = ".jpg"
-                out_path = tmp_dir / f"p{p_idx + 1}_{i_idx + 1}{suffix}"
-                out_path.write_bytes(data)
-                extracted_images.append(out_path)
+                try:
+                    imgs = list(getattr(page, "images", []) or [])
+                except Exception:
+                    imgs = []
+                for i_idx, img_obj in enumerate(imgs):
+                    if len(extracted_images) >= max_images:
+                        break
+                    data = getattr(img_obj, "data", None)
+                    if not data:
+                        continue
+                    if tmp_dir is None:
+                        tmp_dir = Path(tempfile.mkdtemp(prefix="wims_pdf_img_"))
+                    suffix = Path(getattr(img_obj, "name", "") or "img.jpg").suffix.lower()
+                    if suffix not in _MIME_BY_SUFFIX:
+                        suffix = ".jpg"
+                    out_path = tmp_dir / f"p{p_idx + 1}_{i_idx + 1}{suffix}"
+                    out_path.write_bytes(data)
+                    extracted_images.append(out_path)
+        except Exception:
+            if tmp_dir is not None:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
         return combined_text, extracted_images
 
     async def _analyze_pdf_text(
@@ -809,8 +847,12 @@ class VisionService:
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {"response_mime_type": "application/json"},
                 }
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(url, json=payload, headers={"x-goog-api-key": gemini_key})
+                resp = await self._post_vision_json(
+                    url,
+                    payload,
+                    headers={"x-goog-api-key": gemini_key},
+                    timeout=60.0,
+                )
                 if resp.status_code != 200:
                     return VisionAnalysisResponse(
                         status="fallback",
@@ -837,8 +879,12 @@ class VisionService:
                     "response_format": {"type": "json_object"},
                 }
                 headers = {"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
+                resp = await self._post_vision_json(
+                    "https://api.openai.com/v1/chat/completions",
+                    payload,
+                    headers=headers,
+                    timeout=60.0,
+                )
                 if resp.status_code != 200:
                     return VisionAnalysisResponse(
                         status="fallback",
@@ -859,14 +905,9 @@ class VisionService:
                     "stream": False,
                     "options": {"num_predict": 4096, "temperature": 0.1},
                 }
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    resp = await client.post(f"{ollama_url}/api/chat", json=payload)
+                resp = await self._post_vision_json(f"{ollama_url}/api/chat", payload, timeout=120.0)
                 if resp.status_code != 200:
-                    err_detail = ""
-                    try:
-                        err_detail = resp.json().get("error", "")
-                    except Exception:
-                        pass
+                    err_detail = self._extract_error_detail(resp)
                     suffix = f" ({err_detail})" if err_detail else ""
                     return VisionAnalysisResponse(
                         status="fallback",

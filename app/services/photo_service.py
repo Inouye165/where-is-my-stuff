@@ -1,3 +1,4 @@
+from contextlib import suppress
 import io
 import json
 import os
@@ -626,10 +627,8 @@ class PhotoService:
                 raise BadRequestError(f"Failed to generate PDF: {exc}") from exc
         finally:
             for im in pages:
-                try:
+                with suppress(Exception):
                     im.close()
-                except Exception:
-                    pass
 
         safe_filename = re.sub(r"[^A-Za-z0-9._\- ]+", "_", (filename or "Document").strip()).strip(" ._") or "Document"
         if not safe_filename.lower().endswith(".pdf"):

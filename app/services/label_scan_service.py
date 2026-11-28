@@ -19,6 +19,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.database import session_scope
 from app.core.exceptions import AppError, BadRequestError, NotFoundError
 from app.core.logging_config import logger
 from app.core.network import build_qr_png, resolve_effective_base_url
@@ -30,7 +31,6 @@ from app.repositories.location_repository import location_repository
 from app.schemas.label_scan import (
     CellLabelResult,
     CloseupZone,
-    LabelApplySlotUpdate,
     LabelScanAnalyzeRequest,
     LabelScanAnalyzeResponse,
     LabelScanApplyRequest,
@@ -40,7 +40,7 @@ from app.schemas.label_scan import (
     LabelScanSummary,
 )
 from app.schemas.location import GridSlotEnsureRequest
-from app.services.location_service import location_service
+from app.services.location_service import _GRID_SLOT_LOCK, location_service
 from app.services.photo_service import photo_service
 from app.services.vision_service import _extract_json_object, _validate_model_name, vision_service
 
@@ -141,7 +141,7 @@ def compute_perspective_coeffs(
 
     matrix: List[List[float]] = []
     rhs: List[float] = []
-    for (x, y), (X, Y) in zip(dst_pts, src_pts):
+    for (x, y), (X, Y) in zip(dst_pts, src_pts, strict=True):
         matrix.append([x, y, 1.0, 0.0, 0.0, 0.0, -X * x, -X * y])
         rhs.append(X)
         matrix.append([0.0, 0.0, 0.0, x, y, 1.0, -Y * x, -Y * y])
@@ -1154,14 +1154,20 @@ class LabelScanService:
         token: str,
         req: LabelScanAnalyzeRequest,
     ) -> LabelScanAnalyzeResponse:
-        rec = self._require_active_record(db, token)
-        container = location_repository.get_by_id(db, rec.container_id)
-        if not container:
-            raise NotFoundError("Container not found.")
+        bind = db.get_bind()
 
-        disk_path = self._verify_session_photo_access(rec, req.photo_path)
-        grid_rows, grid_cols, planned, (sub_r0, sub_r1, sub_c0, sub_c1) = self._plan_cells_for_container(
-            container, req
+        def _load_scan_inputs() -> Tuple[Path, int, int, List[_PlannedCell], Tuple[int, int, int, int]]:
+            with session_scope(bind) as thread_db:
+                rec = self._require_active_record(thread_db, token)
+                container = location_repository.get_by_id(thread_db, rec.container_id)
+                if not container:
+                    raise NotFoundError("Container not found.")
+                disk_path = self._verify_session_photo_access(rec, req.photo_path)
+                grid_rows, grid_cols, planned, sub_bounds = self._plan_cells_for_container(container, req)
+                return disk_path, grid_rows, grid_cols, planned, sub_bounds
+
+        disk_path, grid_rows, grid_cols, planned, (sub_r0, sub_r1, sub_c0, sub_c1) = (
+            await anyio.to_thread.run_sync(_load_scan_inputs)
         )
         if not planned:
             raise BadRequestError("No grid compartments selected for analysis.")
@@ -1294,47 +1300,54 @@ class LabelScanService:
                 )
             )
 
-        # Merge into existing session results if this was a close-up pass
+        # Merge into existing session results if this was a close-up pass inside a short-lived DB scope
         is_subzone = (sub_r0, sub_r1, sub_c0, sub_c1) != (1, grid_rows, 1, grid_cols)
-        existing_results = [
-            CellLabelResult.model_validate(item) for item in self._parse_json_list(rec.results_json)
-        ]
-        if is_subzone and existing_results:
-            merged_by_key: Dict[Tuple[int, int], CellLabelResult] = {
-                (r.grid_row, r.grid_col): r for r in existing_results
-            }
-            tier_rank = {"red": 1, "unlabeled": 1, "yellow": 2, "green": 3}
-            for nr in new_results:
-                key = (nr.grid_row, nr.grid_col)
-                prev = merged_by_key.get(key)
-                if prev is None:
-                    merged_by_key[key] = nr
-                    continue
-                if prev.confidence_tier == "green" and tier_rank.get(nr.confidence_tier, 0) < 3:
-                    continue
-                if tier_rank.get(nr.confidence_tier, 0) > tier_rank.get(prev.confidence_tier, 0) or (
-                    nr.confidence >= prev.confidence
-                ):
-                    merged_by_key[key] = nr
-                elif nr.crop_photo_path and not prev.crop_photo_path:
-                    prev.crop_photo_path = nr.crop_photo_path
-            final_results = sorted(merged_by_key.values(), key=lambda r: (r.grid_row, r.grid_col))
-        else:
-            final_results = sorted(new_results, key=lambda r: (r.grid_row, r.grid_col))
 
-        zones = cluster_closeup_zones(final_results, grid_rows, grid_cols)
-        summary = compute_summary(final_results)
+        def _persist_scan_results() -> Tuple[List[CellLabelResult], List[CloseupZone], LabelScanSummary]:
+            with session_scope(bind) as thread_db:
+                rec = self._require_active_record(thread_db, token)
+                existing_results = [
+                    CellLabelResult.model_validate(item) for item in self._parse_json_list(rec.results_json)
+                ]
+                if is_subzone and existing_results:
+                    merged_by_key: Dict[Tuple[int, int], CellLabelResult] = {
+                        (r.grid_row, r.grid_col): r for r in existing_results
+                    }
+                    tier_rank = {"red": 1, "unlabeled": 1, "yellow": 2, "green": 3}
+                    for nr in new_results:
+                        key = (nr.grid_row, nr.grid_col)
+                        prev = merged_by_key.get(key)
+                        if prev is None:
+                            merged_by_key[key] = nr
+                            continue
+                        if prev.confidence_tier == "green" and tier_rank.get(nr.confidence_tier, 0) < 3:
+                            continue
+                        if tier_rank.get(nr.confidence_tier, 0) > tier_rank.get(prev.confidence_tier, 0) or (
+                            nr.confidence >= prev.confidence
+                        ):
+                            merged_by_key[key] = nr
+                        elif nr.crop_photo_path and not prev.crop_photo_path:
+                            prev.crop_photo_path = nr.crop_photo_path
+                    final_results = sorted(merged_by_key.values(), key=lambda r: (r.grid_row, r.grid_col))
+                else:
+                    final_results = sorted(new_results, key=lambda r: (r.grid_row, r.grid_col))
 
-        now = datetime.now(timezone.utc)
-        rec.results_json = json.dumps([r.model_dump() for r in final_results])
-        if req.zone_id:
-            next_zone = next((z for z in zones if z.zone_id != req.zone_id), zones[0] if zones else None)
-            rec.active_zone_json = next_zone.model_dump_json() if next_zone else None
-        elif not zones:
-            rec.active_zone_json = None
-        rec.status = "ready_for_review"
-        rec.expires_at = _db_ts(db, now + timedelta(seconds=self.TTL_SECONDS))
-        db.flush()
+                zones = cluster_closeup_zones(final_results, grid_rows, grid_cols)
+                summary = compute_summary(final_results)
+
+                now = datetime.now(timezone.utc)
+                rec.results_json = json.dumps([r.model_dump() for r in final_results])
+                if req.zone_id:
+                    next_zone = next((z for z in zones if z.zone_id != req.zone_id), zones[0] if zones else None)
+                    rec.active_zone_json = next_zone.model_dump_json() if next_zone else None
+                elif not zones:
+                    rec.active_zone_json = None
+                rec.status = "ready_for_review"
+                rec.expires_at = _db_ts(thread_db, now + timedelta(seconds=self.TTL_SECONDS))
+                thread_db.flush()
+                return final_results, zones, summary
+
+        final_results, zones, summary = await anyio.to_thread.run_sync(_persist_scan_results)
 
         engine_used = "+".join(engine_parts) if engine_parts else "quality_gate"
         msg = (
@@ -1352,6 +1365,16 @@ class LabelScanService:
 
     def apply_labels(
         self,
+        db: Session,
+        token: str,
+        req: LabelScanApplyRequest,
+    ) -> LabelScanApplyResponse:
+        with _GRID_SLOT_LOCK:
+            return self._apply_labels_locked(db=db, token=token, req=req)
+
+    def _apply_labels_locked(
+        self,
+        *,
         db: Session,
         token: str,
         req: LabelScanApplyRequest,

@@ -150,8 +150,8 @@ class SearchService:
 
         try:
             await anyio.to_thread.run_sync(_verify_image)
-        except (UnidentifiedImageError, OSError):
-            raise BadRequestError("Uploaded file is not a valid image.")
+        except (UnidentifiedImageError, OSError) as exc:
+            raise BadRequestError("Uploaded file is not a valid image.") from exc
 
         extracted_query, has_vision_api = await vision_service.extract_search_query(
             raw_bytes,

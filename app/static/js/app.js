@@ -3,6 +3,7 @@
  * Zero-Scroll 100dvh Home ('Places') • 'What are you looking for?' Search • 'Needs a home' Spatial Flow
  */
 import { apiGet, apiPost, onCrossTabSync } from './api.js';
+import { initDialogA11y } from './a11y.js';
 import { scrollSlotCarousel, syncSlotCarousel } from './carousel.js';
 import { initDelegatedEvents, registerActions } from './events.js';
 import {
@@ -18,7 +19,16 @@ import {
   triggerCompartmentUploadAndScan,
   triggerCompartmentUploadPdf
 } from './compartment-actions.js';
-import { closeAllModals, closeLightbox, closeModal, closeOnScrim, openLightbox, showToast } from './dom.js';
+import {
+  closeAllModals,
+  closeConfirmOnScrim,
+  closeLightbox,
+  closeModal,
+  closeOnScrim,
+  openLightbox,
+  resolveConfirmModal,
+  showToast
+} from './dom.js';
 import { closeScanAbortOnScrim, initUnsavedGuard, resolveScanAbortPrompt, resolveUnsavedPrompt } from './unsaved-guard.js';
 import { closeUnitSetupWizard, launchMobileUnitSetup, openExistingUnitCaptureWizard, openUnitSetupWizard } from './unit-setup-wizard.js';
 import { closeLabelScanModal, openLabelScanModal } from './label-scan.js';
@@ -379,6 +389,11 @@ function initKeyboardAndRouter() {
         closeLightbox();
         return;
       }
+      const confirmModal = document.getElementById('app-confirm-modal');
+      if (confirmModal && confirmModal.classList.contains('open')) {
+        resolveConfirmModal(false);
+        return;
+      }
       const scanAbortModal = document.getElementById('scan-abort-confirm-modal');
       if (scanAbortModal && scanAbortModal.classList.contains('open')) {
         resolveScanAbortPrompt('continue');
@@ -624,6 +639,9 @@ function showPinUnlockModal() {
   }
   const overlay = document.createElement('div');
   overlay.id = 'wims-pin-unlock-overlay';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'pin-unlock-title');
   overlay.style.cssText = [
     'position:fixed', 'inset:0', 'z-index:9999', 'display:flex',
     'align-items:center', 'justify-content:center', 'padding:16px',
@@ -638,6 +656,7 @@ function showPinUnlockModal() {
   ].join(';');
 
   const title = document.createElement('h2');
+  title.id = 'pin-unlock-title';
   title.textContent = 'Enter Access PIN';
   title.style.cssText = 'margin:0 0 8px 0;font-size:1.1rem;font-weight:700;';
 
@@ -645,7 +664,13 @@ function showPinUnlockModal() {
   sub.textContent = 'This WhereIsMyStuff inventory is protected by a PIN.';
   sub.style.cssText = 'margin:0 0 14px 0;font-size:0.875rem;opacity:0.8;';
 
+  const label = document.createElement('label');
+  label.htmlFor = 'pin-unlock-input';
+  label.className = 'sr-only';
+  label.textContent = 'Access PIN';
+
   const input = document.createElement('input');
+  input.id = 'pin-unlock-input';
   input.type = 'password';
   input.autocomplete = 'current-password';
   input.placeholder = 'Enter PIN';
@@ -657,6 +682,8 @@ function showPinUnlockModal() {
   ].join(';');
 
   const errEl = document.createElement('div');
+  errEl.setAttribute('role', 'alert');
+  errEl.setAttribute('aria-live', 'assertive');
   errEl.style.cssText = 'min-height:18px;font-size:0.82rem;color:#f87171;margin-bottom:10px;';
 
   const submitBtn = document.createElement('button');
@@ -692,7 +719,7 @@ function showPinUnlockModal() {
     }
   });
 
-  card.append(title, sub, input, errEl, submitBtn);
+  card.append(title, sub, label, input, errEl, submitBtn);
   overlay.appendChild(card);
   document.body.appendChild(overlay);
   input.focus();
@@ -754,6 +781,7 @@ function bootstrapApp() {
   registerActions({ triggerBackupNow });
   initDelegatedEvents();
   initKeyboardAndRouter();
+  initDialogA11y();
   initPwaAndWindowModes();
   bindDesktopPhotoIntercepts();
   initUnsavedGuard();
@@ -794,6 +822,8 @@ if (typeof window !== 'undefined') {
     verifyItemFromView: verifyItemFromView,
     closeOnScrim: closeOnScrim,
     closeModal: closeModal,
+    resolveConfirmModal: resolveConfirmModal,
+    closeConfirmOnScrim: closeConfirmOnScrim,
     resolveUnsavedPrompt: resolveUnsavedPrompt,
     resolveScanAbortPrompt: resolveScanAbortPrompt,
     closeScanAbortOnScrim: closeScanAbortOnScrim,

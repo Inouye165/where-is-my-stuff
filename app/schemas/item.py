@@ -1,4 +1,5 @@
 from typing import List, Literal, Optional
+from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.audit import AuditLogRead
 from app.schemas.common import ItemStatus, UTCDateTime, validate_name, validate_safe_photo_ref
@@ -39,12 +40,12 @@ class ItemBulkCreate(BaseModel):
     assortment_name: Optional[str] = Field(default=None, max_length=160)
     assortment_label: Optional[str] = Field(default=None, max_length=40)
     assortment_photo: Optional[str] = Field(default=None, max_length=300)
-    source_photo_ids: Optional[List[int]] = None
+    source_photo_ids: Optional[List[int]] = Field(default=None, max_length=50)
     source_attachment_path: Optional[str] = Field(default=None, max_length=300)
     source_attachment_filename: Optional[str] = Field(default=None, max_length=255)
     source_attachment_title: Optional[str] = Field(default=None, max_length=200)
     category: Optional[str] = Field(default=None, max_length=80)
-    items: Optional[List[ItemCreate]] = None
+    items: Optional[List[ItemCreate]] = Field(default=None, max_length=500)
     raw_lines: Optional[str] = Field(default=None, max_length=50_000)
     raw_text: Optional[str] = Field(default=None, max_length=50_000)
 
@@ -283,11 +284,34 @@ class ItemFromBundleCreate(BaseModel):
     specs: Optional[str] = Field(default=None, max_length=8000)
     use_case: Optional[str] = Field(default=None, max_length=6000)
     setup_info: Optional[str] = Field(default=None, max_length=8000)
-    reference_links: List[str] = Field(default_factory=list)
+    reference_links: List[str] = Field(default_factory=list, max_length=20)
     description: Optional[str] = Field(default=None, max_length=20_000)
     main_photo_path: Optional[str] = Field(default=None, max_length=300)
-    image_paths: List[str] = Field(default_factory=list)
-    documents: List[ItemBundleDocumentRef] = Field(default_factory=list)
+    image_paths: List[str] = Field(default_factory=list, max_length=50)
+    documents: List[ItemBundleDocumentRef] = Field(default_factory=list, max_length=30)
+
+    @field_validator("reference_links")
+    @classmethod
+    def check_reference_links(cls, v: List[str]) -> List[str]:
+        cleaned: List[str] = []
+        seen: set[str] = set()
+        for raw in v:
+            if not isinstance(raw, str):
+                raise ValueError("Reference link must be a string.")
+            if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
+                raise ValueError("Reference link contains invalid control characters.")
+            link = raw.strip()
+            if not link:
+                continue
+            if len(link) > 2048 or any(ch.isspace() for ch in link):
+                raise ValueError("Reference link is invalid or exceeds 2048 characters.")
+            parsed = urlsplit(link)
+            if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+                raise ValueError("Reference links must use http:// or https://.")
+            if link not in seen:
+                seen.add(link)
+                cleaned.append(link)
+        return cleaned
 
     @field_validator("name")
     @classmethod

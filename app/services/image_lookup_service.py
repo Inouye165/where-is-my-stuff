@@ -114,6 +114,28 @@ async def _is_fetchable_url(url: str) -> bool:
     return await anyio.to_thread.run_sync(_host_resolves_publicly, host)
 
 
+def verify_response_peer_is_public(resp: httpx.Response) -> bool:
+    """Verify the actual connected socket peer IP (when exposed by httpx) is globally routable."""
+    extensions = getattr(resp, "extensions", None)
+    if not isinstance(extensions, Mapping):
+        return True
+    stream = extensions.get("network_stream")
+    if stream is None:
+        return True
+    get_extra = getattr(stream, "get_extra_info", None)
+    if not callable(get_extra):
+        return True
+    peer = get_extra("peername")
+    if not isinstance(peer, tuple) or not peer:
+        return True
+    raw_ip = str(peer[0]).split("%", 1)[0]
+    try:
+        ip = ipaddress.ip_address(raw_ip)
+    except ValueError:
+        return False
+    return _is_global_ip(ip)
+
+
 def build_search_queries(
     name: str,
     part_number: Optional[str] = None,
@@ -254,6 +276,9 @@ async def download_and_save_image(client: httpx.AsyncClient, url: str) -> Option
     for _ in range(_MAX_REDIRECTS + 1):
         try:
             async with client.stream("GET", current, follow_redirects=False) as resp:
+                if not verify_response_peer_is_public(resp):
+                    logger.debug("Refusing image response from non-public peer for %s", current)
+                    return None
                 status_code = resp.status_code
                 headers = resp.headers
                 if status_code in _REDIRECT_STATUSES:

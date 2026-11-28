@@ -153,6 +153,14 @@ def _migration_009_label_scan_sessions(conn: Connection) -> None:
     )
 
 
+def _migration_010_photo_path_indexes(conn: Connection) -> None:
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_items_item_photo ON items (item_photo)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_locations_container_photo ON locations (container_photo)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_locations_context_photo ON locations (context_photo)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_location_photos_photo_path ON location_photos (photo_path)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_item_attachments_file_path ON item_attachments (file_path)"))
+
+
 MIGRATIONS: List[MigrationStep] = [
     (1, "001_initial_schema", _migration_001_initial_schema),
     (2, "002_performance_indexes", _migration_002_performance_indexes),
@@ -163,6 +171,7 @@ MIGRATIONS: List[MigrationStep] = [
     (7, "007_grid_slot_unique_index", _migration_007_grid_slot_unique_index),
     (8, "008_persistent_sessions", _migration_008_persistent_sessions),
     (9, "009_label_scan_sessions", _migration_009_label_scan_sessions),
+    (10, "010_photo_path_indexes", _migration_010_photo_path_indexes),
 ]
 
 
@@ -214,7 +223,7 @@ def _cross_process_migration_lock(engine: Engine, timeout_seconds: float = 60.0)
                 except OSError:
                     pass
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(f"Timed out waiting for migration lock: {lock_path}")
+                    raise TimeoutError(f"Timed out waiting for migration lock: {lock_path}") from None
                 time.sleep(0.05)
 
     try:

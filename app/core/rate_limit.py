@@ -7,6 +7,7 @@ from typing import Dict, Optional, Tuple
 from app.core.config import settings
 
 _VISION_ANALYZE_RE = re.compile(r"^/api/v1/locations/\d+/analyze-photo$")
+_VISION_ANALYZE_PDF_RE = re.compile(r"^/api/v1/locations/\d+/analyze-pdf$")
 _ITEM_FIND_IMAGE_RE = re.compile(r"^/api/v1/items/\d+/find-image$")
 _LOC_FIND_IMAGES_RE = re.compile(r"^/api/v1/locations/\d+/find-item-images$")
 _LOC_PHOTOS_RE = re.compile(r"^/api/v1/locations/\d+/photos(?:/attach)?$")
@@ -82,7 +83,12 @@ def match_rate_limit_bucket(method: str, path: str) -> Optional[Tuple[str, int]]
         return None
     if path == "/api/v1/auth/login":
         return ("auth", settings.RATE_LIMIT_AUTH_PER_MIN)
-    if path == "/api/v1/search/photo" or _VISION_ANALYZE_RE.match(path) or _LABEL_SCAN_ANALYZE_RE.match(path):
+    if (
+        path in ("/api/v1/search/photo", "/api/v1/items/analyze-bundle")
+        or _VISION_ANALYZE_RE.match(path)
+        or _VISION_ANALYZE_PDF_RE.match(path)
+        or _LABEL_SCAN_ANALYZE_RE.match(path)
+    ):
         return ("vision", settings.RATE_LIMIT_VISION_PER_MIN)
     if (
         path in ("/api/v1/system/backup", "/api/v1/system/cleanup-unused-crops")
@@ -97,6 +103,8 @@ def match_rate_limit_bucket(method: str, path: str) -> Optional[Tuple[str, int]]
             "/api/v1/photos/capture-sessions",
             "/api/v1/unit-setup/sessions",
             "/api/v1/label-scan/sessions",
+            "/api/v1/items/bulk",
+            "/api/v1/items/from-bundle",
         )
         or _CAPTURE_UPLOAD_RE.match(path)
         or _LABEL_SCAN_UPLOAD_RE.match(path)

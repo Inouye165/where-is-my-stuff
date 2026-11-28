@@ -250,7 +250,7 @@ class DocumentOcrService:
             med_density = statistics.median(densities)
             heights = [sp.ink_height for sp in spans]
             med_height = statistics.median(heights) if heights else 14.0
-            for sp, dens in zip(spans, densities):
+            for sp, dens in zip(spans, densities, strict=True):
                 sp.is_bold = bool(dens >= med_density * 1.24 or sp.ink_height >= med_height * 1.32)
 
         lines = self._group_into_lines(spans, page_w=w)

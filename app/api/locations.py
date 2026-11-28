@@ -84,7 +84,7 @@ def list_location_photos(location_id: int, db: Session = Depends(get_db)) -> Lis
 def upload_location_photo(
     location_id: int,
     file: UploadFile = File(...),
-    caption: Optional[str] = Form(default=None),
+    caption: Optional[str] = Form(default=None, max_length=200),
     photo_type: LocationPhotoType = Form(default="container"),
     db: Session = Depends(get_db),
 ) -> LocationPhotoRead:
@@ -127,8 +127,8 @@ async def analyze_drawer_photo(
     file: Optional[UploadFile] = File(default=None),
     photo_id: Optional[int] = Form(default=None),
     photo_ids: Optional[str] = Form(default=None, max_length=200),
-    provider: Optional[str] = Form(default=None),
-    model: Optional[str] = Form(default=None),
+    provider: Optional[str] = Form(default=None, max_length=32),
+    model: Optional[str] = Form(default=None, max_length=128),
     expected_count: Optional[int] = Form(default=None, ge=1, le=500),
     context_hint: Optional[str] = Form(default=None, max_length=300),
     db: Session = Depends(get_db),
@@ -150,8 +150,8 @@ async def analyze_drawer_photo(
 async def analyze_drawer_pdf(
     location_id: int,
     file: UploadFile = File(...),
-    provider: Optional[str] = Form(default=None),
-    model: Optional[str] = Form(default=None),
+    provider: Optional[str] = Form(default=None, max_length=32),
+    model: Optional[str] = Form(default=None, max_length=128),
     expected_count: Optional[int] = Form(default=None, ge=1, le=500),
     context_hint: Optional[str] = Form(default=None, max_length=300),
     db: Session = Depends(get_db),

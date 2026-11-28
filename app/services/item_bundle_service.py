@@ -1,7 +1,6 @@
 import base64
 import html
 import ipaddress
-import json
 import os
 from pathlib import Path
 import re
@@ -26,14 +25,16 @@ from app.schemas.item import (
     ItemFromBundleCreate,
     ItemPhotoAttachmentCreate,
 )
-from app.services.image_lookup_service import _is_global_ip
+from app.services.image_lookup_service import _is_global_ip, verify_response_peer_is_public
 from app.services.inventory_service import inventory_service
 from app.services.photo_service import ALLOWED_EXTENSIONS, photo_service
-from app.services.vision_service import _MIME_BY_SUFFIX, _extract_json_object, _validate_model_name, vision_service
+from app.services.vision_service import _extract_json_object, _validate_model_name, vision_service
 
 _TEXT_DOC_EXTS = {".txt", ".md", ".csv", ".json"}
 _MAX_URL_BYTES = 1_000_000
 _MAX_FETCH_URLS = 5
+_MAX_BUNDLE_FILES = 20
+_MAX_BUNDLE_PHOTO_PATHS = 20
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -164,23 +165,40 @@ class ItemBundleService:
                 headers={"User-Agent": _USER_AGENT, "Accept-Language": "en-US,en;q=0.9"},
             ) as client:
                 current = url
-                resp: Optional[httpx.Response] = None
+                raw_bytes = b""
+                encoding: Optional[str] = None
                 for _ in range(3):
-                    resp = await client.get(current)
-                    if resp.status_code in (301, 302, 303, 307, 308):
-                        loc = resp.headers.get("location")
-                        if not loc:
-                            break
-                        next_url = str(httpx.URL(current).join(loc))
-                        if not await anyio.to_thread.run_sync(_is_safe_public_url, next_url):
-                            return None, f"Blocked unsafe redirect for URL: {url}"
-                        current = next_url
-                        continue
-                    break
-                if resp is None or resp.status_code >= 400:
-                    code = resp.status_code if resp is not None else "no response"
-                    return None, f"Could not fetch {url} (HTTP {code}) — link saved for reference."
-                raw_text = resp.text[:_MAX_URL_BYTES]
+                    async with client.stream("GET", current, follow_redirects=False) as resp:
+                        if not verify_response_peer_is_public(resp):
+                            return None, f"Blocked non-public peer address for URL: {url}"
+                        if resp.status_code in (301, 302, 303, 307, 308):
+                            loc = resp.headers.get("location")
+                            if not loc:
+                                return None, f"Could not fetch {url} (incomplete redirect) — link saved for reference."
+                            next_url = str(httpx.URL(current).join(loc))
+                            if not await anyio.to_thread.run_sync(_is_safe_public_url, next_url):
+                                return None, f"Blocked unsafe redirect for URL: {url}"
+                            current = next_url
+                            continue
+                        if resp.status_code >= 400:
+                            return None, f"Could not fetch {url} (HTTP {resp.status_code}) — link saved for reference."
+                        declared = str(resp.headers.get("content-length") or "")
+                        if declared.isdigit() and int(declared) > _MAX_URL_BYTES * 5:
+                            return None, f"Skipped oversized page ({declared} bytes): {url}"
+                        chunks: List[bytes] = []
+                        total = 0
+                        async for chunk in resp.aiter_bytes():
+                            remaining = _MAX_URL_BYTES - total
+                            if remaining <= 0:
+                                break
+                            chunks.append(chunk[:remaining])
+                            total += min(len(chunk), remaining)
+                        raw_bytes = b"".join(chunks)
+                        encoding = resp.encoding
+                        break
+                else:
+                    return None, f"Too many redirects for {url} — link saved for reference."
+                raw_text = raw_bytes.decode(encoding or "utf-8", errors="replace")
                 summary = _extract_html_summary(raw_text)
                 if not summary:
                     return None, f"Page had no readable text: {url}"
@@ -312,6 +330,11 @@ class ItemBundleService:
         provider: Optional[str] = None,
         model: Optional[str] = None,
     ) -> ItemBundleAnalysisResponse:
+        if len(files or []) > _MAX_BUNDLE_FILES:
+            raise BadRequestError(f"At most {_MAX_BUNDLE_FILES} files can be uploaded per bundle.")
+        if len(photo_paths or []) > _MAX_BUNDLE_PHOTO_PATHS:
+            raise BadRequestError(f"At most {_MAX_BUNDLE_PHOTO_PATHS} pre-uploaded photos can be analyzed per bundle.")
+
         saved_images: List[BundleSavedImage] = []
         saved_documents: List[BundleSavedDocument] = []
         ai_image_paths: List[Path] = []
@@ -389,8 +412,8 @@ class ItemBundleService:
                             raw_txt = disk_doc.read_text(encoding="utf-8", errors="replace").strip()
                             if raw_txt:
                                 text_sections.append(f"FILE ({meta['filename']}):\n{raw_txt[:8000]}")
-                        except Exception:
-                            pass
+                        except OSError as exc:
+                            logger.debug("Could not read text attachment %s: %s", meta["filename"], exc)
 
         try:
             await anyio.to_thread.run_sync(_save_uploaded_files)

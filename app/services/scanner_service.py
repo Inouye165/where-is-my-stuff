@@ -120,7 +120,7 @@ class ScannerService:
         env = os.environ.copy()
         if env_overrides:
             env.update(env_overrides)
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: S603
             [exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-STA", "-Command", "-"],
             input=script,
             text=True,
@@ -158,7 +158,7 @@ class ScannerService:
                 "message": "SANE 'scanimage' is not installed on this host.",
             }
         try:
-            proc = subprocess.run([scanimage, "-L"], text=True, capture_output=True, timeout=12.0)
+            proc = subprocess.run([scanimage, "-L"], text=True, capture_output=True, timeout=12.0)  # noqa: S603
             devices = []
             for line in (proc.stdout or "").splitlines():
                 m = re.match(r"^device\s+`([^']+)'\s+is\s+a\s+(.+)$", line.strip())
@@ -214,13 +214,13 @@ class ScannerService:
                     "message": None if devices else "No WIA scanners found. Make sure your scanner is powered on and connected.",
                 }
             except AppError as exc:
-                logger.warning("WIA scanner enumeration failed: %s", exc.message)
+                logger.warning("WIA scanner enumeration failed: %s", exc.detail)
                 return {
                     "available": False,
                     "platform": sys_name,
                     "backend": "wia",
                     "devices": [],
-                    "message": exc.message,
+                    "message": exc.detail,
                 }
             except subprocess.TimeoutExpired:
                 return {
@@ -301,7 +301,7 @@ class ScannerService:
                     "-o",
                     str(actual_path),
                 ]
-                proc = subprocess.run(cmd, text=True, capture_output=True, timeout=75.0)
+                proc = subprocess.run(cmd, text=True, capture_output=True, timeout=75.0)  # noqa: S603
                 if proc.returncode != 0 or not actual_path.exists():
                     raise BadRequestError((proc.stderr or "SANE scan failed.").strip()[:240])
                 scanner_name = selected["name"]

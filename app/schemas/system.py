@@ -9,8 +9,8 @@ class PhotoUploadResponse(BaseModel):
 
 
 class CaptureSessionCreate(BaseModel):
-    label: Optional[str] = None
-    base_url: Optional[str] = None
+    label: Optional[str] = Field(default=None, max_length=80)
+    base_url: Optional[str] = Field(default=None, max_length=300)
     location_id: Optional[int] = Field(default=None, ge=1)
     high_res: bool = False
 

@@ -21,7 +21,7 @@ class Item(Base):
     unit: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, default="pcs")
     serial_or_part_number: Mapped[Optional[str]] = mapped_column(String(120), nullable=True, index=True)
 
-    item_photo: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    item_photo: Mapped[Optional[str]] = mapped_column(String(300), nullable=True, index=True)
 
     location_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("locations.id", ondelete="SET NULL"), nullable=True, index=True
@@ -60,7 +60,7 @@ class ItemAttachment(Base):
     item_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    file_path: Mapped[str] = mapped_column(String(300), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
     thumbnail_path: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)

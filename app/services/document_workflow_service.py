@@ -28,6 +28,8 @@ from app.services.photo_service import photo_service
 class DocumentWorkflowService:
     """Coordinates multi-page document enhancement and dual-PDF attachment persistence."""
 
+    _MAX_PDF_TYPESET_PAGES = 50
+
     @staticmethod
     def _resolve_existing_upload(photo_url: str) -> Path:
         disk_path = photo_service.resolve_safe_upload_path(photo_url)
@@ -47,75 +49,81 @@ class DocumentWorkflowService:
 
         clean_title = (data.title or "").strip()[:160] or f"{item.name} Document"[:160]
         page_paths: list[Path] = []
+        auto_enhanced_urls: list[str] = []
         warnings: list[str] = []
 
-        for page in data.pages:
-            if page.enhanced_path:
-                page_paths.append(self._resolve_existing_upload(page.enhanced_path))
-            elif data.auto_enhance_unprocessed:
-                enhanced = document_enhance_service.enhance_photo_file(
-                    page.source_path,
-                    options=page.enhance_options or DocumentEnhanceOptions(),
+        try:
+            for page in data.pages:
+                if page.enhanced_path:
+                    page_paths.append(self._resolve_existing_upload(page.enhanced_path))
+                elif data.auto_enhance_unprocessed:
+                    enhanced = document_enhance_service.enhance_photo_file(
+                        page.source_path,
+                        options=page.enhance_options or DocumentEnhanceOptions(),
+                    )
+                    warnings.extend(enhanced.get("warnings") or [])
+                    auto_enhanced_urls.append(enhanced["enhanced_path"])
+                    page_paths.append(self._resolve_existing_upload(enhanced["enhanced_path"]))
+                else:
+                    page_paths.append(self._resolve_existing_upload(page.source_path))
+
+            enhanced_att: Optional[ItemAttachment] = None
+            typeset_att: Optional[ItemAttachment] = None
+            ocr_words = 0
+            ocr_available = True
+
+            if data.save_enhanced_pdf:
+                scan_bytes = document_pdf_service.build_enhanced_scan_pdf(page_paths, pdf_dpi=data.pdf_dpi)
+                meta = photo_service.save_attachment_bytes(
+                    scan_bytes,
+                    filename=f"{clean_title}.pdf",
+                    content_type="application/pdf",
+                    attachment_type="pdf",
+                    ext=".pdf",
                 )
-                warnings.extend(enhanced.get("warnings") or [])
-                page_paths.append(self._resolve_existing_upload(enhanced["enhanced_path"]))
-            else:
-                page_paths.append(self._resolve_existing_upload(page.source_path))
+                photo_service.schedule_rollback_cleanup(db, meta["file_path"])
+                enhanced_att = ItemAttachment(
+                    item_id=item.id,
+                    file_path=meta["file_path"],
+                    thumbnail_path=None,
+                    filename=meta["filename"],
+                    content_type=meta["content_type"],
+                    attachment_type="pdf",
+                    title=clean_title,
+                    size_bytes=meta["size_bytes"],
+                )
+                db.add(enhanced_att)
 
-        enhanced_att: Optional[ItemAttachment] = None
-        typeset_att: Optional[ItemAttachment] = None
-        ocr_words = 0
-        ocr_available = True
-
-        if data.save_enhanced_pdf:
-            scan_bytes = document_pdf_service.build_enhanced_scan_pdf(page_paths, pdf_dpi=data.pdf_dpi)
-            meta = photo_service.save_attachment_bytes(
-                scan_bytes,
-                filename=f"{clean_title}.pdf",
-                content_type="application/pdf",
-                attachment_type="pdf",
-                ext=".pdf",
-            )
-            photo_service.schedule_rollback_cleanup(db, meta["file_path"])
-            enhanced_att = ItemAttachment(
-                item_id=item.id,
-                file_path=meta["file_path"],
-                thumbnail_path=None,
-                filename=meta["filename"],
-                content_type=meta["content_type"],
-                attachment_type="pdf",
-                title=clean_title,
-                size_bytes=meta["size_bytes"],
-            )
-            db.add(enhanced_att)
-
-        if data.save_typeset_pdf:
-            typeset_bytes, ocr_words, ocr_available, pdf_warnings = document_pdf_service.build_typeset_pdf(
-                page_paths,
-                mode=data.typeset_mode,
-                include_graphics=data.include_graphics,
-            )
-            warnings.extend(pdf_warnings)
-            typeset_title = f"{clean_title} (Typeset)"[:160] if data.save_enhanced_pdf else clean_title
-            meta = photo_service.save_attachment_bytes(
-                typeset_bytes,
-                filename=f"{typeset_title}.pdf",
-                content_type="application/pdf",
-                attachment_type="pdf",
-                ext=".pdf",
-            )
-            photo_service.schedule_rollback_cleanup(db, meta["file_path"])
-            typeset_att = ItemAttachment(
-                item_id=item.id,
-                file_path=meta["file_path"],
-                thumbnail_path=None,
-                filename=meta["filename"],
-                content_type=meta["content_type"],
-                attachment_type="pdf",
-                title=typeset_title,
-                size_bytes=meta["size_bytes"],
-            )
-            db.add(typeset_att)
+            if data.save_typeset_pdf:
+                typeset_bytes, ocr_words, ocr_available, pdf_warnings = document_pdf_service.build_typeset_pdf(
+                    page_paths,
+                    mode=data.typeset_mode,
+                    include_graphics=data.include_graphics,
+                )
+                warnings.extend(pdf_warnings)
+                typeset_title = f"{clean_title} (Typeset)"[:160] if data.save_enhanced_pdf else clean_title
+                meta = photo_service.save_attachment_bytes(
+                    typeset_bytes,
+                    filename=f"{typeset_title}.pdf",
+                    content_type="application/pdf",
+                    attachment_type="pdf",
+                    ext=".pdf",
+                )
+                photo_service.schedule_rollback_cleanup(db, meta["file_path"])
+                typeset_att = ItemAttachment(
+                    item_id=item.id,
+                    file_path=meta["file_path"],
+                    thumbnail_path=None,
+                    filename=meta["filename"],
+                    content_type=meta["content_type"],
+                    attachment_type="pdf",
+                    title=typeset_title,
+                    size_bytes=meta["size_bytes"],
+                )
+                db.add(typeset_att)
+        finally:
+            for temp_url in auto_enhanced_urls:
+                photo_service.delete_upload_url(temp_url)
 
         now = datetime.now(timezone.utc)
         item.updated_at = now
@@ -170,22 +178,32 @@ class DocumentWorkflowService:
         warnings: list[str] = []
 
         if att.attachment_type == "image":
-            if data.enhance_first:
-                enhanced = document_enhance_service.enhance_photo_file(att.file_path, DocumentEnhanceOptions())
-                page_paths = [self._resolve_existing_upload(enhanced["enhanced_path"])]
-                warnings.extend(enhanced.get("warnings") or [])
-            else:
-                page_paths = [disk_path]
+            temp_enhanced_urls: list[str] = []
+            try:
+                if data.enhance_first:
+                    enhanced = document_enhance_service.enhance_photo_file(att.file_path, DocumentEnhanceOptions())
+                    temp_enhanced_urls.append(enhanced["enhanced_path"])
+                    page_paths = [self._resolve_existing_upload(enhanced["enhanced_path"])]
+                    warnings.extend(enhanced.get("warnings") or [])
+                else:
+                    page_paths = [disk_path]
 
-            typeset_bytes, ocr_words, ocr_available, pdf_warnings = document_pdf_service.build_typeset_pdf(
-                page_paths,
-                mode=data.typeset_mode,
-                include_graphics=data.include_graphics,
-            )
-            warnings.extend(pdf_warnings)
-            page_count = 1
+                typeset_bytes, ocr_words, ocr_available, pdf_warnings = document_pdf_service.build_typeset_pdf(
+                    page_paths,
+                    mode=data.typeset_mode,
+                    include_graphics=data.include_graphics,
+                )
+                warnings.extend(pdf_warnings)
+                page_count = 1
+            finally:
+                for temp_url in temp_enhanced_urls:
+                    photo_service.delete_upload_url(temp_url)
         elif att.attachment_type == "pdf" or disk_path.suffix.lower() == ".pdf":
             reader = PdfReader(str(disk_path))
+            if len(reader.pages) > self._MAX_PDF_TYPESET_PAGES:
+                raise BadRequestError(
+                    f"PDF has {len(reader.pages)} pages; at most {self._MAX_PDF_TYPESET_PAGES} pages can be typeset at once."
+                )
             with tempfile.TemporaryDirectory(prefix="wims_pdf_extract_") as tmp_dir:
                 extracted_paths: list[Path] = []
                 temp_upload_urls: list[str] = []
@@ -323,6 +341,8 @@ class DocumentWorkflowService:
             pil_fmt = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP", ".gif": "GIF", ".bmp": "BMP"}.get(ext)
             if not pil_fmt:
                 raise BadRequestError("Unsupported image format for rotation.")
+            thumb_disk: Optional[Path] = None
+            tmp_thumb: Optional[Path] = None
             try:
                 with Image.open(disk_path) as raw:
                     oriented = ImageOps.exif_transpose(raw)
@@ -332,21 +352,24 @@ class DocumentWorkflowService:
                         rotated = rotated.convert("RGB")
                     save_kw = {"quality": 92, "optimize": True} if pil_fmt == "JPEG" else {}
                     rotated.save(tmp_path, format=pil_fmt, **save_kw)
-                os.replace(tmp_path, disk_path)
 
-                if att.thumbnail_path:
-                    thumb_disk = photo_service.resolve_safe_upload_path(att.thumbnail_path)
-                    tmp_thumb = thumb_disk.with_name(f".{thumb_disk.name}.rot.tmp")
-                    with Image.open(disk_path) as rot_im:
-                        thumb_im = rot_im.convert("RGB") if rot_im.mode not in ("RGB", "L") else rot_im.copy()
+                    if att.thumbnail_path:
+                        thumb_disk = photo_service.resolve_safe_upload_path(att.thumbnail_path)
+                        tmp_thumb = thumb_disk.with_name(f".{thumb_disk.name}.rot.tmp")
+                        thumb_im = rotated.convert("RGB") if rotated.mode not in ("RGB", "L") else rotated.copy()
                         thumb_im.thumbnail(
                             (settings.THUMBNAIL_MAX_DIMENSION, settings.THUMBNAIL_MAX_DIMENSION),
                             Image.Resampling.LANCZOS,
                         )
                         thumb_im.save(tmp_thumb, format="WEBP", quality=82)
+
+                os.replace(tmp_path, disk_path)
+                if tmp_thumb is not None and thumb_disk is not None:
                     os.replace(tmp_thumb, thumb_disk)
             except Exception as exc:
                 tmp_path.unlink(missing_ok=True)
+                if tmp_thumb is not None:
+                    tmp_thumb.unlink(missing_ok=True)
                 raise BadRequestError(f"Could not rotate image: {exc}") from exc
         else:
             raise BadRequestError("Only PDF and image attachments can be rotated.")

@@ -9,6 +9,7 @@ const APP_SHELL_URLS = [
   '/manifest.webmanifest',
   '/css/app.css',
   '/css/unit-setup.css',
+  '/js/a11y.js',
   '/js/app.js',
   '/js/api.js',
   '/js/box-actions.js',

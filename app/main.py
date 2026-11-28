@@ -11,10 +11,10 @@ from sqlalchemy.orm import Session
 from app.api import auth, documents, items, label_scan, locations, photos, search, system, unit_setup
 from app.core.config import settings
 from app.core.database import engine, get_db
-from app.core.exceptions import NotFoundError, register_exception_handlers
+from app.core.exceptions import BadRequestError, NotFoundError, register_exception_handlers
 from app.core.logging_config import configure_logging, install_global_exception_logging, logger
 from app.core.middleware import RequestContextMiddleware, SecurityAndRateLimitMiddleware
-from app.core.network import get_lan_ip
+from app.core.network import get_lan_ip, validate_http_url
 from app.core.security import is_auth_enabled
 from app.db.backup import backup_service
 from app.db.migrations import run_migrations
@@ -154,7 +154,13 @@ def create_app() -> FastAPI:
                 host_header=request.headers.get("host"),
             )
             if active is not None:
-                return RedirectResponse(url=active["mobile_url"], status_code=status.HTTP_302_FOUND)
+                try:
+                    safe_url = validate_http_url(
+                        active["mobile_url"], allow_scheme_less=False, require_local_host=True
+                    )
+                    return RedirectResponse(url=safe_url, status_code=status.HTTP_302_FOUND)
+                except BadRequestError:
+                    pass
         return RedirectResponse(url="/setup.html", status_code=status.HTTP_302_FOUND)
 
     application.mount("/uploads", uploads_mount, name="uploads")

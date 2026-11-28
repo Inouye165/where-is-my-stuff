@@ -7,6 +7,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from app.core.logging_config import logger
 
 
 def _cert_matches_sans(cert: x509.Certificate, lan_ip: str, min_valid_after: datetime) -> bool:
@@ -49,8 +50,8 @@ def ensure_lan_tls_cert(certs_dir: Path, lan_ip: str) -> Tuple[Path, Path]:
             serialization.load_pem_private_key(key_bytes, password=None)
             if _cert_matches_sans(existing_cert, lan_ip, now + timedelta(days=30)):
                 return cert_path, key_path
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Existing LAN TLS certificate unusable (%s); regenerating.", exc)
 
     private_key = ec.generate_private_key(ec.SECP256R1())
     subject = issuer = x509.Name([

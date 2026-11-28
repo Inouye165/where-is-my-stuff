@@ -59,12 +59,71 @@ export function showToast(msg, type = 'success') {
   if (!shelf) return;
   const toast = document.createElement('div');
   toast.className = `toast ${type === 'error' ? 'toast-error' : 'toast-success'}`;
+  if (typeof toast.setAttribute === 'function') {
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  }
   toast.textContent = msg;
   shelf.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = '0';
     setTimeout(() => toast.remove(), 220);
   }, 3000);
+}
+
+let activeConfirmResolve = null;
+
+export function resolveConfirmModal(confirmed = false) {
+  const modal = document.getElementById('app-confirm-modal');
+  if (modal) modal.classList.remove('open');
+  if (activeConfirmResolve) {
+    const fn = activeConfirmResolve;
+    activeConfirmResolve = null;
+    fn(Boolean(confirmed));
+  }
+}
+
+export function closeConfirmOnScrim(e) {
+  if (e && e.target && e.target.id === 'app-confirm-modal') {
+    resolveConfirmModal(false);
+  }
+}
+
+export function confirmAction(message, options = {}) {
+  const modal = document.getElementById('app-confirm-modal');
+  if (!modal) {
+    const fallback = typeof window !== 'undefined' && typeof window.confirm === 'function'
+      ? Boolean(window.confirm(message))
+      : false;
+    return Promise.resolve(fallback);
+  }
+
+  if (activeConfirmResolve) {
+    const superseded = activeConfirmResolve;
+    activeConfirmResolve = null;
+    superseded(false);
+  }
+
+  const titleEl = document.getElementById('app-confirm-title');
+  const msgEl = document.getElementById('app-confirm-msg');
+  const okBtn = document.getElementById('app-confirm-ok-btn');
+  const cancelBtn = document.getElementById('app-confirm-cancel-btn');
+
+  if (titleEl) titleEl.textContent = options.title || 'Confirm action';
+  if (msgEl) msgEl.textContent = message;
+  if (okBtn) {
+    okBtn.textContent = options.confirmText || 'Delete';
+    const isDanger = options.danger !== false;
+    if (okBtn.classList) {
+      okBtn.classList.toggle('btn-danger', isDanger);
+      okBtn.classList.toggle('btn-primary', !isDanger);
+    }
+  }
+  if (cancelBtn) cancelBtn.textContent = options.cancelText || 'Cancel';
+
+  modal.classList.add('open');
+  return new Promise((resolve) => {
+    activeConfirmResolve = resolve;
+  });
 }
 
 export function openLightbox(src, caption = '') {

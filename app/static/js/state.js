@@ -31,7 +31,7 @@ export function loadJsonStorage(key, fallback) {
 export function saveJsonStorage(key, val) {
   try {
     localStorage.setItem(key, JSON.stringify(val));
-  } catch {}
+  } catch { }
 }
 
 export const state = {
@@ -41,6 +41,7 @@ export const state = {
   locationMap: new Map(),
   namedRooms: [],
   containers: [],
+  containerIdSet: new Set(),
   categories: [],
 
   // Navigation State
@@ -156,6 +157,38 @@ export function indexLocations() {
   }
 
   state.containers = rawContainers;
+  state.containerIdSet = new Set(rawContainers.map(c => c.id));
+  _containersCacheRef = state.containers;
+  _containersCacheLen = rawContainers.length;
+}
+
+let _containersCacheRef = null;
+let _containersCacheLen = -1;
+let _itemsIndexRef = null;
+let _itemsIndexLen = -1;
+let _itemsByLocationId = new Map();
+let _lastLocDropdownSig = null;
+let _lastCatDatalistSig = null;
+
+function getItemsByLocationMap() {
+  const items = Array.isArray(state.items) ? state.items : [];
+  if (_itemsIndexRef !== items || _itemsIndexLen !== items.length) {
+    const map = new Map();
+    for (const item of items) {
+      if (!item || !item.location_id) continue;
+      const locId = Number(item.location_id);
+      let bucket = map.get(locId);
+      if (!bucket) {
+        bucket = [];
+        map.set(locId, bucket);
+      }
+      bucket.push(item);
+    }
+    _itemsByLocationId = map;
+    _itemsIndexRef = items;
+    _itemsIndexLen = items.length;
+  }
+  return _itemsByLocationId;
 }
 
 export function getRoomEmoji(roomOrName) {
@@ -228,7 +261,15 @@ export function getSubtreeItems(locationId) {
     }
   }
   collect(root);
-  return state.items.filter(item => item.location_id && ids.has(item.location_id));
+  const byLoc = getItemsByLocationMap();
+  const result = [];
+  for (const id of ids) {
+    const bucket = byLoc.get(id);
+    if (bucket) {
+      for (const item of bucket) result.push(item);
+    }
+  }
+  return result;
 }
 
 export function getLocationHierarchy(locationId) {
@@ -251,7 +292,16 @@ export function getLocationHierarchy(locationId) {
     };
   }
 
-  const containerIdSet = new Set(state.containers.map(c => c.id));
+  if (
+    _containersCacheRef !== state.containers
+    || _containersCacheLen !== state.containers.length
+    || !(state.containerIdSet instanceof Set)
+  ) {
+    state.containerIdSet = new Set(state.containers.map(c => c.id));
+    _containersCacheRef = state.containers;
+    _containersCacheLen = state.containers.length;
+  }
+  const containerIdSet = state.containerIdSet;
   const trail = getLocationAncestors(loc.id).filter(n => !isUnknownPlaceholder(n));
   let room = null;
   let unit = null;
@@ -323,66 +373,97 @@ export function extractCategories() {
   state.categories = Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 
+function _optionCount(el) {
+  if (el.options && typeof el.options.length === 'number') return el.options.length;
+  return el.children ? el.children.length : 0;
+}
+
+function _replaceChildrenWithOptions(targetEl, options) {
+  targetEl.innerHTML = '';
+  if (typeof document.createDocumentFragment === 'function') {
+    const frag = document.createDocumentFragment();
+    for (const opt of options) frag.appendChild(opt);
+    targetEl.appendChild(frag);
+    return;
+  }
+  for (const opt of options) targetEl.appendChild(opt);
+}
+
+function _rebuildSelectWithFragment(selectEl, entries, placeholderText) {
+  const prev = selectEl.value;
+  const options = [];
+  if (placeholderText !== null) {
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = placeholderText;
+    options.push(placeholder);
+  }
+  for (const entry of entries) {
+    const opt = document.createElement('option');
+    opt.value = entry.loc.id;
+    opt.textContent = entry.path;
+    options.push(opt);
+  }
+  _replaceChildrenWithOptions(selectEl, options);
+  if (prev) selectEl.value = prev;
+}
+
+function _rebuildCategoryDatalist(datalistEl, categories) {
+  const options = [];
+  for (const cat of categories) {
+    const opt = document.createElement('option');
+    opt.value = cat;
+    options.push(opt);
+  }
+  _replaceChildrenWithOptions(datalistEl, options);
+}
+
 export function populateLocationDropdowns() {
-  const allLocations = Array.from(state.locationMap.values())
+  const entries = Array.from(state.locationMap.values())
     .filter(l => !isUnknownPlaceholder(l))
-    .sort((a, b) => formatHumanPath(a.full_path).localeCompare(formatHumanPath(b.full_path)));
+    .map(loc => ({ loc, path: formatHumanPath(loc.full_path), ltype: getLocType(loc) }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+
+  const locSig = entries.map(e => `${e.loc.id}:${e.path}:${e.ltype}`).join('|');
+  const locChanged = locSig !== _lastLocDropdownSig;
 
   const itemSelect = document.getElementById('item-location-select');
-  if (itemSelect) {
-    const prev = itemSelect.value;
-    itemSelect.innerHTML = '<option value="">Choose a drawer, container, or space</option>';
-    for (const loc of allLocations) {
-      const opt = document.createElement('option');
-      opt.value = loc.id;
-      opt.textContent = formatHumanPath(loc.full_path);
-      itemSelect.appendChild(opt);
-    }
-    if (prev) itemSelect.value = prev;
+  if (itemSelect && (locChanged || _optionCount(itemSelect) !== entries.length + 1)) {
+    _rebuildSelectWithFragment(itemSelect, entries, 'Choose a drawer, container, or space');
   }
 
   const bundleSelect = document.getElementById('bundle-location-select');
-  if (bundleSelect) {
-    const prev = bundleSelect.value;
-    bundleSelect.innerHTML = '<option value="">Choose a drawer, container, or space</option>';
-    for (const loc of allLocations) {
-      const opt = document.createElement('option');
-      opt.value = loc.id;
-      opt.textContent = formatHumanPath(loc.full_path);
-      bundleSelect.appendChild(opt);
-    }
-    if (prev) bundleSelect.value = prev;
+  if (bundleSelect && (locChanged || _optionCount(bundleSelect) !== entries.length + 1)) {
+    _rebuildSelectWithFragment(bundleSelect, entries, 'Choose a drawer, container, or space');
   }
 
   const rapidSelect = document.getElementById('rapid-location-select');
-  if (rapidSelect) {
-    const prev = rapidSelect.value;
-    rapidSelect.innerHTML = '';
+  if (rapidSelect && (locChanged || _optionCount(rapidSelect) !== entries.length)) {
     const leafTypes = new Set(['box', 'kit', 'bin', 'drawer', 'compartment', 'cubby']);
-    const sortedForRapid = allLocations.slice().sort((a, b) => {
-      const aIsBin = leafTypes.has(getLocType(a)) ? 0 : 1;
-      const bIsBin = leafTypes.has(getLocType(b)) ? 0 : 1;
+    const sortedForRapid = entries.slice().sort((a, b) => {
+      const aIsBin = leafTypes.has(a.ltype) ? 0 : 1;
+      const bIsBin = leafTypes.has(b.ltype) ? 0 : 1;
       if (aIsBin !== bIsBin) return aIsBin - bIsBin;
-      return formatHumanPath(a.full_path).localeCompare(formatHumanPath(b.full_path));
+      return a.path.localeCompare(b.path);
     });
-    for (const loc of sortedForRapid) {
-      const opt = document.createElement('option');
-      opt.value = loc.id;
-      opt.textContent = formatHumanPath(loc.full_path);
-      rapidSelect.appendChild(opt);
-    }
-    if (prev) rapidSelect.value = prev;
+    _rebuildSelectWithFragment(rapidSelect, sortedForRapid, null);
   }
+  _lastLocDropdownSig = locSig;
+
+  const categories = Array.isArray(state.categories) ? state.categories : [];
+  const catSig = categories.join('\u0000');
+  const catChanged = catSig !== _lastCatDatalistSig;
 
   const itemCatDatalist = document.getElementById('item-category-datalist');
-  if (itemCatDatalist) {
-    itemCatDatalist.innerHTML = state.categories.map(c => `<option value="${escapeHtml(c)}">`).join('');
+  if (itemCatDatalist && (catChanged || _optionCount(itemCatDatalist) !== categories.length)) {
+    _rebuildCategoryDatalist(itemCatDatalist, categories);
   }
 
   const rapidCatDatalist = document.getElementById('rapid-category-datalist');
-  if (rapidCatDatalist) {
-    rapidCatDatalist.innerHTML = state.categories.map(c => `<option value="${escapeHtml(c)}">`).join('');
+  if (rapidCatDatalist && (catChanged || _optionCount(rapidCatDatalist) !== categories.length)) {
+    _rebuildCategoryDatalist(rapidCatDatalist, categories);
   }
+  _lastCatDatalistSig = catSig;
 }
 
 export function populateStorageParentDropdown(kind, selectedParentId = null, excludeId = null) {

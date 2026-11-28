@@ -13,6 +13,7 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230284c7'><path d='M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z'/></svg>">
 </head>
 <body>
+  <a href="#app-workspace" class="skip-link no-print">Skip to main content</a>
 
   <!-- =========================================================================
        100DVH NATIVE CONSUMER APP SHELL
@@ -22,10 +23,10 @@
   <div class="app-shell">
 
     <!-- DESKTOP / TABLET LEFT NAVIGATION RAIL (>= 768px) -->
-    <aside class="desktop-nav-rail no-print" aria-label="Primary Navigation">
+    <aside class="desktop-nav-rail no-print" aria-label="Sidebar">
       <button class="rail-brand-btn" onclick="navToHome()" title="Go to Spaces">
         <span class="rail-brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path>
             <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
           </svg>
@@ -35,16 +36,16 @@
 
       <!-- Unified Primary '+' Button -->
       <button class="rail-plus-btn" onclick="openAddSheet()" aria-label="Add to Inventory">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M5 12h14"></path>
           <path d="M12 5v14"></path>
         </svg>
         <span class="rail-plus-label">Add</span>
       </button>
 
-      <nav class="rail-links" role="navigation">
+      <nav class="rail-links" aria-label="Primary Navigation">
         <button id="rail-nav-places" class="rail-link active" onclick="switchAppTab('places')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path>
             <path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
           </svg>
@@ -52,7 +53,7 @@
         </button>
 
         <button id="rail-nav-items" class="rail-link" onclick="switchAppTab('items')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"></path>
             <path d="M12 22V12"></path>
             <path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"></path>
@@ -86,7 +87,7 @@
         </div>
 
         <button id="rail-nav-more" class="rail-link" onclick="openMoreModal()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="1"></circle>
             <circle cx="19" cy="12" r="1"></circle>
             <circle cx="5" cy="12" r="1"></circle>
@@ -98,7 +99,7 @@
 
     <!-- MAIN STAGE (Workspace + Docked / Bottom-Sheet Item Detail) -->
     <div class="app-stage-container">
-      <main id="app-workspace" class="app-workspace is-home-canvas">
+      <main id="app-workspace" class="app-workspace is-home-canvas" tabindex="-1">
         <div class="app-boot-loading" id="app-boot-loading" role="status" aria-live="polite">
           <div class="app-boot-spinner" aria-hidden="true"></div>
           <div class="app-boot-title">Loading inventory…</div>
@@ -110,7 +111,7 @@
     <!-- PHONE & TABLET BOTTOM BAR — 2 Clear, Large-Text Buttons -->
     <nav class="mobile-bottom-nav no-print" id="mobile-bottom-nav" aria-label="Bottom Navigation">
       <button class="mobile-nav-btn active" id="mobile-nav-places" onclick="navToHome()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="11" cy="11" r="8"></circle>
           <path d="m21 21-4.3-4.3"></path>
         </svg>
@@ -118,7 +119,7 @@
       </button>
 
       <button class="mobile-nav-btn" id="mobile-nav-capture" onclick="navToTouchCapture()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path>
           <circle cx="12" cy="13" r="3"></circle>
         </svg>
@@ -142,11 +143,11 @@
        ========================================================================= -->
 
   <!-- Sheet 1: Unified '+' Action Sheet ("Add to Inventory") -->
-  <div id="add-action-sheet" class="modal-scrim sheet-scrim no-print" onclick="closeOnScrim(event, 'add-action-sheet')">
+  <div id="add-action-sheet" class="modal-scrim sheet-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="add-action-sheet-title" onclick="closeOnScrim(event, 'add-action-sheet')">
     <div class="modal-card action-sheet-card">
       <div class="modal-top">
         <div>
-          <h3 class="modal-title">Add to Inventory</h3>
+          <h3 id="add-action-sheet-title" class="modal-title">Add to Inventory</h3>
           <p class="modal-subtitle">Choose how you want to add new items</p>
         </div>
         <button class="modal-close-btn" onclick="closeModal('add-action-sheet')" aria-label="Close">
@@ -191,7 +192,7 @@
   </div>
 
   <!-- Modal 2: Add Item Manually / Edit Item -->
-  <div id="add-item-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'add-item-modal')">
+  <div id="add-item-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="item-modal-title" onclick="closeOnScrim(event, 'add-item-modal')">
     <div class="modal-card">
       <div class="modal-top">
         <h3 id="item-modal-title" class="modal-title">Add Item Manually</h3>
@@ -287,7 +288,7 @@
   </div>
 
   <!-- Modal 3: Add / Edit a Room, Container, or Drawer -->
-  <div id="add-storage-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'add-storage-modal')">
+  <div id="add-storage-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="storage-modal-title" onclick="closeOnScrim(event, 'add-storage-modal')">
     <div class="modal-card">
       <div class="modal-top">
         <h3 id="storage-modal-title" class="modal-title">Add a space or container</h3>
@@ -460,7 +461,7 @@
   </div>
 
   <!-- Modal 4: Scan with Camera (2-Step Progressive Disclosure: Capture -> Review & Save) -->
-  <div id="drawer-rapid-entry-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'drawer-rapid-entry-modal')">
+  <div id="drawer-rapid-entry-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="rapid-modal-title" onclick="closeOnScrim(event, 'drawer-rapid-entry-modal')">
     <div class="modal-card" style="max-width: 600px;">
       <div class="modal-top">
         <div>
@@ -685,7 +686,7 @@
   </div>
 
   <!-- Modal 5: Quick Photo Upload -->
-  <div id="quick-photo-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'quick-photo-modal')">
+  <div id="quick-photo-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="quick-photo-title" onclick="closeOnScrim(event, 'quick-photo-modal')">
     <div class="modal-card" style="max-width: 440px;">
       <div class="modal-top">
         <h3 id="quick-photo-title" class="modal-title">Add photo</h3>
@@ -716,7 +717,7 @@
   </div>
 
   <!-- Modal 5b: Choose Cover Photo -->
-  <div id="cover-photo-picker-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'cover-photo-picker-modal')">
+  <div id="cover-photo-picker-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="cover-photo-picker-title" onclick="closeOnScrim(event, 'cover-photo-picker-modal')">
     <div class="modal-card" style="max-width: 520px;">
       <div class="modal-top">
         <h3 id="cover-photo-picker-title" class="modal-title">Choose cover photo</h3>
@@ -735,7 +736,7 @@
   </div>
 
   <!-- Modal 6: Printable QR Label & Bulk QR Sheet -->
-  <div id="print-qr-modal" class="modal-scrim" onclick="closeOnScrim(event, 'print-qr-modal')">
+  <div id="print-qr-modal" class="modal-scrim" role="dialog" aria-modal="true" aria-labelledby="print-qr-modal-title" onclick="closeOnScrim(event, 'print-qr-modal')">
     <div class="modal-card print-modal-card" style="max-width: 640px;">
       <div class="modal-top no-print">
         <div>
@@ -770,10 +771,10 @@
   </div>
 
   <!-- Modal 7: More (Theme: System/Light/Dark, Bulk QR Print, System Info) -->
-  <div id="more-modal" class="modal-scrim sheet-scrim no-print" onclick="closeOnScrim(event, 'more-modal')">
+  <div id="more-modal" class="modal-scrim sheet-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="more-modal-title" onclick="closeOnScrim(event, 'more-modal')">
     <div class="modal-card" style="max-width: 480px;">
       <div class="modal-top">
-        <h3 class="modal-title">More</h3>
+        <h3 id="more-modal-title" class="modal-title">More</h3>
         <button class="modal-close-btn" onclick="closeModal('more-modal')" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
@@ -880,13 +881,14 @@
   </div>
 
   <!-- Modal 8: Full-Screen Photo Lightbox -->
-  <div id="lightbox-modal" class="lightbox-overlay no-print" onclick="closeLightbox()">
+  <div id="lightbox-modal" class="lightbox-overlay no-print" role="dialog" aria-modal="true" aria-label="Full size photo preview" onclick="closeLightbox()">
+    <button type="button" class="lightbox-close-btn" onclick="event.stopPropagation(); closeLightbox()" aria-label="Close photo preview">×</button>
     <img id="lightbox-img" class="lightbox-target" src="" alt="Full view">
     <div id="lightbox-caption" class="lightbox-caption"></div>
   </div>
 
   <!-- Modal 8B: Container Photo Viewer (Replace, Crop, Remove, Done) -->
-  <div id="unit-photo-viewer-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'unit-photo-viewer-modal')">
+  <div id="unit-photo-viewer-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="unit-viewer-title" onclick="closeOnScrim(event, 'unit-photo-viewer-modal')">
     <div class="modal-card unit-viewer-card" style="max-width: 680px;">
       <div class="modal-top">
         <h3 id="unit-viewer-title" class="modal-title">Container photo</h3>
@@ -912,7 +914,7 @@
   </div>
 
   <!-- Modal 8B-2: Overall Photo Carousel Viewer (View -> Edit mode -> Add / Crop / Cover / Remove) -->
-  <div id="overall-photo-viewer-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'overall-photo-viewer-modal')">
+  <div id="overall-photo-viewer-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="overall-viewer-title" onclick="closeOnScrim(event, 'overall-photo-viewer-modal')">
     <div class="modal-card overall-viewer-card" style="max-width: 920px;">
       <div class="modal-top">
         <div style="display: flex; align-items: center; gap: 0.65rem; min-width: 0; flex: 1;">
@@ -949,7 +951,7 @@
   </div>
 
   <!-- Modal 8B-3: In-App Document & PDF Viewer (Windowed + Full Screen Option) -->
-  <div id="attachment-viewer-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'attachment-viewer-modal')">
+  <div id="attachment-viewer-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="attachment-viewer-title" onclick="closeOnScrim(event, 'attachment-viewer-modal')">
     <div id="attachment-viewer-card" class="modal-card attachment-viewer-card">
       <div class="modal-top attachment-viewer-top">
         <div class="attachment-viewer-title-wrap">
@@ -1029,10 +1031,10 @@
   </div>
 
   <!-- Modal 8C: Move Container to Another Room -->
-  <div id="move-container-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'move-container-modal')">
+  <div id="move-container-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="move-container-modal-title" onclick="closeOnScrim(event, 'move-container-modal')">
     <div class="modal-card" style="max-width: 420px;">
       <div class="modal-top">
-        <h3 class="modal-title">Move to another space</h3>
+        <h3 id="move-container-modal-title" class="modal-title">Move to another space</h3>
         <button class="modal-close-btn" onclick="closeModal('move-container-modal')" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
@@ -1052,7 +1054,7 @@
   </div>
 
   <!-- Modal 9: Phone Camera QR Handoff -->
-  <div id="phone-photo-modal" class="modal-scrim no-print phone-photo-scrim" onclick="closePhonePhotoOnScrim(event)">
+  <div id="phone-photo-modal" class="modal-scrim no-print phone-photo-scrim" role="dialog" aria-modal="true" aria-labelledby="phone-photo-title" onclick="closePhonePhotoOnScrim(event)">
     <div class="modal-card phone-photo-card" style="max-width: 400px;">
       <div class="modal-top">
         <div>
@@ -1101,7 +1103,7 @@
   </div>
 
   <!-- Modal 10: Crop, Straighten & Rotate Photo Editor -->
-  <div id="photo-editor-modal" class="modal-scrim no-print photo-editor-scrim" onclick="closePhotoEditorOnScrim(event)">
+  <div id="photo-editor-modal" class="modal-scrim no-print photo-editor-scrim" role="dialog" aria-modal="true" aria-labelledby="photo-editor-title" onclick="closePhotoEditorOnScrim(event)">
     <div class="modal-card" style="max-width: 640px;">
       <div class="modal-top">
         <h3 id="photo-editor-title" class="modal-title">Crop &amp; Straighten</h3>
@@ -1168,7 +1170,7 @@
   </div>
 
   <!-- Modal 11B: Add / Group Items into a Sub-Container Box / Kit -->
-  <div id="group-into-box-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'group-into-box-modal')">
+  <div id="group-into-box-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="group-box-modal-title" onclick="closeOnScrim(event, 'group-into-box-modal')">
     <div class="modal-card" style="max-width: 500px;">
       <div class="modal-top">
         <div>
@@ -1242,7 +1244,7 @@
   </div>
 
   <!-- Modal 11C: Guided Storage Unit Setup Wizard (Phone QR Handoff / Manual + AI Review) -->
-  <div id="unit-setup-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'unit-setup-modal')">
+  <div id="unit-setup-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="unit-setup-title" onclick="closeOnScrim(event, 'unit-setup-modal')">
     <div id="unit-setup-card" class="modal-card usw-modal-card" style="max-width: 600px;">
       <div class="modal-top">
         <div style="min-width: 0;">
@@ -1259,7 +1261,7 @@
   </div>
 
   <!-- Modal 11C-2: Auto-Label Compartments from Photo -->
-  <div id="label-scan-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'label-scan-modal')">
+  <div id="label-scan-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="label-scan-title" onclick="closeOnScrim(event, 'label-scan-modal')">
     <div class="modal-card lscan-modal-card" style="max-width: 820px;">
       <div class="modal-top">
         <div style="min-width: 0;">
@@ -1276,11 +1278,11 @@
   </div>
 
   <!-- Modal 11D: No AI Vision Model Available Pop-Up -->
-  <div id="no-vision-model-modal" class="modal-scrim no-print" style="z-index: 1210;" onclick="closeOnScrim(event, 'no-vision-model-modal')">
+  <div id="no-vision-model-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="no-vision-modal-title" style="z-index: 1210;" onclick="closeOnScrim(event, 'no-vision-model-modal')">
     <div class="modal-card" style="max-width: 480px;">
       <div class="modal-top">
         <div>
-          <h3 class="modal-title">AI Scanner Unavailable</h3>
+          <h3 id="no-vision-modal-title" class="modal-title">AI Scanner Unavailable</h3>
           <p class="modal-subtitle">An AI scanner is needed to read photos automatically</p>
         </div>
         <button class="modal-close-btn" onclick="closeNoModelModal()" aria-label="Close">
@@ -1296,11 +1298,11 @@
   </div>
 
   <!-- Modal 11E: Convert Item to Box / Sub-Container -->
-  <div id="convert-to-box-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'convert-to-box-modal')">
+  <div id="convert-to-box-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="convert-box-modal-title" onclick="closeOnScrim(event, 'convert-to-box-modal')">
     <div class="modal-card" style="max-width: 460px;">
       <div class="modal-top">
         <div>
-          <h3 class="modal-title">Convert to Box / Container</h3>
+          <h3 id="convert-box-modal-title" class="modal-title">Convert to Box / Container</h3>
           <p class="modal-subtitle">Turn this into an openable container you can stock with photos &amp; items</p>
         </div>
         <button class="modal-close-btn" onclick="closeModal('convert-to-box-modal', true)" aria-label="Close">
@@ -1335,7 +1337,7 @@
   </div>
 
   <!-- Modal 11F: Move Box / Container to Another Drawer or Location -->
-  <div id="move-box-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'move-box-modal')">
+  <div id="move-box-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="move-box-title" onclick="closeOnScrim(event, 'move-box-modal')">
     <div class="modal-card" style="max-width: 480px;">
       <div class="modal-top">
         <div>
@@ -1361,10 +1363,10 @@
   </div>
 
   <!-- Modal 12: Unsaved Changes Prompt -->
-  <div id="unsaved-confirm-modal" class="modal-scrim no-print" style="z-index: 3600;">
+  <div id="unsaved-confirm-modal" class="modal-scrim no-print" role="alertdialog" aria-modal="true" aria-labelledby="unsaved-confirm-title" aria-describedby="unsaved-confirm-msg" style="z-index: 3600;">
     <div class="modal-card" style="max-width: 420px;">
       <div class="modal-top">
-        <h3 class="modal-title">Unsaved Changes</h3>
+        <h3 id="unsaved-confirm-title" class="modal-title">Unsaved Changes</h3>
         <button class="modal-close-btn" onclick="resolveUnsavedPrompt('cancel')" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
@@ -1383,10 +1385,10 @@
   </div>
 
   <!-- Modal 13: Confirm Abort Active AI Scan -->
-  <div id="scan-abort-confirm-modal" class="modal-scrim no-print" style="z-index: 3500;" onclick="closeScanAbortOnScrim(event)">
+  <div id="scan-abort-confirm-modal" class="modal-scrim no-print" role="alertdialog" aria-modal="true" aria-labelledby="scan-abort-confirm-title" aria-describedby="scan-abort-confirm-msg" style="z-index: 3500;" onclick="closeScanAbortOnScrim(event)">
     <div class="modal-card" style="max-width: 440px;">
       <div class="modal-top">
-        <h3 class="modal-title">AI Scan in Progress</h3>
+        <h3 id="scan-abort-confirm-title" class="modal-title">AI Scan in Progress</h3>
         <button class="modal-close-btn" onclick="resolveScanAbortPrompt('continue')" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
@@ -1403,8 +1405,27 @@
     </div>
   </div>
 
+  <!-- Modal 13B: Accessible Destructive Action Confirmation Dialog -->
+  <div id="app-confirm-modal" class="modal-scrim no-print" role="alertdialog" aria-modal="true" aria-labelledby="app-confirm-title" aria-describedby="app-confirm-msg" style="z-index: 3650;" onclick="closeConfirmOnScrim(event)">
+    <div class="modal-card" style="max-width: 420px;">
+      <div class="modal-top">
+        <h3 id="app-confirm-title" class="modal-title">Confirm action</h3>
+        <button class="modal-close-btn" onclick="resolveConfirmModal(false)" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body-scroll">
+        <p id="app-confirm-msg" style="margin: 0; font-size: 0.92rem; color: var(--text-secondary); line-height: 1.5;"></p>
+      </div>
+      <div class="modal-bottom">
+        <button type="button" id="app-confirm-cancel-btn" class="btn btn-secondary" onclick="resolveConfirmModal(false)">Cancel</button>
+        <button type="button" id="app-confirm-ok-btn" class="btn btn-danger" onclick="resolveConfirmModal(true)">Delete</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal 14: Item Document Studio (Scanner / Webcam / File / Phone QR + Enhance + Dual PDF) -->
-  <div id="document-studio-modal" class="modal-scrim no-print" onclick="closeDocumentStudioOnScrim(event)">
+  <div id="document-studio-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="doc-studio-title" onclick="closeDocumentStudioOnScrim(event)">
     <div id="doc-studio-card" class="modal-card doc-studio-card">
       <div class="modal-top">
         <div style="min-width: 0;">
@@ -1677,11 +1698,11 @@
   </div>
 
   <!-- Modal: Multi-Source Smart Item Import -->
-  <div id="item-bundle-modal" class="modal-scrim no-print" onclick="closeOnScrim(event, 'item-bundle-modal')">
+  <div id="item-bundle-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="item-bundle-modal-title" onclick="closeOnScrim(event, 'item-bundle-modal')">
     <div class="modal-card" style="max-width: 720px;">
       <div class="modal-top">
         <div>
-          <h3 class="modal-title">Smart Item Import (AI)</h3>
+          <h3 id="item-bundle-modal-title" class="modal-title">Smart Item Import (AI)</h3>
           <p id="bundle-modal-subtitle" class="modal-subtitle">Add PDFs, files, pasted screenshots, photos, links &amp; text — then click Scan &amp; Autofill</p>
         </div>
         <button class="modal-close-btn" onclick="closeModal('item-bundle-modal')" aria-label="Close">
@@ -1836,7 +1857,7 @@
   </div>
 
   <!-- Toast Notification Shelf -->
-  <div id="toast-shelf" class="toast-shelf no-print" aria-live="polite"></div>
+  <div id="toast-shelf" class="toast-shelf no-print" role="status" aria-live="polite" aria-atomic="false"></div>
 
   <!-- Application Script -->
   <script type="module" src="/js/app.js"></script>

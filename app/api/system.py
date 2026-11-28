@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 import uuid
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -19,6 +21,10 @@ from app.services.photo_service import photo_service
 
 router = APIRouter(tags=["System"])
 
+_HEALTH_PROBE_LOCK = threading.Lock()
+_HEALTH_PROBE_TTL_SECONDS = 10.0
+_HEALTH_PROBE_CACHE: dict[tuple[str, object], float] = {}
+
 
 def _check_uploads_writable() -> bool:
     probe = settings.UPLOAD_DIR / f".health_probe_{os.getpid()}_{uuid.uuid4().hex}"
@@ -36,12 +42,30 @@ def _check_uploads_writable() -> bool:
             pass
 
 
+def _check_uploads_writable_cached() -> bool:
+    cache_key = (str(settings.UPLOAD_DIR), _check_uploads_writable)
+    now = time.monotonic()
+    with _HEALTH_PROBE_LOCK:
+        expires_at = _HEALTH_PROBE_CACHE.get(cache_key)
+        if expires_at is not None and now < expires_at:
+            return True
+
+    is_writable = _check_uploads_writable()
+    if is_writable:
+        with _HEALTH_PROBE_LOCK:
+            _HEALTH_PROBE_CACHE[cache_key] = time.monotonic() + _HEALTH_PROBE_TTL_SECONDS
+    else:
+        with _HEALTH_PROBE_LOCK:
+            _HEALTH_PROBE_CACHE.pop(cache_key, None)
+    return is_writable
+
+
 @router.get("/health", response_model=HealthResponse)
 def health_check(db: Session = Depends(get_db)) -> HealthResponse | JSONResponse:
     db.execute(text("SELECT 1"))
     bind = db.get_bind()
     schema_ver = get_current_schema_version(bind)
-    uploads_ok = _check_uploads_writable()
+    uploads_ok = _check_uploads_writable_cached()
     overall = "healthy" if uploads_ok and schema_ver >= 1 else "degraded"
     payload = HealthResponse(
         status=overall,

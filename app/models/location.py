@@ -20,8 +20,8 @@ class Location(Base):
         Integer, ForeignKey("locations.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
-    container_photo: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
-    context_photo: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    container_photo: Mapped[Optional[str]] = mapped_column(String(300), nullable=True, index=True)
+    context_photo: Mapped[Optional[str]] = mapped_column(String(300), nullable=True, index=True)
 
     grid_rows: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     grid_cols: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -80,7 +80,7 @@ class LocationPhoto(Base):
     location_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("locations.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    photo_path: Mapped[str] = mapped_column(String(300), nullable=False)
+    photo_path: Mapped[str] = mapped_column(String(300), nullable=False, index=True)
     thumbnail_path: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     caption: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     photo_type: Mapped[str] = mapped_column(String(32), nullable=False, default="container")

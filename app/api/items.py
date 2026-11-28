@@ -47,8 +47,8 @@ async def analyze_item_bundle(
     urls: Optional[str] = Form(default=None, max_length=10_000),
     pasted_text: Optional[str] = Form(default=None, max_length=50_000),
     photo_paths: Optional[List[str]] = Form(default=None),
-    provider: Optional[str] = Form(default=None),
-    model: Optional[str] = Form(default=None),
+    provider: Optional[str] = Form(default=None, max_length=32),
+    model: Optional[str] = Form(default=None, max_length=128),
     files: Optional[List[UploadFile]] = File(default=None),
 ) -> ItemBundleAnalysisResponse:
     return await item_bundle_service.analyze_bundle(
@@ -161,7 +161,7 @@ def list_item_attachments(item_id: int, db: Session = Depends(get_db)) -> List[I
 def upload_item_attachment(
     item_id: int,
     file: UploadFile = File(...),
-    title: Optional[str] = Form(default=None),
+    title: Optional[str] = Form(default=None, max_length=200),
     db: Session = Depends(get_db),
 ) -> ItemAttachmentRead:
     att = inventory_service.add_attachment(db=db, item_id=item_id, file=file, title=title)

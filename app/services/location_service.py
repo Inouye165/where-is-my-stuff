@@ -210,17 +210,9 @@ class LocationService:
         if location_id == new_parent_id:
             raise BadRequestError("A location cannot be its own parent.")
 
-        curr_id: Optional[int] = new_parent_id
-        visited: Set[int] = set()
-        while curr_id is not None:
-            if curr_id in visited:
-                break
-            visited.add(curr_id)
-            if curr_id == location_id:
-                raise BadRequestError("Cannot set a descendant as the parent location (circular reference).")
-            curr_id = db.execute(
-                select(Location.parent_id).where(Location.id == curr_id)
-            ).scalar_one_or_none()
+        ancestor_ids = location_repository.get_ancestor_ids(db, [new_parent_id])
+        if location_id in ancestor_ids:
+            raise BadRequestError("Cannot set a descendant as the parent location (circular reference).")
 
     @classmethod
     def _validate_child_grid_placement(
@@ -478,18 +470,34 @@ class LocationService:
         loc = cls.get_or_404(db, location_id)
         is_space = loc.location_type in ("room", "site")
 
+        descendant_ids = location_repository.get_descendant_ids(db, [location_id])
+        subtree_nodes = location_repository.list_by_ids(db, descendant_ids)
+        nodes_by_id: Dict[int, Location] = {node.id: node for node in subtree_nodes}
+        children_by_parent: Dict[int, List[Location]] = {}
+        for node in subtree_nodes:
+            if node.parent_id is not None and node.id != location_id:
+                children_by_parent.setdefault(node.parent_id, []).append(node)
+
         detached_containers: List[Location] = []
         deleted_nodes: List[Location] = []
+        delete_levels: List[List[int]] = []
+        visited_ids: Set[int] = set()
 
-        def walk_subtree(node: Location) -> None:
+        def walk_subtree(node: Location, depth: int = 0) -> None:
+            if node.id in visited_ids:
+                return
+            visited_ids.add(node.id)
             if is_space and node.id != loc.id and node.location_type == "container":
                 detached_containers.append(node)
                 return
             deleted_nodes.append(node)
-            for ch in list(node.children or []):
-                walk_subtree(ch)
+            while len(delete_levels) <= depth:
+                delete_levels.append([])
+            delete_levels[depth].append(node.id)
+            for ch in children_by_parent.get(node.id, ()):
+                walk_subtree(ch, depth + 1)
 
-        walk_subtree(loc)
+        walk_subtree(nodes_by_id.get(location_id, loc))
 
         detached_container_ids = [c.id for c in detached_containers]
         deleted_node_ids = [n.id for n in deleted_nodes]
@@ -508,7 +516,7 @@ class LocationService:
                 if gpath:
                     candidate_photos.add(gpath)
 
-        from sqlalchemy import update
+        from sqlalchemy import delete as sql_delete, update
 
         # Preserve containers (boxes, labels, drawers, items) in "Needs a home"
         if detached_container_ids:
@@ -521,13 +529,12 @@ class LocationService:
         # Preserve any loose items in deleted nodes in "Needs a home"
         if deleted_node_ids:
             cls._move_items_with_audit(db, deleted_node_ids, None, "Location deleted; moved to Needs a home")
+            db.execute(sql_delete(LocationPhoto).where(LocationPhoto.location_id.in_(deleted_node_ids)))
+            for batch_ids in reversed(delete_levels):
+                db.execute(sql_delete(Location).where(Location.id.in_(batch_ids)))
 
         db.flush()
         db.expire_all()
-        loc_to_delete = db.get(Location, location_id)
-        if loc_to_delete is not None:
-            db.delete(loc_to_delete)
-            db.flush()
 
         for photo_url in candidate_photos:
             photo_service.schedule_photo_cleanup(db, photo_url)
@@ -948,7 +955,7 @@ class LocationService:
     ) -> bytes:
         loc = cls.get_or_404(db, location_id)
         if target_url:
-            resolved_target = validate_http_url(target_url, allow_scheme_less=False)
+            resolved_target = validate_http_url(target_url, allow_scheme_less=False, require_local_host=True)
         else:
             effective_base = resolve_effective_base_url(host_header, base_url)
             if loc.location_type in ("room", "site"):
