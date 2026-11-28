@@ -1,11 +1,10 @@
 /**
- * Phone & Tablet Companion UI (WIMS Design System, Older-Eyes Accessible)
- * Strictly focused on 2 tasks:
- *  1. Find tools & items (with cabinet diagram showing the exact drawer)
- *  2. Add photos to drawers via an interactive dresser/cabinet diagram (Save & Next)
+ * Phone Lookup UI (Strictly Search -> Container/Drawer -> Item Detail)
+ * Tablets (>= 768px) use the full desktop interface.
  */
 import { apiDelete, apiGet, apiPatch, apiUpload } from './api.js';
 import {
+  closeModal,
   escapeHtml,
   escapeJsStr,
   pluralize,
@@ -19,13 +18,22 @@ import { handleGlobalBack, updateHash, updatePageTitle } from './router.js';
 import {
   getLocationHierarchy,
   getLocType,
+  getSubtreeItems,
   getUnassignedContainers,
+  isUnknownPlaceholder,
   loadAllData,
   state,
   UNASSIGNED_ROOM_LABEL,
   updateNavStateAndCounts
 } from './state.js';
-import { getDrawerPhotosList, renderCabinetHighlightVisual, toSentenceCase } from './views.js';
+import {
+  formatBytes,
+  getDrawerPhotosList,
+  parseItemDescriptionAndParts,
+  renderCabinetHighlightVisual,
+  renderItemNotesSection,
+  toSentenceCase
+} from './views.js';
 
 export const touchCaptureState = {
   roomId: null, // number | 'needs-home' | null
@@ -41,6 +49,7 @@ export const touchCaptureState = {
 
 let mobileFindSeq = 0;
 let mobileFindTimer = null;
+let mobileItemAttSeq = 0;
 
 export function isPhoneViewport() {
   return typeof window !== 'undefined' && window.innerWidth < 768;
@@ -55,11 +64,11 @@ export function isMobileOrTabletViewport() {
 }
 
 export function shouldUseMobileCompanion() {
-  return isMobileOrTabletViewport();
+  return isPhoneViewport();
 }
 
 export function shouldUseLimitedItemView() {
-  return isMobileOrTabletViewport();
+  return isPhoneViewport();
 }
 
 export function toggleMobileTheme() {
@@ -71,12 +80,30 @@ export function toggleMobileTheme() {
     localStorage.setItem('wims_theme_pref', next);
   } catch {}
   document.documentElement.setAttribute('data-theme', next);
+  const themeMeta = typeof document.querySelector === 'function'
+    ? document.querySelector('meta[name="theme-color"]')
+    : null;
+  if (themeMeta) {
+    themeMeta.setAttribute('content', next === 'light' ? '#f8fafc' : '#0b1120');
+  }
   const labelEl = document.getElementById('m-theme-toggle-label');
   if (labelEl) labelEl.textContent = next === 'dark' ? 'Light mode' : 'Dark mode';
 }
 
+function isRunningStandalone() {
+  if (typeof window === 'undefined') return false;
+  return Boolean(
+    (window.matchMedia && (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: fullscreen)').matches
+    )) ||
+    window.navigator?.standalone === true
+  );
+}
+
 function renderMobileBrandBar() {
   const isLight = typeof document !== 'undefined' && document.documentElement.getAttribute('data-theme') === 'light';
+  const standalone = isRunningStandalone();
   return `
     <header class="m-brand-bar">
       <div class="m-brand-left">
@@ -85,10 +112,30 @@ function renderMobileBrandBar() {
         </span>
         <span class="m-brand-title">WhereIsMyStuff</span>
       </div>
-      <button type="button" class="m-theme-btn" onclick="toggleMobileTheme()">
-        <span id="m-theme-toggle-label">${isLight ? 'Dark mode' : 'Light mode'}</span>
-      </button>
+      <div class="m-brand-actions">
+        ${!standalone ? `
+          <button type="button" id="m-install-app-btn" class="m-install-btn" onclick="triggerPwaInstall()">
+            ${lucideIcon('plus', '', 16)} Install
+          </button>
+        ` : ''}
+        <button type="button" class="m-theme-btn" onclick="toggleMobileTheme()">
+          <span id="m-theme-toggle-label">${isLight ? 'Dark mode' : 'Light mode'}</span>
+        </button>
+      </div>
     </header>
+  `;
+}
+
+function renderMobileSubpageTopbar(backAction = 'handleGlobalBack()', backLabel = 'Back') {
+  return `
+    <div class="m-topbar">
+      <button type="button" class="m-back-btn" onclick="${backAction}">
+        ${lucideIcon('arrowLeft', '', 20)} ${escapeHtml(backLabel)}
+      </button>
+      <button type="button" class="m-topbar-search-btn" onclick="navToHome()">
+        ${lucideIcon('search', '', 17)} Search
+      </button>
+    </div>
   `;
 }
 
@@ -136,14 +183,21 @@ function countPhotographedDrawers(unit) {
   return { withPhotos, total: drawers.length };
 }
 
+function getLocationItemCount(loc) {
+  if (!loc) return 0;
+  const subtreeCount = getSubtreeItems(loc.id).length;
+  return subtreeCount || Number(loc.total_item_count || 0);
+}
+
 // ============================================================================
-// DRESSER / CABINET DIAGRAM RENDERER (Shared by Item Locator & Photo Capture)
+// DRESSER / CABINET DIAGRAM RENDERER (Shared by Container Browse & Capture)
 // ============================================================================
 
 export function renderMobileCabinetDiagram(unit, activeDrawer = null, options = {}) {
-  const { interactive = false, compact = false } = options;
+  const { interactive = false, compact = false, mode = 'capture' } = options;
   if (!unit) return '';
 
+  const isBrowse = mode === 'browse';
   const activeId = activeDrawer ? Number(activeDrawer.id) : null;
   const drawers = getOrderedUnitDrawers(unit);
   const rows = Number(unit.grid_rows) || 0;
@@ -214,16 +268,45 @@ export function renderMobileCabinetDiagram(unit, activeDrawer = null, options = 
 
       if (compact) {
         const tag = interactive ? 'button' : 'div';
-        const clickAttr = interactive ? `type="button" onclick="selectTouchDrawer(${safeId})"` : '';
+        const clickAction = isBrowse ? `navToDrawer(${safeId}, true)` : `selectTouchDrawer(${safeId})`;
+        const clickAttr = interactive ? `type="button" onclick="${clickAction}"` : '';
         return `
           <${tag}
-            class="m-cab-slot is-compact ${isSelected ? 'is-selected' : ''} ${photos.length > 0 ? 'has-photos' : ''}"
+            id="drawer-card-${safeId}"
+            class="m-cab-slot is-compact ${isSelected ? (isBrowse ? 'is-highlighted' : 'is-selected') : ''} ${!isBrowse && photos.length > 0 ? 'has-photos' : ''}"
             style="grid-row: ${startR} / ${endR}; grid-column: ${startC} / ${endC};"
             ${clickAttr}
           >
             <span class="m-drawer-pull" aria-hidden="true"></span>
             <span class="m-cab-compact-label">${escapeHtml(isSelected && !interactive ? 'Here' : coord)}</span>
           </${tag}>
+        `;
+      }
+
+      if (isBrowse) {
+        const itemCount = getLocationItemCount(d);
+        const firstThumb = photos[0] ? (photos[0].thumb || photos[0].url) : '';
+        return `
+          <button
+            type="button"
+            id="drawer-card-${safeId}"
+            class="m-cab-slot ${isSelected ? 'is-highlighted' : ''}"
+            style="grid-row: ${startR} / ${endR}; grid-column: ${startC} / ${endC};"
+            onclick="navToDrawer(${safeId}, true)"
+          >
+            <span class="m-drawer-pull" aria-hidden="true"></span>
+            <div class="m-cab-slot-main">
+              <div class="m-cab-slot-text">
+                <span class="m-cab-coord-row">
+                  <span class="m-cab-coord">${escapeHtml(coord)}</span>
+                  ${isSelected ? `<span class="m-cab-here-pill">Here</span>` : ''}
+                </span>
+                <span class="m-cab-name">${escapeHtml(d.name)}</span>
+              </div>
+              ${firstThumb ? `<img class="m-cab-mini-thumb" src="${escapeHtml(firstThumb)}" alt="">` : ''}
+            </div>
+            <span class="m-cab-item-count">${escapeHtml(pluralize(itemCount, 'item'))}</span>
+          </button>
         `;
       }
 
@@ -254,7 +337,7 @@ export function renderMobileCabinetDiagram(unit, activeDrawer = null, options = 
       <div class="m-cab-extra-section">
         <div class="m-cab-extra-label">Other sections</div>
         <div class="m-cab-fallback-grid cols-2">
-          ${unplaced.map(d => renderFallbackDrawerButton(d, activeId, interactive)).join('')}
+          ${unplaced.map(d => renderFallbackDrawerButton(d, activeId, interactive, false, mode)).join('')}
         </div>
       </div>
     ` : '';
@@ -286,24 +369,47 @@ export function renderMobileCabinetDiagram(unit, activeDrawer = null, options = 
     <div class="m-cabinet-frame ${compact ? 'is-compact' : ''}">
       <div class="m-cabinet-top-cap" aria-hidden="true"></div>
       <div class="m-cab-fallback-grid cols-${autoCols}">
-        ${drawers.map(d => renderFallbackDrawerButton(d, activeId, interactive, compact)).join('')}
+        ${drawers.map(d => renderFallbackDrawerButton(d, activeId, interactive, compact, mode)).join('')}
       </div>
     </div>
   `;
 }
 
-function renderFallbackDrawerButton(d, activeId, interactive, compact = false) {
+function renderFallbackDrawerButton(d, activeId, interactive, compact = false, mode = 'capture') {
   const safeId = Number(d.id);
+  const isBrowse = mode === 'browse';
   const photos = getDrawerPhotosList(d);
   const isSelected = activeId !== null && safeId === activeId;
   const firstThumb = photos[0] ? (photos[0].thumb || photos[0].url) : '';
 
   if (compact || !interactive) {
     return `
-      <div class="m-cab-slot is-compact ${isSelected ? 'is-selected' : ''} ${photos.length > 0 ? 'has-photos' : ''}">
+      <div id="drawer-card-${safeId}" class="m-cab-slot is-compact ${isSelected ? (isBrowse ? 'is-highlighted' : 'is-selected') : ''} ${!isBrowse && photos.length > 0 ? 'has-photos' : ''}">
         <span class="m-drawer-pull" aria-hidden="true"></span>
         <span class="m-cab-compact-label">${escapeHtml(d.name)}${isSelected ? ' · Here' : ''}</span>
       </div>
+    `;
+  }
+
+  if (isBrowse) {
+    const itemCount = getLocationItemCount(d);
+    return `
+      <button
+        type="button"
+        id="drawer-card-${safeId}"
+        class="m-cab-slot ${isSelected ? 'is-highlighted' : ''}"
+        onclick="navToDrawer(${safeId}, true)"
+      >
+        <span class="m-drawer-pull" aria-hidden="true"></span>
+        <div class="m-cab-slot-main">
+          <div class="m-cab-slot-text">
+            ${isSelected ? `<span class="m-cab-here-pill">Here</span>` : ''}
+            <span class="m-cab-name">${escapeHtml(d.name)}</span>
+          </div>
+          ${firstThumb ? `<img class="m-cab-mini-thumb" src="${escapeHtml(firstThumb)}" alt="">` : ''}
+        </div>
+        <span class="m-cab-item-count">${escapeHtml(pluralize(itemCount, 'item'))}</span>
+      </button>
     `;
   }
 
@@ -328,7 +434,7 @@ function renderFallbackDrawerButton(d, activeId, interactive, compact = false) {
 }
 
 // ============================================================================
-// TAB 1: MOBILE & TABLET FIND VIEW ("Find tools or such")
+// PHONE VIEW 1: BASIC ITEM SEARCH (Room, Storage Container, Item)
 // ============================================================================
 
 export function renderMobileFindView() {
@@ -350,7 +456,7 @@ export function renderMobileFindView() {
             type="text"
             id="mobile-find-input"
             class="m-search-input"
-            placeholder="Search tools, parts, items..."
+            placeholder="What are you looking for?"
             value="${escapeHtml(q)}"
             autocomplete="off"
             oninput="handleMobileFindInput(event)"
@@ -417,7 +523,7 @@ export function clearMobileFind() {
 async function runMobileFindSearch(query) {
   const seq = ++mobileFindSeq;
   try {
-    const res = await apiGet(`/api/v1/search?q=${encodeURIComponent(query)}&limit=40`, 'Could not search items.');
+    const res = await apiGet(`/api/v1/search?q=${encodeURIComponent(query)}&limit=50`, 'Could not search items.');
     if (seq !== mobileFindSeq) return;
     touchCaptureState.findResults = Array.isArray(res?.items) ? res.items : [];
     touchCaptureState.findLoading = false;
@@ -430,24 +536,42 @@ async function runMobileFindSearch(query) {
   }
 }
 
-function renderMobileItemRow(item) {
+function renderMobileSearchResultCard(item) {
   const safeId = Number(item.id);
-  const photo = sanitizePhotoUrl(item.item_photo || '');
   const hier = getLocationHierarchy(item.location_id);
+  const roomDisplay = hier.room ? toSentenceCase(hier.room.name) : UNASSIGNED_ROOM_LABEL;
+  const hasUnit = Boolean(hier.unit);
+  const targetDrawerId = Number(hier.drawer?.id || item.location_id || 0);
+
   return `
-    <button type="button" class="m-item-row-card" onclick="navToItem(${safeId})">
-      <div class="m-item-row-thumb">
-        ${photo
-          ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(item.name)}" loading="lazy">`
-          : lucideIcon('package', '', 26)
-        }
+    <article class="m-search-card">
+      <button type="button" class="m-search-item-btn" onclick="navToItem(${safeId})">
+        <span class="m-search-item-name">${escapeHtml(item.name)}</span>
+        <span class="m-row-chevron" aria-hidden="true">${lucideIcon('chevronRight', '', 20)}</span>
+      </button>
+      <div class="m-search-meta-row">
+        <span class="m-search-room-pill">
+          ${lucideIcon('home', '', 14)}
+          <span>${escapeHtml(roomDisplay)}</span>
+        </span>
+        ${hasUnit ? `
+          <button
+            type="button"
+            class="m-search-container-btn"
+            onclick="locateDrawerInUnit(${Number(hier.unit.id)}, ${targetDrawerId})"
+          >
+            ${lucideIcon('package', '', 14)}
+            <span>${escapeHtml(toSentenceCase(hier.unit.name))}</span>
+            ${lucideIcon('crosshair', 'm-search-locate-icon', 14)}
+          </button>
+        ` : `
+          <span class="m-search-container-muted">
+            ${lucideIcon('package', '', 14)}
+            <span>No container</span>
+          </span>
+        `}
       </div>
-      <div class="m-item-row-body">
-        <div class="m-item-row-name">${escapeHtml(item.name)}</div>
-        <div class="m-item-row-loc">${escapeHtml(hier.searchPath)}</div>
-      </div>
-      <span class="m-row-chevron" aria-hidden="true">${lucideIcon('chevronRight', '', 22)}</span>
-    </button>
+    </article>
   `;
 }
 
@@ -457,25 +581,10 @@ function renderMobileFindResults() {
 
   const q = (touchCaptureState.findQuery || '').trim();
   if (!q) {
-    const recent = state.items.slice(0, 20);
     container.innerHTML = `
-      <button type="button" class="m-ActionBanner" onclick="navToTouchCapture()">
-        <span class="m-ActionBanner-icon">${lucideIcon('camera', '', 26)}</span>
-        <div class="m-ActionBanner-body">
-          <div class="m-ActionBanner-title">Add Photos to Drawers</div>
-          <div class="m-ActionBanner-sub">Pick a room &amp; touch a drawer on the cabinet diagram</div>
-        </div>
-        <span class="m-row-chevron" aria-hidden="true">${lucideIcon('chevronRight', '', 22)}</span>
-      </button>
-
-      ${recent.length > 0 ? `
-        <div class="m-list-section">
-          <div class="m-section-eyebrow">Items (${state.items.length})</div>
-          <div class="m-items-grid">
-            ${recent.map(renderMobileItemRow).join('')}
-          </div>
-        </div>
-      ` : ''}
+      <div class="m-search-empty-hint">
+        Search across ${escapeHtml(pluralize(state.items.length, 'item'))} by name, part #, tag, or location.
+      </div>
     `;
     return;
   }
@@ -496,15 +605,296 @@ function renderMobileFindResults() {
   container.innerHTML = `
     <div class="m-list-section">
       <div class="m-section-eyebrow">${pluralize(results.length, 'matching item')}</div>
-      <div class="m-items-grid">
-        ${results.map(renderMobileItemRow).join('')}
+      <div class="m-search-results-list">
+        ${results.map(renderMobileSearchResultCard).join('')}
       </div>
     </div>
   `;
 }
 
 // ============================================================================
-// SIMPLE ITEM LOCATION VIEW (Phone & Tablet)
+// PHONE VIEW 2: STORAGE CONTAINER ("WHERE IN") VIEW
+// ============================================================================
+
+export function renderMobileStorageUnitView(unitId) {
+  const safeUnitId = Number(unitId);
+  const unit = state.locationMap.get(safeUnitId);
+  const workspace = document.getElementById('app-workspace');
+  if (!workspace) return;
+  workspace.classList.remove('is-home-canvas', 'is-unit-view');
+  workspace.scrollTop = 0;
+
+  if (!unit) {
+    workspace.innerHTML = `
+      <div class="m-page-shell">
+        ${renderMobileSubpageTopbar()}
+        <div class="m-card" style="text-align: center; padding: 2rem 1.25rem;">
+          <h2 class="m-page-heading">Container not found</h2>
+          <button type="button" class="btn btn-primary m-big-btn" style="margin-top: 1rem;" onclick="navToHome()">
+            Back to Search
+          </button>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const hier = getLocationHierarchy(safeUnitId);
+  const roomDisplay = hier.room ? toSentenceCase(hier.room.name) : UNASSIGNED_ROOM_LABEL;
+  const drawers = Array.isArray(unit.children) ? unit.children.filter(c => !isUnknownPlaceholder(c)) : [];
+  const spotlightId = state.spotlightDrawerId ? Number(state.spotlightDrawerId) : null;
+  const highlightedDrawer = spotlightId ? (drawers.find(d => Number(d.id) === spotlightId) || null) : null;
+  const unitPhoto = sanitizePhotoUrl(unit.container_photo || unit.context_photo || '');
+  const directItems = state.items.filter(i => Number(i.location_id) === safeUnitId);
+
+  let highlightBannerHtml = '';
+  if (highlightedDrawer) {
+    const hasCoords = Number(highlightedDrawer.grid_row) >= 1 && Number(highlightedDrawer.grid_col) >= 1;
+    const coordSuffix = hasCoords
+      ? ` (${formatSlotCoord(highlightedDrawer.grid_row, highlightedDrawer.grid_col, highlightedDrawer.grid_row_span, highlightedDrawer.grid_col_span)})`
+      : '';
+    highlightBannerHtml = `
+      <button type="button" class="m-where-highlight-banner" onclick="navToDrawer(${Number(highlightedDrawer.id)}, true)">
+        <div class="m-where-highlight-copy">
+          <span class="m-where-highlight-eyebrow">Highlighted Drawer</span>
+          <strong class="m-where-highlight-name">${escapeHtml(highlightedDrawer.name + coordSuffix)}</strong>
+        </div>
+        <span class="m-where-highlight-cta">View contents →</span>
+      </button>
+    `;
+  }
+
+  let photoBlockHtml = '';
+  if (unitPhoto) {
+    const canOverlay = Boolean(
+      highlightedDrawer
+      && Number(unit.grid_rows) > 0
+      && Number(unit.grid_cols) > 0
+      && Number(highlightedDrawer.grid_row) >= 1
+      && Number(highlightedDrawer.grid_col) >= 1
+    );
+    photoBlockHtml = `
+      <section class="m-card m-unit-photo-card">
+        <div class="m-section-eyebrow">${canOverlay ? 'Where in Container' : 'Container Photo'}</div>
+        ${canOverlay
+          ? renderCabinetHighlightVisual(unit, highlightedDrawer, { compact: false, interactive: false })
+          : `
+            <button type="button" class="m-unit-photo-btn" onclick="openLightbox('${escapeJsStr(unitPhoto)}', '${escapeJsStr(toSentenceCase(unit.name))}')">
+              <img src="${escapeHtml(unitPhoto)}" alt="${escapeHtml(toSentenceCase(unit.name))}">
+            </button>
+          `
+        }
+      </section>
+    `;
+  }
+
+  const drawersBlockHtml = drawers.length > 0 ? `
+    <section class="m-unit-drawers-section">
+      <div class="m-section-head-row">
+        <div class="m-section-eyebrow" style="margin-bottom: 0;">Drawers &amp; Compartments</div>
+        <span class="m-section-hint">Tap any drawer to see what's inside</span>
+      </div>
+      ${renderMobileCabinetDiagram(unit, highlightedDrawer, { interactive: true, compact: false, mode: 'browse' })}
+    </section>
+  ` : '';
+
+  const directItemsHtml = directItems.length > 0 ? `
+    <section class="m-card">
+      <div class="m-section-eyebrow">Items in ${escapeHtml(toSentenceCase(unit.name))} (${directItems.length})</div>
+      <div class="m-drawer-items-list">
+        ${directItems.map(renderMobileDrawerItemRow).join('')}
+      </div>
+    </section>
+  ` : (drawers.length === 0 ? `
+    <div class="m-card">
+      <p class="m-status-msg" style="padding: 0.75rem 0;">No drawers or items recorded in this container yet.</p>
+    </div>
+  ` : '');
+
+  workspace.innerHTML = `
+    <div class="m-page-shell">
+      ${renderMobileSubpageTopbar()}
+
+      <div class="m-step-header">
+        <div class="m-context-eyebrow">${escapeHtml(roomDisplay)}</div>
+        <h1 class="m-page-heading">${escapeHtml(toSentenceCase(unit.name))}</h1>
+      </div>
+
+      ${highlightBannerHtml}
+      ${photoBlockHtml}
+      ${drawersBlockHtml}
+      ${directItemsHtml}
+    </div>
+  `;
+
+  if (highlightedDrawer && typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      const target = document.getElementById(`drawer-card-${Number(highlightedDrawer.id)}`);
+      target?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    });
+  }
+}
+
+// ============================================================================
+// PHONE VIEW 3: DRAWER CONTENTS VIEW
+// ============================================================================
+
+function renderMobileDrawerItemRow(item) {
+  const safeId = Number(item.id);
+  const photo = sanitizePhotoUrl(item.item_photo || '');
+  const hasQty = item.quantity !== null && item.quantity !== undefined;
+  const metaParts = [];
+  if (hasQty) metaParts.push(`${Number(item.quantity)} ${item.unit || 'pcs'}`);
+  if (item.serial_or_part_number) metaParts.push(item.serial_or_part_number);
+  const metaText = metaParts.join(' · ');
+
+  return `
+    <button type="button" class="m-drawer-item-row" onclick="navToItem(${safeId}, true)">
+      <div class="m-item-row-thumb">
+        ${photo
+          ? `<img src="${escapeHtml(photo)}" alt="${escapeHtml(item.name)}" loading="lazy">`
+          : lucideIcon('package', '', 24)
+        }
+      </div>
+      <div class="m-item-row-body">
+        <div class="m-item-row-name">${escapeHtml(item.name)}</div>
+        ${metaText ? `<div class="m-item-row-loc">${escapeHtml(metaText)}</div>` : ''}
+      </div>
+      <span class="m-row-chevron" aria-hidden="true">${lucideIcon('chevronRight', '', 20)}</span>
+    </button>
+  `;
+}
+
+export function renderMobileDrawerView(drawerId) {
+  const safeDrawerId = Number(drawerId);
+  const drawer = state.locationMap.get(safeDrawerId);
+  const workspace = document.getElementById('app-workspace');
+  if (!workspace) return;
+  workspace.classList.remove('is-home-canvas', 'is-unit-view');
+  workspace.scrollTop = 0;
+
+  if (!drawer) {
+    workspace.innerHTML = `
+      <div class="m-page-shell">
+        ${renderMobileSubpageTopbar()}
+        <div class="m-card" style="text-align: center; padding: 2rem 1.25rem;">
+          <h2 class="m-page-heading">Drawer not found</h2>
+          <button type="button" class="btn btn-primary m-big-btn" style="margin-top: 1rem;" onclick="navToHome()">
+            Back to Search
+          </button>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const hier = getLocationHierarchy(safeDrawerId);
+  const roomDisplay = hier.room ? toSentenceCase(hier.room.name) : UNASSIGNED_ROOM_LABEL;
+  const hasUnitPill = Boolean(hier.unit && Number(hier.unit.id) !== safeDrawerId);
+  const hasCoords = Number(drawer.grid_row) >= 1 && Number(drawer.grid_col) >= 1;
+  const coord = hasCoords
+    ? formatSlotCoord(drawer.grid_row, drawer.grid_col, drawer.grid_row_span, drawer.grid_col_span)
+    : '';
+  const photos = getDrawerPhotosList(drawer);
+  const childBoxes = (drawer.children || []).filter(c => !isUnknownPlaceholder(c));
+  const items = state.items.filter(i => Number(i.location_id) === safeDrawerId);
+
+  const countParts = [];
+  if (childBoxes.length > 0) countParts.push(pluralize(childBoxes.length, 'box', 'boxes'));
+  countParts.push(pluralize(items.length, 'item'));
+
+  workspace.innerHTML = `
+    <div class="m-page-shell">
+      ${renderMobileSubpageTopbar()}
+
+      <div class="m-step-header">
+        <div class="m-context-eyebrow">
+          ${escapeHtml(roomDisplay)}${hasUnitPill ? ` › ${escapeHtml(toSentenceCase(hier.unit.name))}` : ''}
+        </div>
+        <div class="m-drawer-title-row">
+          <h1 class="m-page-heading">${escapeHtml(drawer.name)}</h1>
+          ${coord ? `<span class="m-coord-pill">${escapeHtml(coord)}</span>` : ''}
+          ${drawer.label ? `<span class="box-label-badge">${escapeHtml(drawer.label)}</span>` : ''}
+        </div>
+        <p class="m-page-sub">${escapeHtml(countParts.join(' · '))}</p>
+        ${hasUnitPill ? `
+          <div>
+            <button
+              type="button"
+              class="m-unit-jump-pill"
+              onclick="locateDrawerInUnit(${Number(hier.unit.id)}, ${Number(hier.drawer?.id || safeDrawerId)})"
+            >
+              ${lucideIcon('crosshair', '', 14)} Show in ${escapeHtml(toSentenceCase(hier.unit.name))}
+            </button>
+          </div>
+        ` : ''}
+      </div>
+
+      ${photos.length > 0 ? `
+        <section class="m-card">
+          <div class="m-section-eyebrow">Drawer Photos (${photos.length})</div>
+          <div class="m-photo-strip">
+            ${photos.map((p, idx) => `
+              <div class="m-photo-card">
+                <img
+                  src="${escapeHtml(p.thumb || p.url)}"
+                  alt="${escapeHtml(p.caption || `${drawer.name} photo ${idx + 1}`)}"
+                  onclick="openLightbox('${escapeJsStr(p.url)}', '${escapeJsStr(p.caption || drawer.name)}')"
+                >
+              </div>
+            `).join('')}
+          </div>
+        </section>
+      ` : ''}
+
+      ${childBoxes.length > 0 ? `
+        <section class="m-card">
+          <div class="m-section-eyebrow">Boxes &amp; Kits Inside (${childBoxes.length})</div>
+          <div class="m-drawer-items-list">
+            ${childBoxes.map(box => {
+              const boxId = Number(box.id);
+              const boxPhoto = sanitizePhotoUrl(box.container_photo || box.context_photo || '');
+              const boxCount = getLocationItemCount(box);
+              return `
+                <button type="button" class="m-box-row" onclick="navToDrawer(${boxId}, true)">
+                  <div class="m-item-row-thumb">
+                    ${boxPhoto
+                      ? `<img src="${escapeHtml(boxPhoto)}" alt="${escapeHtml(box.name)}" loading="lazy">`
+                      : lucideIcon('archive', '', 24)
+                    }
+                  </div>
+                  <div class="m-item-row-body">
+                    <div class="m-item-row-name">
+                      ${box.label ? `<span class="box-label-badge">${escapeHtml(box.label)}</span> ` : ''}${escapeHtml(box.name)}
+                    </div>
+                    <div class="m-item-row-loc">${escapeHtml(pluralize(boxCount, 'item'))}</div>
+                  </div>
+                  <span class="m-row-chevron" aria-hidden="true">${lucideIcon('chevronRight', '', 20)}</span>
+                </button>
+              `;
+            }).join('')}
+          </div>
+        </section>
+      ` : ''}
+
+      <section class="m-card">
+        <div class="m-section-eyebrow">Items Inside (${items.length})</div>
+        ${items.length > 0 ? `
+          <div class="m-drawer-items-list">
+            ${items.map(renderMobileDrawerItemRow).join('')}
+          </div>
+        ` : `
+          <p class="m-status-msg" style="padding: 0.75rem 0;">
+            ${childBoxes.length > 0 ? 'No loose items in this drawer — check the boxes above.' : 'No items recorded in this drawer yet.'}
+          </p>
+        `}
+      </section>
+    </div>
+  `;
+}
+
+// ============================================================================
+// PHONE VIEW 4: READ-ONLY ITEM DETAIL PAGE (Images, Notes, PDFs/Files)
 // ============================================================================
 
 export function startLimitedItemRename(itemId) {
@@ -542,8 +932,155 @@ export async function saveLimitedItemRename(itemId) {
   }
 }
 
+export function openMobileNotesModal(itemId) {
+  const item = state.items.find(i => Number(i.id) === Number(itemId));
+  if (!item) return;
+  const modal = document.getElementById('mobile-notes-modal');
+  const titleEl = document.getElementById('mobile-notes-modal-title');
+  const bodyEl = document.getElementById('mobile-notes-modal-body');
+  if (!modal || !bodyEl) return;
+
+  if (titleEl) titleEl.textContent = `${item.name} — Notes`;
+  const notesHtml = renderItemNotesSection(item);
+  bodyEl.innerHTML = notesHtml || `<p class="m-status-msg">No notes saved for this item.</p>`;
+  modal.classList.add('open');
+}
+
+export function closeMobileNotesModal() {
+  closeModal('mobile-notes-modal');
+}
+
+function collectMobileItemImages(item, loc, imageAttachments = []) {
+  const seen = new Set();
+  const list = [];
+  const pushImg = (rawUrl, rawThumb, caption) => {
+    const url = sanitizePhotoUrl(rawUrl || '');
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    list.push({
+      url,
+      thumb: sanitizePhotoUrl(rawThumb || '') || url,
+      caption: caption || (item ? item.name : 'Photo')
+    });
+  };
+
+  if (item && item.item_photo) {
+    pushImg(item.item_photo, null, item.name);
+  }
+  for (const att of imageAttachments) {
+    pushImg(att.file_path, att.thumbnail_path, att.title || att.filename || item?.name);
+  }
+  if (loc) {
+    for (const p of getDrawerPhotosList(loc)) {
+      pushImg(p.url, p.thumb, p.caption || loc.name);
+    }
+  }
+  return list;
+}
+
+function renderMobileImagesGridHtml(images) {
+  if (!images.length) return '';
+  return `
+    <div class="m-section-eyebrow">Images (${images.length})</div>
+    <div class="m-images-grid">
+      ${images.map((img, idx) => `
+        <button
+          type="button"
+          class="m-image-tile"
+          onclick="openLightbox('${escapeJsStr(img.url)}', '${escapeJsStr(img.caption || `Photo ${idx + 1}`)}')"
+          aria-label="View image ${idx + 1}: ${escapeHtml(img.caption || 'Photo')}"
+        >
+          <img src="${escapeHtml(img.thumb || img.url)}" alt="${escapeHtml(img.caption || `Photo ${idx + 1}`)}" loading="lazy">
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+async function loadMobileItemAttachments(itemId) {
+  const safeId = Number(itemId);
+  const seq = ++mobileItemAttSeq;
+  const docsSection = document.getElementById(`mobile-item-docs-section-${safeId}`);
+  const imagesSection = document.getElementById(`mobile-item-images-section-${safeId}`);
+
+  try {
+    const attachments = await apiGet(`/api/v1/items/${safeId}/attachments`);
+    if (seq !== mobileItemAttSeq) return;
+
+    const allAtts = Array.isArray(attachments) ? attachments : [];
+    const imageAtts = allAtts.filter(a => a && a.attachment_type === 'image');
+    const docAtts = allAtts.filter(a => a && a.attachment_type !== 'image');
+
+    const item = state.items.find(i => Number(i.id) === safeId);
+    const loc = item && item.location_id ? state.locationMap.get(item.location_id) : null;
+    const currentImagesEl = document.getElementById(`mobile-item-images-section-${safeId}`);
+    if (currentImagesEl && item) {
+      const allImages = collectMobileItemImages(item, loc, imageAtts);
+      if (allImages.length > 0) {
+        currentImagesEl.hidden = false;
+        currentImagesEl.innerHTML = renderMobileImagesGridHtml(allImages);
+      } else {
+        currentImagesEl.hidden = true;
+      }
+    }
+
+    const currentDocsEl = document.getElementById(`mobile-item-docs-section-${safeId}`);
+    if (!currentDocsEl) return;
+
+    if (docAtts.length === 0) {
+      currentDocsEl.hidden = true;
+      return;
+    }
+
+    currentDocsEl.hidden = false;
+    currentDocsEl.innerHTML = `
+      <div class="m-section-eyebrow">Files &amp; PDFs (${docAtts.length})</div>
+      <div class="m-docs-list">
+        ${docAtts.map(att => {
+          const safeUrl = sanitizePhotoUrl(att.file_path || '');
+          const badge = String(att.attachment_type || 'file').toUpperCase();
+          const title = att.title || att.filename || 'Document';
+          const sizeStr = formatBytes(att.size_bytes);
+          const meta = [att.filename, sizeStr].filter(Boolean).join(' · ');
+          if (!safeUrl) {
+            return `
+              <div class="m-doc-row">
+                <span class="m-doc-badge">${escapeHtml(badge)}</span>
+                <div class="m-doc-info">
+                  <div class="m-doc-title">${escapeHtml(title)}</div>
+                  ${meta ? `<div class="m-doc-meta">${escapeHtml(meta)}</div>` : ''}
+                </div>
+              </div>
+            `;
+          }
+          return `
+            <a
+              class="m-doc-row"
+              href="${escapeHtml(safeUrl)}"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span class="m-doc-badge">${escapeHtml(badge)}</span>
+              <div class="m-doc-info">
+                <div class="m-doc-title">${escapeHtml(title)}</div>
+                ${meta ? `<div class="m-doc-meta">${escapeHtml(meta)}</div>` : ''}
+              </div>
+              <span class="m-row-chevron" aria-hidden="true">${lucideIcon('chevronRight', '', 20)}</span>
+            </a>
+          `;
+        }).join('')}
+      </div>
+    `;
+  } catch {
+    if (seq !== mobileItemAttSeq) return;
+    if (docsSection) docsSection.hidden = true;
+    if (imagesSection && !imagesSection.innerHTML.trim()) imagesSection.hidden = true;
+  }
+}
+
 export function renderLimitedItemView(itemId) {
-  const item = state.items.find(i => i.id === itemId);
+  const safeItemId = Number(itemId);
+  const item = state.items.find(i => Number(i.id) === safeItemId);
   const workspace = document.getElementById('app-workspace');
   if (!workspace) return;
   workspace.classList.remove('is-home-canvas', 'is-unit-view');
@@ -552,11 +1089,11 @@ export function renderLimitedItemView(itemId) {
   if (!item) {
     workspace.innerHTML = `
       <div class="m-page-shell">
-        ${renderMobileBrandBar()}
+        ${renderMobileSubpageTopbar()}
         <div class="m-card" style="text-align: center; padding: 2rem 1.25rem;">
           <h2 class="m-page-heading">Item not found</h2>
           <button type="button" class="btn btn-primary m-big-btn" style="margin-top: 1rem;" onclick="navToHome()">
-            Back to Find
+            Back to Search
           </button>
         </div>
       </div>
@@ -564,58 +1101,52 @@ export function renderLimitedItemView(itemId) {
     return;
   }
 
-  const safeItemId = Number(item.id);
   const hier = getLocationHierarchy(item.location_id);
   const loc = item.location_id ? state.locationMap.get(item.location_id) : null;
   const itemPhoto = sanitizePhotoUrl(item.item_photo || '');
-  const drawerPhotos = loc ? getDrawerPhotosList(loc) : [];
   const hasQty = item.quantity !== null && item.quantity !== undefined;
   const qtyText = hasQty ? `Qty: ${Number(item.quantity)} ${item.unit || 'pcs'}` : '';
-  const isRenaming = touchCaptureState.renamingItemId === safeItemId;
+  const targetDrawerId = Number(hier.drawer?.id || item.location_id || 0);
 
   const locationRows = [];
   if (hier.isNeedsHome) {
-    locationRows.push({ label: 'Room', value: UNASSIGNED_ROOM_LABEL });
+    locationRows.push({ label: 'Room', value: UNASSIGNED_ROOM_LABEL, onclick: '' });
   } else if (hier.room) {
-    locationRows.push({ label: 'Room', value: toSentenceCase(hier.room.name) });
+    locationRows.push({ label: 'Room', value: toSentenceCase(hier.room.name), onclick: '' });
   }
   if (hier.unit) {
-    locationRows.push({ label: 'Cabinet / Storage', value: toSentenceCase(hier.unit.name) });
+    locationRows.push({
+      label: 'Storage Container',
+      value: toSentenceCase(hier.unit.name),
+      onclick: `locateDrawerInUnit(${Number(hier.unit.id)}, ${targetDrawerId})`
+    });
   }
   if (hier.drawer && (!hier.unit || hier.drawer.id !== hier.unit.id)) {
     const hasCoords = Number(hier.drawer.grid_row) >= 1 && Number(hier.drawer.grid_col) >= 1;
     const coordSuffix = hasCoords
       ? ` (${formatSlotCoord(hier.drawer.grid_row, hier.drawer.grid_col, hier.drawer.grid_row_span, hier.drawer.grid_col_span)})`
       : '';
-    locationRows.push({ label: 'Drawer / Spot', value: `${hier.drawer.name}${coordSuffix}` });
+    locationRows.push({
+      label: 'Drawer / Spot',
+      value: `${hier.drawer.name}${coordSuffix}`,
+      onclick: `navToDrawer(${Number(hier.drawer.id)}, true)`
+    });
   }
   for (const sub of (hier.subLocations || [])) {
-    locationRows.push({ label: 'Box / Kit', value: sub.name });
+    locationRows.push({
+      label: 'Box / Kit',
+      value: sub.name,
+      onclick: `navToDrawer(${Number(sub.id)}, true)`
+    });
   }
 
-  const diagramTarget = hier.drawer || loc;
-  let diagramHtml = '';
-  if (hier.unit && diagramTarget && Array.isArray(hier.unit.children) && hier.unit.children.length > 0) {
-    diagramHtml = `
-      <div class="m-where-diagram-block">
-        <div class="m-section-eyebrow">Cabinet Diagram</div>
-        ${renderMobileCabinetDiagram(hier.unit, diagramTarget, { interactive: false, compact: true })}
-      </div>
-    `;
-  } else if (hier.unit && diagramTarget) {
-    const fallbackVisual = renderCabinetHighlightVisual(hier.unit, diagramTarget, { compact: true });
-    if (fallbackVisual) {
-      diagramHtml = `<div class="m-where-diagram-block">${fallbackVisual}</div>`;
-    }
-  }
+  const parsedDesc = parseItemDescriptionAndParts(item.description);
+  const notesHtml = renderItemNotesSection(item);
+  const initialImages = collectMobileItemImages(item, loc, []);
 
   workspace.innerHTML = `
     <div class="m-page-shell">
-      <div class="m-topbar">
-        <button type="button" class="m-back-btn" onclick="handleGlobalBack()">
-          ${lucideIcon('arrowLeft', '', 20)} Back
-        </button>
-      </div>
+      ${renderMobileSubpageTopbar()}
 
       <div class="mobile-limited-grid">
         <section class="m-card">
@@ -626,34 +1157,12 @@ export function renderLimitedItemView(itemId) {
           ` : ''}
 
           <div class="m-item-title-area">
-            ${isRenaming ? `
-              <form class="m-rename-form" onsubmit="event.preventDefault(); saveLimitedItemRename(${safeItemId});">
-                <input
-                  type="text"
-                  id="mobile-limited-rename-input"
-                  class="m-rename-input"
-                  value="${escapeHtml(item.name)}"
-                  placeholder="Item name"
-                  onkeydown="if (event.key === 'Escape') { event.preventDefault(); cancelLimitedItemRename(${safeItemId}); }"
-                >
-                <div class="m-rename-actions">
-                  <button type="submit" class="btn btn-primary m-action-btn">Save</button>
-                  <button type="button" class="btn btn-secondary m-action-btn" onclick="cancelLimitedItemRename(${safeItemId})">Cancel</button>
-                </div>
-              </form>
-            ` : `
-              <div class="m-title-row">
-                <h1 class="m-item-title">${escapeHtml(item.name)}</h1>
-                <button
-                  type="button"
-                  class="btn btn-secondary m-rename-trigger"
-                  onclick="startLimitedItemRename(${safeItemId})"
-                >
-                  ${lucideIcon('pencil', '', 16)} Rename
-                </button>
-              </div>
-            `}
-            ${qtyText ? `<div class="m-qty-badge">${escapeHtml(qtyText)}</div>` : ''}
+            ${item.category ? `<div class="m-item-category-chip">${escapeHtml(item.category)}</div>` : ''}
+            <h1 class="m-item-title">${escapeHtml(item.name)}</h1>
+            <div class="m-item-badges-row">
+              ${qtyText ? `<span class="m-qty-badge">${escapeHtml(qtyText)}</span>` : ''}
+              ${item.serial_or_part_number ? `<span class="m-model-badge">${escapeHtml(item.serial_or_part_number)}</span>` : ''}
+            </div>
           </div>
         </section>
 
@@ -661,7 +1170,15 @@ export function renderLimitedItemView(itemId) {
           <div class="m-section-eyebrow">Where to Find It</div>
           ${locationRows.length > 0 ? `
             <div class="m-where-list">
-              ${locationRows.map(r => `
+              ${locationRows.map(r => r.onclick ? `
+                <button type="button" class="m-where-row is-clickable" onclick="${r.onclick}">
+                  <span class="m-where-label">${escapeHtml(r.label)}</span>
+                  <span class="m-where-value-wrap">
+                    <span class="m-where-value">${escapeHtml(r.value)}</span>
+                    ${lucideIcon('chevronRight', 'm-row-chevron', 18)}
+                  </span>
+                </button>
+              ` : `
                 <div class="m-where-row">
                   <span class="m-where-label">${escapeHtml(r.label)}</span>
                   <span class="m-where-value">${escapeHtml(r.value)}</span>
@@ -669,31 +1186,52 @@ export function renderLimitedItemView(itemId) {
               `).join('')}
             </div>
           ` : `
-            <p class="m-status-msg" style="padding: 0.5rem 0;">Not assigned to a cabinet yet.</p>
+            <p class="m-status-msg" style="padding: 0.5rem 0;">Not assigned to a container yet.</p>
           `}
-
-          ${diagramHtml}
-
-          ${drawerPhotos.length > 0 ? `
-            <div class="m-where-photos-block">
-              <div class="m-section-eyebrow">Inside This Drawer</div>
-              <div class="m-photo-strip">
-                ${drawerPhotos.map((p, idx) => `
-                  <div class="m-photo-card">
-                    <img
-                      src="${escapeHtml(p.thumb || p.url)}"
-                      alt="${escapeHtml(p.caption || `Drawer photo ${idx + 1}`)}"
-                      onclick="openLightbox('${escapeJsStr(p.url)}', '${escapeJsStr(p.caption || item.name)}')"
-                    >
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-          ` : ''}
         </section>
+
+        <section class="m-card" id="mobile-item-images-section-${safeItemId}" ${initialImages.length === 0 ? 'hidden' : ''}>
+          ${initialImages.length > 0 ? renderMobileImagesGridHtml(initialImages) : ''}
+        </section>
+
+        ${notesHtml ? `
+          <section class="m-card m-notes-card">
+            <div class="m-notes-card-head">
+              <span class="m-section-eyebrow" style="margin-bottom: 0;">Notes</span>
+              <button type="button" class="btn btn-secondary btn-xs" onclick="openMobileNotesModal(${safeItemId})">
+                Full View
+              </button>
+            </div>
+            <div class="m-notes-card-body">
+              ${notesHtml}
+            </div>
+          </section>
+        ` : ''}
+
+        ${parsedDesc.parts.length > 0 ? `
+          <section class="m-card">
+            <div class="m-section-eyebrow">Parts Inside (${parsedDesc.parts.length})</div>
+            <div class="item-parts-readonly-list">
+              ${parsedDesc.parts.map(p => `
+                <div class="item-part-readonly-row">
+                  <span class="item-part-qty-pill">×${Math.max(1, Number(p.qty || 1))}</span>
+                  <div style="flex: 1; min-width: 0;">
+                    <span class="item-part-name">${escapeHtml(p.name)}</span>
+                    ${p.partNumber ? `<span class="item-part-code">${escapeHtml(p.partNumber)}</span>` : ''}
+                    ${p.specs ? `<div class="item-part-specs">${escapeHtml(p.specs)}</div>` : ''}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </section>
+        ` : ''}
+
+        <section class="m-card" id="mobile-item-docs-section-${safeItemId}" hidden></section>
       </div>
     </div>
   `;
+
+  void loadMobileItemAttachments(safeItemId);
 }
 
 // ============================================================================

@@ -1,11 +1,13 @@
 {
+  "id": "/",
   "name": "WhereIsMyStuff",
   "short_name": "WhereIsMyStuff",
   "description": "Find anything in your home in seconds. Browse by room, container, or drawer.",
-  "start_url": "/#/",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#0b1120",
   "theme_color": "#0b1120",
   "icons": [

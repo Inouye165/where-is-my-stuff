@@ -40,7 +40,9 @@ import { compressImageFile, uploadPhotoAndGetPath } from './photo-compress.js';
 import { openPhotoEditorModal } from './photo-editor.js';
 import {
   renderLimitedItemView,
+  renderMobileDrawerView,
   renderMobileFindView,
+  renderMobileStorageUnitView,
   shouldUseLimitedItemView,
   shouldUseMobileCompanion
 } from './mobile-views.js';
@@ -899,6 +901,10 @@ export function skipNeedsHomeContainer(total) {
 }
 
 export function renderNeedsHomeView() {
+  if (shouldUseMobileCompanion()) {
+    renderMobileFindView();
+    return;
+  }
   const workspace = document.getElementById('app-workspace');
   if (!workspace) return;
   workspace.classList.remove('is-home-canvas', 'is-unit-view');
@@ -1114,6 +1120,10 @@ function renderStickyContextBar(crumbs, rightActionsHtml = '') {
 }
 
 export function renderRoomView(roomId) {
+  if (shouldUseMobileCompanion()) {
+    renderMobileFindView();
+    return;
+  }
   const room = state.locationMap.get(roomId);
   const workspace = document.getElementById('app-workspace');
   if (!workspace) return;
@@ -1548,6 +1558,10 @@ export async function deleteSpaceFromMenu(roomId) {
 }
 
 export function renderStorageUnitView(unitId) {
+  if (shouldUseMobileCompanion()) {
+    renderMobileStorageUnitView(unitId);
+    return;
+  }
   const unit = state.locationMap.get(unitId);
   const workspace = document.getElementById('app-workspace');
   if (!workspace) return;
@@ -2216,7 +2230,7 @@ let itemRenameEditId = null;
 let itemPartsEditorState = null;
 
 export function renderCabinetHighlightVisual(unit, drawer, options = {}) {
-  const { compact = false } = options;
+  const { compact = false, interactive = true } = options;
   const unitPhoto = sanitizePhotoUrl((unit && (unit.container_photo || unit.context_photo)) || '');
   const hasGrid = Boolean(unit && Number(unit.grid_rows) > 0 && Number(unit.grid_cols) > 0);
   const r0 = Number(drawer?.grid_row) || 0;
@@ -2234,6 +2248,20 @@ export function renderCabinetHighlightVisual(unit, drawer, options = {}) {
     const widthPct = ((cs / cols) * 100).toFixed(2);
     const safeUnitId = Number(unit.id);
     const safeDrawerId = Number(drawer.id);
+    if (!interactive) {
+      return `
+        <div class="cabinet-highlight-frame is-static ${compact ? 'is-compact' : ''}">
+          <div class="cabinet-highlight-media">
+            <img src="${escapeHtml(unitPhoto)}" alt="${escapeHtml(unit.name)}">
+            <div
+              class="cabinet-highlight-box"
+              style="top: ${topPct}%; height: ${heightPct}%; left: ${leftPct}%; width: ${widthPct}%;"
+              aria-hidden="true"
+            ></div>
+          </div>
+        </div>
+      `;
+    }
     return `
       <div
         class="cabinet-highlight-frame ${compact ? 'is-compact' : ''}"
@@ -3367,6 +3395,10 @@ export function toggleDrawerMoreMenu(e) {
 }
 
 export function renderDrawerView(drawerId) {
+  if (shouldUseMobileCompanion()) {
+    renderMobileDrawerView(drawerId);
+    return;
+  }
   const drawer = state.locationMap.get(drawerId);
   const workspace = document.getElementById('app-workspace');
   if (!workspace) return;
@@ -3885,7 +3917,7 @@ function formatItemStatusLabel(status) {
     .replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function formatBytes(bytes) {
+export function formatBytes(bytes) {
   const n = Number(bytes || 0);
   if (!n) return '';
   if (n < 1024) return `${n} B`;
@@ -4710,6 +4742,9 @@ export function renderItemView(itemId) {
   const spotPhoto = sanitizePhotoUrl(
     (loc && loc.context_photo) || (item.location_photos && item.location_photos.context_photo) || ''
   );
+  const safeUnitId = hier.unit ? Number(hier.unit.id) : 0;
+  const unitHref = hier.unit ? `#/unit/${safeUnitId}` : '';
+  const unitNavCall = hier.unit ? `navToStorageUnit(${safeUnitId}, true)` : '';
 
   const hasQty = item.quantity !== null && item.quantity !== undefined;
   const tagList = item.tags
@@ -4837,15 +4872,16 @@ export function renderItemView(itemId) {
           </div>
 
           <div class="detail-photo-card">
-            ${insidePhoto ? `
-              <button
-                type="button"
-                class="detail-photo-thumb item-view-photo-thumb"
-                aria-label="View full-size photo of ${escapeHtml(hier.unit ? hier.unit.name : 'Container')}"
-                onclick="openLightbox('${escapeJsStr(insidePhoto)}', '${escapeJsStr(hier.unit ? hier.unit.name : 'Container')}')"
+            ${(hier.unit && insidePhoto) ? `
+              <a
+                class="detail-photo-thumb item-view-photo-thumb is-nav-thumb"
+                href="${unitHref}"
+                aria-label="Open Storage Container: ${escapeHtml(hier.unit.name)}"
+                onclick="if(!event.metaKey&&!event.ctrlKey&&!event.shiftKey&&!event.altKey&&event.button===0){event.preventDefault();${unitNavCall};}"
+                onkeydown="if(event.key===' '){event.preventDefault();${unitNavCall};}"
               >
-                <img src="${escapeHtml(insidePhoto)}" alt="${escapeHtml(hier.unit ? hier.unit.name : 'Container')}">
-              </button>
+                <img src="${escapeHtml(insidePhoto)}" alt="${escapeHtml(hier.unit.name)}">
+              </a>
             ` : `
               <div class="detail-photo-thumb item-view-photo-thumb" style="cursor: default;">
                 <span class="empty-photo-muted">No container photo</span>
@@ -4854,30 +4890,19 @@ export function renderItemView(itemId) {
             <span class="detail-photo-caption">${escapeHtml(hier.unit ? hier.unit.name : 'Container')}</span>
           </div>
 
-          <div class="detail-photo-card">
+          <div class="detail-photo-card is-static-card">
             ${(hier.unit && insidePhoto && Number(hier.unit.grid_rows) > 0 && Number(hier.unit.grid_cols) > 0 && Number((hier.drawer || loc)?.grid_row) >= 1) ? `
-              <div class="detail-photo-thumb item-view-photo-thumb is-cabinet-highlight">
-                ${renderCabinetHighlightVisual(hier.unit, hier.drawer || loc)}
+              <div class="detail-photo-thumb item-view-photo-thumb is-cabinet-highlight is-static">
+                ${renderCabinetHighlightVisual(hier.unit, hier.drawer || loc, { interactive: false })}
               </div>
             ` : (hier.unit && Number(hier.unit.grid_rows) > 0 && Number(hier.unit.grid_cols) > 0) ? `
-              <button
-                type="button"
-                class="detail-photo-thumb item-view-photo-thumb is-grid-diagram"
-                aria-label="Show ${escapeHtml(item.name)} in ${escapeHtml(hier.unit.name)}"
-                title="Show in container"
-                onclick="locateDrawerInUnit(${Number(hier.unit.id)}, ${Number(hier.drawer?.id || item.location_id || 0)})"
-              >
+              <div class="detail-photo-thumb item-view-photo-thumb is-grid-diagram is-static" inert>
                 ${renderContainerGridHtml(hier.unit, { highlightDrawerId: hier.drawer?.id || item.location_id, diagram: true })}
-              </button>
+              </div>
             ` : (spotPhoto || loc) ? `
-              <button
-                type="button"
-                class="detail-photo-thumb item-view-photo-thumb ${spotPhoto ? '' : 'is-empty-photo'}"
-                aria-label="${spotPhoto ? 'View full-size photo of where it sits' : 'Add photo of where it sits'}"
-                onclick="${spotPhoto ? `openLightbox('${escapeJsStr(spotPhoto)}', 'Where it sits')` : `openQuickPhotoModal({ kind: 'spot', id: ${safeLocId}, title: 'Where it sits' })`}"
-              >
-                ${spotPhoto ? `<img src="${escapeHtml(spotPhoto)}" alt="Where it sits">` : `${lucideIcon('camera', 'empty-photo-icon', 24)}<span class="empty-photo-cta">Where it sits</span>`}
-              </button>
+              <div class="detail-photo-thumb item-view-photo-thumb is-static">
+                ${spotPhoto ? `<img src="${escapeHtml(spotPhoto)}" alt="Where it sits">` : `<span class="empty-photo-muted">No spot photo</span>`}
+              </div>
             ` : `
               <div class="detail-photo-thumb item-view-photo-thumb" style="cursor: default;">
                 <span class="empty-photo-muted">No location</span>
@@ -5209,6 +5234,10 @@ async function loadItemAuditHistory(itemId) {
 // 4. ITEMS TAB & IN-USE TAB
 // ============================================================================
 export function renderCatalogView() {
+  if (shouldUseMobileCompanion()) {
+    renderMobileFindView();
+    return;
+  }
   const workspace = document.getElementById('app-workspace');
   if (!workspace) return;
   workspace.classList.remove('is-home-canvas', 'is-unit-view');
@@ -5462,7 +5491,7 @@ function parsePartBulletLine(rawLine) {
   return { qty, name: line, partNumber, specs };
 }
 
-function parseItemDescriptionAndParts(description) {
+export function parseItemDescriptionAndParts(description) {
   const raw = String(description || '');
   if (!raw.trim()) {
     return { parts: [], otherNotes: '', hasPartsHeader: false };
@@ -5808,7 +5837,7 @@ const NOTE_SECTION_HEADINGS = new Set([
   'reference links',
 ]);
 
-function renderItemNotesSection(item) {
+export function renderItemNotesSection(item) {
   if (!item.description || !item.description.trim()) return '';
   const parsed = parseItemDescriptionAndParts(item.description);
   const text = parsed.hasPartsHeader ? parsed.otherNotes : item.description.trim();

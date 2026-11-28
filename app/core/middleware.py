@@ -123,6 +123,8 @@ class RequestContextMiddleware:
                         "frame-src 'self' blob:; connect-src 'self'; object-src 'none'; "
                         "base-uri 'self'; frame-ancestors 'none'"
                     )
+                if lower_path == "/sw.js":
+                    resp_headers["Cache-Control"] = "no-cache"
                 if lower_path.startswith("/uploads/attachments/") and lower_path.endswith(
                     _DOWNLOAD_ONLY_ATTACHMENT_EXTS
                 ):

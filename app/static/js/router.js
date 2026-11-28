@@ -36,7 +36,7 @@ import {
   renderRoomView,
   renderStorageUnitView
 } from './views.js';
-import { navToTouchCapture, renderTouchCaptureView } from './mobile-views.js';
+import { isPhoneViewport, navToTouchCapture, renderTouchCaptureView } from './mobile-views.js';
 
 const LAST_ROUTE_KEY = 'wims_last_route';
 const LAST_SCROLL_KEY = 'wims_last_scroll';
@@ -194,7 +194,7 @@ export function navToStorageUnit(unitId, recordHistory = true, spotlightDrawerId
     updatePageTitle(unit ? unit.name : 'Container');
 
     if (recordHistory) {
-      state.historyStack.push({ tab: 'places', view: 'unit', id: unitId });
+      state.historyStack.push({ tab: 'places', view: 'unit', id: unitId, spotlightDrawerId });
       updateHash(`#/unit/${unitId}`);
     }
 
@@ -273,27 +273,34 @@ export function locateDrawerInUnit(unitId, drawerId) {
 
   const targetDrawerId = resolveUnitChildDrawerId(resolvedUnitId, drawerId);
   const alreadyOnUnit = state.currentView === 'unit' && Number(state.currentLocationId) === resolvedUnitId;
+  const phone = isPhoneViewport();
 
   if (alreadyOnUnit && typeof document !== 'undefined') {
     clearActiveSpotlight();
     state.spotlightDrawerId = targetDrawerId;
-    const el = document.getElementById(`drawer-card-${targetDrawerId}`);
-    if (el) {
-      el.classList.add('spotlight-highlight');
-      if (el.classList.contains('cgrid-slot')) {
-        el.classList.add('is-highlighted');
+    if (phone) {
+      renderStorageUnitView(resolvedUnitId);
+    } else {
+      const el = document.getElementById(`drawer-card-${targetDrawerId}`);
+      if (el) {
+        el.classList.add('spotlight-highlight');
+        if (el.classList.contains('cgrid-slot')) {
+          el.classList.add('is-highlighted');
+        }
+        el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
       }
-      el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
     }
   } else {
     navToStorageUnit(resolvedUnitId, true, targetDrawerId);
   }
 
   clearTimeout(state.spotlightTimer);
-  state.spotlightTimer = setTimeout(() => {
-    if (state.currentView !== 'unit' || Number(state.currentLocationId) !== resolvedUnitId) return;
-    clearActiveSpotlight();
-  }, 10000);
+  if (!phone) {
+    state.spotlightTimer = setTimeout(() => {
+      if (state.currentView !== 'unit' || Number(state.currentLocationId) !== resolvedUnitId) return;
+      clearActiveSpotlight();
+    }, 10000);
+  }
 }
 
 export function handleGlobalBack() {
@@ -310,7 +317,7 @@ export function handleGlobalBack() {
       } else if (prev.view === 'room' && prev.id) {
         navToRoom(prev.id, false);
       } else if (prev.view === 'unit' && prev.id) {
-        navToStorageUnit(prev.id, false);
+        navToStorageUnit(prev.id, false, prev.spotlightDrawerId || null);
       } else if (prev.view === 'drawer' && prev.id) {
         navToDrawer(prev.id, false);
       } else if (prev.view === 'item' && prev.id) {
@@ -338,6 +345,10 @@ export function handleGlobalBack() {
         return;
       }
     } else if (state.currentView === 'unit' && state.currentLocationId) {
+      if (isPhoneViewport()) {
+        navToHome();
+        return;
+      }
       const u = state.locationMap.get(state.currentLocationId);
       const parent = u && u.parent_id ? state.locationMap.get(u.parent_id) : null;
       if (parent && !isUnknownPlaceholder(parent)) {

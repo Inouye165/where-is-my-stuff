@@ -3506,3 +3506,555 @@ def test_unit_quick_search_in_page_highlight_and_grid_zoom():
     proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
     assert proc.returncode == 0, f"Frontend unit quick search / zoom test failed:\n{proc.stderr}"
 
+
+def test_item_photos_and_location_cards_navigation_and_edge_cases():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_dir = (Path(__file__).resolve().parent.parent / "app" / "static" / "js").as_posix()
+    script = f"""
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    globalThis.requestAnimationFrame = (fn) => fn && fn();
+    globalThis.window = {{
+      location: {{ origin: 'http://localhost', hash: '#/item/1', pathname: '/' }},
+      innerWidth: 1440,
+      innerHeight: 900,
+      addEventListener() {{}},
+      history: {{ pushState() {{}}, replaceState() {{}} }},
+    }};
+    globalThis.history = globalThis.window.history;
+    globalThis.fetch = async () => ({{ ok: true, status: 200, json: async () => ({{ audit_logs: [], attachments: [] }}) }});
+
+    function makeEl(id = '') {{
+      const classes = new Set();
+      return {{
+        id,
+        value: '',
+        innerHTML: '',
+        textContent: '',
+        style: {{}},
+        dataset: {{}},
+        scrollTop: 0,
+        classList: {{
+          add: (...c) => c.forEach(x => classes.add(x)),
+          remove: (...c) => c.forEach(x => classes.delete(x)),
+          contains: (c) => classes.has(c),
+        }},
+      }};
+    }}
+
+    const workspace = makeEl('app-workspace');
+    globalThis.document = {{
+      title: '',
+      getElementById: (id) => (id === 'app-workspace' ? workspace : null),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+    }};
+
+    const stateMod = await import('file://{js_dir}/state.js');
+    const viewsMod = await import('file://{js_dir}/views.js');
+
+    const drawerA = {{ id: 101, name: 'Drawer 1', location_type: 'drawer', parent_id: 10, grid_row: 1, grid_col: 1, grid_row_span: 1, grid_col_span: 1, total_item_count: 1, children: [] }};
+    const unitA = {{ id: 10, name: 'Day Bed', location_type: 'container', parent_id: 1, container_photo: '/uploads/originals/unit_a.jpg', grid_rows: 1, grid_cols: 3, total_item_count: 1, children: [drawerA] }};
+    const roomA = {{ id: 1, name: 'Office', location_type: 'room', parent_id: null, context_photo: '/uploads/originals/room_a.jpg', children: [unitA] }};
+
+    const drawerB = {{ id: 201, name: 'Shelf Top', location_type: 'drawer', parent_id: 20, grid_row: 1, grid_col: 2, grid_row_span: 1, grid_col_span: 1, total_item_count: 1, children: [] }};
+    const unitB = {{ id: 20, name: 'Parts Rack', location_type: 'container', parent_id: 2, container_photo: '/uploads/originals/unit_b.jpg', grid_rows: 2, grid_cols: 2, total_item_count: 1, children: [drawerB] }};
+    const unitBNoDrawer = {{ id: 21, name: 'Plain Tote', location_type: 'container', parent_id: 2, container_photo: '/uploads/originals/tote.jpg', total_item_count: 1, children: [] }};
+    const roomB = {{ id: 2, name: 'Storage Closet', location_type: 'room', parent_id: null, children: [unitB, unitBNoDrawer] }};
+
+    stateMod.state.locations = [roomA, roomB];
+    stateMod.indexLocations();
+
+    const item1 = {{ id: 1, name: 'JST Connectors', location_id: 101, item_photo: '/uploads/originals/item1.jpg', attachments: [] }};
+    const item2 = {{ id: 2, name: 'M3 Screws', location_id: 201, item_photo: '/uploads/originals/item2.jpg', attachments: [] }};
+    const itemNoContainer = {{ id: 3, name: 'Loose Tripod', location_id: 1, item_photo: '/uploads/originals/item3.jpg', attachments: [] }};
+    const itemNoSubLoc = {{ id: 4, name: 'Cables', location_id: 21, item_photo: '/uploads/originals/item4.jpg', attachments: [] }};
+    stateMod.state.items = [item1, item2, itemNoContainer, itemNoSubLoc];
+
+    function getPhotosLocationGrid(html) {{
+      const start = html.indexOf('<div class="item-view-photos-grid"');
+      const end = html.indexOf('<div class="item-saved-photos-section');
+      if (start === -1 || end === -1 || end <= start) {{
+        throw new Error('Could not isolate item-view-photos-grid section');
+      }}
+      return html.slice(start, end);
+    }}
+
+    function getPhotosGallery(html) {{
+      const start = html.indexOf('<div class="item-saved-photos-section');
+      const end = html.indexOf('<div class="item-where-grid">');
+      if (start === -1 || end === -1 || end <= start) {{
+        throw new Error('Could not isolate item-saved-photos-section');
+      }}
+      return html.slice(start, end);
+    }}
+
+    // 1. Item 1 in Room 1 -> Unit 10 -> Drawer 101
+    viewsMod.renderItemView(1);
+    const html1 = workspace.innerHTML;
+    const grid1 = getPhotosLocationGrid(html1);
+    const gallery1 = getPhotosGallery(html1);
+    // Left card stays Item photo with lightbox and Paste/Crop/Replace/Auto-find
+    if (!grid1.includes('/uploads/originals/item1.jpg') || !grid1.includes('Item photo')) {{
+      throw new Error('Left card must keep Item photo: ' + grid1);
+    }}
+    for (const tool of ['Paste', 'Crop', 'Replace', 'Auto-find']) {{
+      if (!grid1.includes(tool)) {{
+        throw new Error(`Left card missing "${{tool}}" button: ` + grid1);
+      }}
+    }}
+    // Middle card shows container photo and navigates to #/unit/10 without lightbox
+    if (!grid1.includes('href="#/unit/10"') || !grid1.includes('navToStorageUnit(10, true)') || !grid1.includes('/uploads/originals/unit_a.jpg') || !grid1.includes('Day Bed')) {{
+      throw new Error('Middle card missing unit link, photo, or name: ' + grid1);
+    }}
+    const middleStart1 = grid1.indexOf('href="#/unit/10"');
+    const middleEnd1 = grid1.indexOf('</a>', middleStart1);
+    const middleAnchor1 = grid1.slice(middleStart1, middleEnd1);
+    if (middleAnchor1.includes('openLightbox')) {{
+      throw new Error('Middle card must not open lightbox: ' + middleAnchor1);
+    }}
+    // Right card is purely visual/static
+    if (!grid1.includes('is-static-card') || !grid1.includes('Where in Day Bed')) {{
+      throw new Error('Right card missing static card or caption: ' + grid1);
+    }}
+    const rightCardIdx1 = grid1.indexOf('is-static-card');
+    const rightCardHtml1 = grid1.slice(rightCardIdx1);
+    if (rightCardHtml1.includes('onclick=') || rightCardHtml1.includes('role="button"') || rightCardHtml1.includes('tabindex=') || rightCardHtml1.includes('locateDrawerInUnit') || rightCardHtml1.includes('openLightbox')) {{
+      throw new Error('Right card must be purely static without click/button/focus/lightbox attributes: ' + rightCardHtml1);
+    }}
+    // Photos gallery below stays reverted without extra Auto-find or Replace main photo
+    if (gallery1.includes('Auto-find') || gallery1.includes('Replace main photo')) {{
+      throw new Error('Photos gallery should stay reverted without extra main-photo actions: ' + gallery1);
+    }}
+
+    // 2. Item 2 in Room 2 -> Unit 20 -> Drawer 201 (different container link)
+    viewsMod.renderItemView(2);
+    const grid2 = getPhotosLocationGrid(workspace.innerHTML);
+    if (!grid2.includes('/uploads/originals/item2.jpg') || !grid2.includes('Item photo')) {{
+      throw new Error('Item 2 left card should keep Item photo: ' + grid2);
+    }}
+    if (!grid2.includes('href="#/unit/20"') || !grid2.includes('navToStorageUnit(20, true)') || !grid2.includes('/uploads/originals/unit_b.jpg') || !grid2.includes('Parts Rack')) {{
+      throw new Error('Item 2 middle card should link to #/unit/20: ' + grid2);
+    }}
+    if (!grid2.includes('Where in Parts Rack')) {{
+      throw new Error('Item 2 right card missing caption: ' + grid2);
+    }}
+
+    // 3. Item with no container -> no broken #/unit/ link
+    viewsMod.renderItemView(3);
+    const grid3 = getPhotosLocationGrid(workspace.innerHTML);
+    if (grid3.includes('#/unit/') || !grid3.includes('No container photo')) {{
+      throw new Error('Item with no container should not render a broken #/unit/ link: ' + grid3);
+    }}
+
+    // 4. Item with container (id 21) but no location inside -> middle card links to #/unit/21, right card static
+    viewsMod.renderItemView(4);
+    const grid4 = getPhotosLocationGrid(workspace.innerHTML);
+    if (!grid4.includes('href="#/unit/21"') || !grid4.includes('is-static-card')) {{
+      throw new Error('Item 4 should link middle card to #/unit/21 and keep right card static: ' + grid4);
+    }}
+
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Photos & Location cards test failed:\n{proc.stderr}"
+
+
+def test_phone_limited_search_container_drawer_item_and_tablet_desktop_views():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    static_dir = Path(__file__).resolve().parent.parent / "app" / "static"
+    css = (static_dir / "css" / "app.css").read_text(encoding="utf-8")
+    html = (static_dir / "index.html").read_text(encoding="utf-8")
+    assert "@media (min-width: 768px) and (max-width: 1060px)" in css
+    assert "@media (max-width: 767px)" in css
+    assert 'id="mobile-notes-modal"' in html
+
+    js_dir = (static_dir / "js").as_posix()
+    script = f"""
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    globalThis.requestAnimationFrame = (fn) => fn && fn();
+
+    function makeEl(id = '') {{
+      const classes = new Set();
+      return {{
+        id,
+        value: '',
+        innerHTML: '',
+        textContent: '',
+        hidden: false,
+        style: {{}},
+        dataset: {{}},
+        scrollTop: 0,
+        focus() {{}},
+        scrollIntoView() {{}},
+        classList: {{
+          add: (...c) => c.forEach(x => classes.add(x)),
+          remove: (...c) => c.forEach(x => classes.delete(x)),
+          toggle: (c, force) => {{
+            if (force === undefined) {{
+              if (classes.has(c)) classes.delete(c); else classes.add(c);
+            }} else if (force) classes.add(c);
+            else classes.delete(c);
+          }},
+          contains: (c) => classes.has(c),
+        }},
+      }};
+    }}
+
+    const elements = {{
+      'app-workspace': makeEl('app-workspace'),
+      'mobile-find-input': makeEl('mobile-find-input'),
+      'mobile-find-clear-btn': makeEl('mobile-find-clear-btn'),
+      'mobile-find-results': makeEl('mobile-find-results'),
+      'mobile-notes-modal': makeEl('mobile-notes-modal'),
+      'mobile-notes-modal-title': makeEl('mobile-notes-modal-title'),
+      'mobile-notes-modal-body': makeEl('mobile-notes-modal-body'),
+    }};
+
+    function getElById(id) {{
+      if (elements[id]) return elements[id];
+      const wsHtml = elements['app-workspace'].innerHTML || '';
+      if (wsHtml.includes(`id="${{id}}"`) || wsHtml.includes(`id='${{id}}'`)) {{
+        elements[id] = makeEl(id);
+        return elements[id];
+      }}
+      return null;
+    }}
+
+    globalThis.document = {{
+      title: '',
+      documentElement: {{
+        getAttribute: () => 'dark',
+        setAttribute() {{}},
+      }},
+      getElementById: getElById,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+    }};
+
+    globalThis.window = {{
+      location: {{ origin: 'http://localhost', hash: '#/', pathname: '/' }},
+      innerWidth: 900,
+      innerHeight: 1100,
+      matchMedia: (q) => ({{ matches: q.includes('coarse') }}),
+      addEventListener() {{}},
+      history: {{ pushState() {{}}, replaceState() {{}} }},
+    }};
+    globalThis.history = globalThis.window.history;
+
+    const searchQueries = [];
+    globalThis.fetch = async (url) => {{
+      const u = String(url);
+      if (u.includes('/api/v1/search')) {{
+        searchQueries.push(u);
+        return {{
+          ok: true,
+          status: 200,
+          json: async () => ({{
+            query: 'buck',
+            total: 1,
+            items: [
+              {{
+                id: 1,
+                name: 'Buck Converter',
+                location_id: 101,
+                quantity: 4,
+                unit: 'pcs',
+                serial_or_part_number: 'LM2596',
+                item_photo: '/uploads/originals/buck.jpg',
+                description: 'Input: 4V-40V\\nhttps://example.com/spec',
+              }},
+            ],
+          }}),
+        }};
+      }}
+      if (u.includes('/api/v1/items/1/attachments')) {{
+        return {{
+          ok: true,
+          status: 200,
+          json: async () => [
+            {{
+              id: 50,
+              attachment_type: 'image',
+              file_path: '/uploads/originals/buck_pinout.jpg',
+              thumbnail_path: '/uploads/thumbnails/buck_pinout.webp',
+              title: 'Pinout Diagram',
+              filename: 'pinout.jpg',
+            }},
+            {{
+              id: 51,
+              attachment_type: 'pdf',
+              file_path: '/uploads/originals/datasheet.pdf',
+              title: 'LM2596 Datasheet',
+              filename: 'lm2596.pdf',
+              size_bytes: 204800,
+            }},
+          ],
+        }};
+      }}
+      return {{ ok: true, status: 200, json: async () => ({{ audit_logs: [], attachments: [] }}) }};
+    }};
+
+    const stateMod = await import('file://{js_dir}/state.js');
+    const viewsMod = await import('file://{js_dir}/views.js');
+    const routerMod = await import('file://{js_dir}/router.js');
+    const mobileMod = await import('file://{js_dir}/mobile-views.js');
+
+    const boxInside = {{ id: 103, name: 'Resistor Kit', location_type: 'box', label: 'RK1', parent_id: 102, total_item_count: 1, children: [] }};
+    const drawerA = {{
+      id: 101, name: 'Drawer A', location_type: 'drawer', parent_id: 10,
+      grid_row: 1, grid_col: 1, grid_row_span: 1, grid_col_span: 1,
+      total_item_count: 1, photos: [{{ id: 7, photo_path: '/uploads/originals/drawera.jpg' }}], children: []
+    }};
+    const drawerB = {{
+      id: 102, name: 'Drawer B', location_type: 'drawer', parent_id: 10,
+      grid_row: 1, grid_col: 2, grid_row_span: 1, grid_col_span: 1,
+      total_item_count: 2, photos: [{{ id: 8, photo_path: '/uploads/originals/drawerb.jpg' }}], children: [boxInside]
+    }};
+    const unit = {{
+      id: 10, name: 'Parts Cabinet', location_type: 'container', parent_id: 1,
+      container_photo: '/uploads/originals/cabinet.jpg', grid_rows: 1, grid_cols: 2,
+      total_item_count: 3, children: [drawerA, drawerB]
+    }};
+    const room = {{ id: 1, name: 'Workshop', location_type: 'room', parent_id: null, children: [unit] }};
+
+    stateMod.state.locations = [room];
+    stateMod.indexLocations();
+    stateMod.state.items = [
+      {{
+        id: 1, name: 'Buck Converter', location_id: 101, quantity: 4, unit: 'pcs',
+        serial_or_part_number: 'LM2596', item_photo: '/uploads/originals/buck.jpg',
+        description: 'Input: 4V-40V\\nhttps://example.com/spec',
+      }},
+      {{ id: 2, name: 'M3 Screws', location_id: 102, quantity: 50, unit: 'pcs' }},
+      {{ id: 3, name: '10k Resistors', location_id: 103, quantity: 100, unit: 'pcs' }},
+    ];
+
+    // 1. Tablet (900px, coarse pointer) -> Desktop UI
+    if (mobileMod.isPhoneViewport() || mobileMod.shouldUseMobileCompanion() || mobileMod.shouldUseLimitedItemView()) {{
+      throw new Error('Tablet 900px should use desktop UI, not phone limited view');
+    }}
+    viewsMod.renderHomePlacesView();
+    if (!elements['app-workspace'].innerHTML.includes('home-canvas-inner')) {{
+      throw new Error('Tablet home view should render desktop home-canvas-inner');
+    }}
+    viewsMod.renderItemView(1);
+    if (!elements['app-workspace'].innerHTML.includes('is-item-detail-page')) {{
+      throw new Error('Tablet item view should render desktop is-item-detail-page');
+    }}
+
+    // 2. Phone (390px) -> Limited Search -> Container -> Drawer -> Item
+    globalThis.window.innerWidth = 390;
+    if (!mobileMod.isPhoneViewport() || !mobileMod.shouldUseMobileCompanion() || !mobileMod.shouldUseLimitedItemView()) {{
+      throw new Error('Phone 390px should enable limited mobile views');
+    }}
+
+    // 2a. Search view (empty + active query)
+    viewsMod.renderHomePlacesView();
+    const emptySearchHtml = elements['app-workspace'].innerHTML + elements['mobile-find-results'].innerHTML;
+    if (emptySearchHtml.includes('Add Photos to Drawers')) {{
+      throw new Error('Phone search view should not show Add Photos to Drawers banner');
+    }}
+    mobileMod.handleMobileFindInput({{ target: {{ value: 'buck' }} }});
+    await new Promise(r => setTimeout(r, 220));
+    if (!searchQueries.some(q => q.includes('/api/v1/search?q=buck'))) {{
+      throw new Error('Phone search did not call /api/v1/search: ' + JSON.stringify(searchQueries));
+    }}
+    const searchResultsHtml = elements['mobile-find-results'].innerHTML;
+    for (const expected of ['Buck Converter', 'Workshop', 'Parts cabinet', 'locateDrawerInUnit(10, 101)', 'navToItem(1)']) {{
+      if (!searchResultsHtml.includes(expected)) {{
+        throw new Error(`Phone search result missing "${{expected}}": ` + searchResultsHtml);
+      }}
+    }}
+
+    // 2b. Click Storage Container -> Container view with Drawer A highlighted and all drawers clickable
+    routerMod.locateDrawerInUnit(10, 101);
+    const unitHtml = elements['app-workspace'].innerHTML;
+    for (const expected of ['Parts cabinet', 'Workshop', 'Drawer A', 'Here', 'is-highlighted', 'navToDrawer(101, true)', 'navToDrawer(102, true)', 'cabinet-highlight-box']) {{
+      if (!unitHtml.includes(expected)) {{
+        throw new Error(`Phone container view missing "${{expected}}": ` + unitHtml);
+      }}
+    }}
+
+    // 2c. Click Drawer B -> Drawer contents view with items & nested boxes
+    routerMod.navToDrawer(102, true);
+    const drawerHtml = elements['app-workspace'].innerHTML;
+    for (const expected of ['Drawer B', 'M3 Screws', 'navToItem(2, true)', 'Resistor Kit', 'navToDrawer(103, true)', '/uploads/originals/drawerb.jpg']) {{
+      if (!drawerHtml.includes(expected)) {{
+        throw new Error(`Phone drawer view missing "${{expected}}": ` + drawerHtml);
+      }}
+    }}
+
+    // 2d. Click Item 1 -> Item Detail view (read-only, images, notes + Full View modal, PDF link)
+    routerMod.navToItem(1, true);
+    await new Promise(r => setTimeout(r, 60));
+    const itemHtml = elements['app-workspace'].innerHTML;
+    const imagesHtml = elements['mobile-item-images-section-1']?.innerHTML || '';
+    const docsHtml = elements['mobile-item-docs-section-1']?.innerHTML || '';
+    if (itemHtml.includes('startLimitedItemRename')) {{
+      throw new Error('Phone item view should be read-only without Rename action');
+    }}
+    for (const expected of ['Buck Converter', 'locateDrawerInUnit(10, 101)', 'navToDrawer(101, true)', '4V-40V', 'https://example.com/spec', 'openMobileNotesModal(1)']) {{
+      if (!itemHtml.includes(expected)) {{
+        throw new Error(`Phone item view missing "${{expected}}": ` + itemHtml);
+      }}
+    }}
+    for (const expected of ['/uploads/originals/buck.jpg', '/uploads/originals/buck_pinout.jpg', 'openLightbox']) {{
+      if (!imagesHtml.includes(expected)) {{
+        throw new Error(`Phone item images missing "${{expected}}": ` + imagesHtml);
+      }}
+    }}
+    for (const expected of ['LM2596 Datasheet', '/uploads/originals/datasheet.pdf', 'PDF']) {{
+      if (!docsHtml.includes(expected)) {{
+        throw new Error(`Phone item docs missing "${{expected}}": ` + docsHtml);
+      }}
+    }}
+
+    mobileMod.openMobileNotesModal(1);
+    if (!elements['mobile-notes-modal'].classList.contains('open') || !elements['mobile-notes-modal-body'].innerHTML.includes('4V-40V')) {{
+      throw new Error('openMobileNotesModal did not open modal with item notes');
+    }}
+    mobileMod.closeMobileNotesModal();
+    if (elements['mobile-notes-modal'].classList.contains('open')) {{
+      throw new Error('closeMobileNotesModal did not close modal');
+    }}
+
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"Phone/tablet limited view test failed:\n{proc.stderr}"
+
+
+def test_pwa_homescreen_standalone_installability(client):
+    import io
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from PIL import Image
+
+    manifest_res = client.get("/manifest.webmanifest")
+    assert manifest_res.status_code == 200
+    assert "application/manifest+json" in manifest_res.headers.get("content-type", "")
+    manifest = manifest_res.json()
+    assert manifest["id"] == "/"
+    assert manifest["start_url"] == "/"
+    assert manifest["display"] == "standalone"
+    assert len(manifest["icons"]) >= 3
+
+    for icon_entry in manifest["icons"]:
+        icon_res = client.get(icon_entry["src"])
+        assert icon_res.status_code == 200
+        assert icon_res.headers.get("content-type", "").startswith("image/png")
+
+    apple_res = client.get("/icons/apple-touch-icon.png")
+    assert apple_res.status_code == 200
+    assert apple_res.headers.get("content-type", "").startswith("image/png")
+    apple_img = Image.open(io.BytesIO(apple_res.content))
+    assert apple_img.size == (180, 180)
+    assert apple_img.mode == "RGB"
+
+    home_res = client.get("/")
+    assert home_res.status_code == 200
+    home_html = home_res.text
+    for expected in (
+        'name="mobile-web-app-capable" content="yes"',
+        'name="apple-mobile-web-app-capable" content="yes"',
+        'name="apple-mobile-web-app-status-bar-style" content="black-translucent"',
+        'name="apple-mobile-web-app-title" content="WhereIsMyStuff"',
+        'rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png"',
+        'rel="manifest" href="/manifest.webmanifest"',
+        'id="pwa-install-modal"',
+    ):
+        assert expected in home_html
+
+    sw_res = client.get("/sw.js")
+    assert sw_res.status_code == 200
+    assert sw_res.headers.get("cache-control") == "no-cache"
+    assert "/icons/apple-touch-icon.png" in sw_res.text
+
+    node_exe = shutil.which("node")
+    if not node_exe:
+        pytest.skip("Node.js not installed")
+
+    js_dir = (Path(__file__).resolve().parent.parent / "app" / "static" / "js").as_posix()
+    script = f"""
+    globalThis.localStorage = {{ getItem: () => null, setItem() {{}} }};
+    function makeEl(id = '') {{
+      const classes = new Set();
+      return {{
+        id,
+        value: '',
+        innerHTML: '',
+        textContent: '',
+        style: {{}},
+        dataset: {{}},
+        classList: {{
+          add: (...c) => c.forEach(x => classes.add(x)),
+          remove: (...c) => c.forEach(x => classes.delete(x)),
+          toggle: (c, f) => (f ? classes.add(c) : classes.delete(c)),
+          contains: (c) => classes.has(c),
+        }},
+      }};
+    }}
+    const workspace = makeEl('app-workspace');
+    const results = makeEl('mobile-find-results');
+    globalThis.document = {{
+      title: '',
+      documentElement: {{ getAttribute: () => 'dark', setAttribute() {{}} }},
+      getElementById: (id) => (id === 'app-workspace' ? workspace : (id === 'mobile-find-results' ? results : null)),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {{}},
+    }};
+    let standaloneMedia = false;
+    globalThis.window = {{
+      location: {{ origin: 'http://localhost', hash: '#/', pathname: '/' }},
+      innerWidth: 390,
+      innerHeight: 844,
+      navigator: {{ standalone: false }},
+      matchMedia: (q) => ({{ matches: q.includes('standalone') ? standaloneMedia : false }}),
+      addEventListener() {{}},
+      history: {{ pushState() {{}}, replaceState() {{}} }},
+    }};
+
+    const mobileMod = await import('file://{js_dir}/mobile-views.js');
+    mobileMod.renderMobileFindView();
+    if (!workspace.innerHTML.includes('id="m-install-app-btn"')) {{
+      throw new Error('Expected Install button in browser mode: ' + workspace.innerHTML);
+    }}
+
+    globalThis.window.navigator.standalone = true;
+    mobileMod.renderMobileFindView();
+    if (workspace.innerHTML.includes('id="m-install-app-btn"')) {{
+      throw new Error('Expected Install button hidden when navigator.standalone is true');
+    }}
+
+    globalThis.window.navigator.standalone = false;
+    standaloneMedia = true;
+    mobileMod.renderMobileFindView();
+    if (workspace.innerHTML.includes('id="m-install-app-btn"')) {{
+      throw new Error('Expected Install button hidden when display-mode: standalone matches');
+    }}
+    process.exit(0);
+    """
+    proc = subprocess.run([node_exe, "--input-type=module", "-e", script], capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, f"PWA standalone UI test failed:\n{proc.stderr}"
+
+
+
+

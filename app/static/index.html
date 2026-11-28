@@ -6,8 +6,12 @@
   <title>WhereIsMyStuff</title>
   <meta name="description" content="Find anything in your home in seconds. Browse by room, container, or drawer.">
   <meta name="theme-color" content="#0b1120">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WhereIsMyStuff">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png">
   <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230284c7'><path d='M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.5z'/></svg>">
@@ -885,6 +889,42 @@
     <button type="button" class="lightbox-close-btn" onclick="event.stopPropagation(); closeLightbox()" aria-label="Close photo preview">×</button>
     <img id="lightbox-img" class="lightbox-target" src="" alt="Full view">
     <div id="lightbox-caption" class="lightbox-caption"></div>
+  </div>
+
+  <!-- Modal 8A: Mobile Notes Reader -->
+  <div id="mobile-notes-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="mobile-notes-modal-title" onclick="closeOnScrim(event, 'mobile-notes-modal')">
+    <div class="modal-card m-notes-modal-card">
+      <div class="modal-top">
+        <h3 id="mobile-notes-modal-title" class="modal-title">Notes</h3>
+        <button type="button" class="modal-close-btn" onclick="closeMobileNotesModal()" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div id="mobile-notes-modal-body" class="modal-body-scroll m-notes-modal-body"></div>
+      <div class="modal-bottom">
+        <button type="button" class="btn btn-primary" onclick="closeMobileNotesModal()">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 8A-2: Home Screen / Standalone App Install Guide -->
+  <div id="pwa-install-modal" class="modal-scrim no-print" role="dialog" aria-modal="true" aria-labelledby="pwa-install-modal-title" onclick="closeOnScrim(event, 'pwa-install-modal')">
+    <div class="modal-card" style="max-width: 460px;">
+      <div class="modal-top">
+        <div>
+          <h3 id="pwa-install-modal-title" class="modal-title">Add to Home Screen</h3>
+          <p class="modal-subtitle">Open full screen like a native app without browser toolbars</p>
+        </div>
+        <button type="button" class="modal-close-btn" onclick="closeModal('pwa-install-modal')" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div id="pwa-install-modal-body" class="modal-body-scroll"></div>
+      <div class="modal-bottom">
+        <button type="button" id="pwa-install-native-btn" class="btn btn-primary" style="display: none;" onclick="triggerPwaInstall()">Install App</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal('pwa-install-modal')">Done</button>
+      </div>
+    </div>
   </div>
 
   <!-- Modal 8B: Container Photo Viewer (Replace, Crop, Remove, Done) -->

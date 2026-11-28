@@ -204,12 +204,14 @@ import { loadAllData, state } from './state.js';
 import {
   cancelLimitedItemRename,
   clearMobileFind,
+  closeMobileNotesModal,
   deleteTouchDrawerPhoto,
   handleMobileFindInput,
   handleTouchPhotoPicked,
   isMobileOrTabletViewport,
   isPhoneViewport,
   navToTouchCapture,
+  openMobileNotesModal,
   removePendingTouchPhoto,
   saveLimitedItemRename,
   saveTouchDrawerPhotos,
@@ -343,9 +345,18 @@ function resolveEffectiveTheme(pref) {
   return 'dark';
 }
 
+function syncThemeColorMeta(effectiveTheme) {
+  if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) {
+    meta.setAttribute('content', effectiveTheme === 'light' ? '#f8fafc' : '#0b1120');
+  }
+}
+
 export function initTheme() {
   const effective = resolveEffectiveTheme(state.themePref);
   document.documentElement.setAttribute('data-theme', effective);
+  syncThemeColorMeta(effective);
 
   const sysBtn = document.getElementById('theme-btn-system');
   const lightBtn = document.getElementById('theme-btn-light');
@@ -359,7 +370,9 @@ export function initTheme() {
     const mq = window.matchMedia('(prefers-color-scheme: light)');
     const onChange = () => {
       if (state.themePref === 'system') {
-        document.documentElement.setAttribute('data-theme', resolveEffectiveTheme('system'));
+        const next = resolveEffectiveTheme('system');
+        document.documentElement.setAttribute('data-theme', next);
+        syncThemeColorMeta(next);
       }
     };
     if (typeof mq.addEventListener === 'function') {
@@ -513,15 +526,110 @@ export function openMobileSearch() {
   }, 50);
 }
 
+export function isStandalonePwa() {
+  if (typeof window === 'undefined') return false;
+  return Boolean(
+    (window.matchMedia && (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: fullscreen)').matches
+    )) ||
+    window.navigator?.standalone === true
+  );
+}
+
+function syncStandaloneClass() {
+  if (typeof document === 'undefined' || !document.documentElement?.classList) return;
+  document.documentElement.classList.toggle('is-standalone', isStandalonePwa());
+}
+
+function syncInstallButtons() {
+  const standalone = isStandalonePwa();
+  const moreBtn = document.getElementById('more-install-app-btn');
+  if (moreBtn) {
+    moreBtn.style.display = standalone ? 'none' : 'inline-flex';
+  }
+  const mobileBtn = document.getElementById('m-install-app-btn');
+  if (mobileBtn) {
+    mobileBtn.style.display = standalone ? 'none' : 'inline-flex';
+  }
+  const nativeBtn = document.getElementById('pwa-install-native-btn');
+  if (nativeBtn) {
+    nativeBtn.style.display = (!standalone && deferredInstallPrompt) ? 'inline-flex' : 'none';
+  }
+}
+
+export function openPwaInstallGuide() {
+  if (typeof document === 'undefined') return;
+  const modal = document.getElementById('pwa-install-modal');
+  const body = document.getElementById('pwa-install-modal-body');
+  if (!modal || !body) return;
+
+  const ua = (typeof navigator !== 'undefined' && navigator.userAgent) ? navigator.userAgent : '';
+  const isIos = /iPad|iPhone|iPod/i.test(ua) || (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/i.test(ua);
+  const proto = typeof window !== 'undefined' ? window.location.protocol : 'https:';
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+  const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  const needsHttpsHint = proto === 'http:' && !isLocalHost;
+
+  let stepsHtml = '';
+  if (isIos) {
+    stepsHtml = `
+      <ol class="pwa-install-steps">
+        <li>Open this page in <strong>Safari</strong>.</li>
+        <li>Tap the <strong>Share</strong> button (square with an up arrow).</li>
+        <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+        <li>Tap <strong>Add</strong> — launching from the icon opens full screen without Safari bars.</li>
+      </ol>
+    `;
+  } else if (isAndroid) {
+    stepsHtml = `
+      <ol class="pwa-install-steps">
+        <li>Open this page in <strong>Chrome</strong>.</li>
+        <li>Tap the <strong>⋮</strong> menu in the top-right corner.</li>
+        <li>Tap <strong>Install app</strong> (or <strong>Add to Home screen</strong>).</li>
+        <li>Tap <strong>Install</strong> — launching from the Home Screen opens full screen.</li>
+      </ol>
+      ${needsHttpsHint ? `
+        <p class="pwa-install-note">
+          Note: Over local Wi-Fi, Chrome requires the server's <strong>HTTPS</strong> address (port 8443) to install as a full-screen app without a browser bar.
+        </p>
+      ` : ''}
+    `;
+  } else {
+    stepsHtml = `
+      <ol class="pwa-install-steps">
+        <li>In <strong>Chrome</strong> or <strong>Edge</strong>, click the <strong>Install</strong> icon on the right side of the address bar.</li>
+        <li>Or open the browser <strong>⋮</strong> menu → <strong>Cast, save, and share</strong> → <strong>Install page as app</strong>.</li>
+      </ol>
+      ${needsHttpsHint ? `
+        <p class="pwa-install-note">
+          Note: Over local Wi-Fi, browsers require <strong>HTTPS</strong> (port 8443) or localhost to enable one-click full-screen app install.
+        </p>
+      ` : ''}
+    `;
+  }
+
+  body.innerHTML = stepsHtml;
+  syncInstallButtons();
+  modal.classList.add('open');
+}
+
 export async function triggerPwaInstall() {
-  if (!deferredInstallPrompt) return;
-  deferredInstallPrompt.prompt();
-  try {
-    await deferredInstallPrompt.userChoice;
-  } catch { }
+  if (!deferredInstallPrompt) {
+    openPwaInstallGuide();
+    return;
+  }
+  const promptEvent = deferredInstallPrompt;
   deferredInstallPrompt = null;
-  const btn = document.getElementById('more-install-app-btn');
-  if (btn) btn.style.display = 'none';
+  promptEvent.prompt();
+  try {
+    const choice = await promptEvent.userChoice;
+    if (choice && choice.outcome === 'accepted') {
+      closeModal('pwa-install-modal', true);
+    }
+  } catch { }
+  syncInstallButtons();
 }
 
 function syncFullscreenButton() {
@@ -564,21 +672,31 @@ function initPwaAndWindowModes() {
     navigator.serviceWorker.register('/sw.js').catch(() => { });
   }
 
-  const isStandalone =
-    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
-    window.navigator?.standalone === true;
+  syncStandaloneClass();
+  syncInstallButtons();
+
+  if (window.matchMedia) {
+    const standaloneMq = window.matchMedia('(display-mode: standalone)');
+    const onDisplayModeChange = () => {
+      syncStandaloneClass();
+      syncInstallButtons();
+    };
+    if (typeof standaloneMq.addEventListener === 'function') {
+      standaloneMq.addEventListener('change', onDisplayModeChange);
+    }
+  }
 
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredInstallPrompt = e;
-    const btn = document.getElementById('more-install-app-btn');
-    if (btn && !isStandalone) btn.style.display = 'inline-flex';
+    syncInstallButtons();
   });
 
   window.addEventListener('appinstalled', () => {
     deferredInstallPrompt = null;
-    const btn = document.getElementById('more-install-app-btn');
-    if (btn) btn.style.display = 'none';
+    closeModal('pwa-install-modal', true);
+    syncStandaloneClass();
+    syncInstallButtons();
   });
 
   document.addEventListener('fullscreenchange', syncFullscreenButton);
@@ -1039,6 +1157,8 @@ if (typeof window !== 'undefined') {
     deleteSpaceFromMenu: deleteSpaceFromMenu,
     openMobileSearch: openMobileSearch,
     triggerPwaInstall: triggerPwaInstall,
+    openPwaInstallGuide: openPwaInstallGuide,
+    isStandalonePwa: isStandalonePwa,
     toggleFullScreenMode: toggleFullScreenMode,
     openAppPopupWindow: openAppPopupWindow,
     navToTouchCapture: navToTouchCapture,
@@ -1055,6 +1175,8 @@ if (typeof window !== 'undefined') {
     saveLimitedItemRename: saveLimitedItemRename,
     handleMobileFindInput: handleMobileFindInput,
     clearMobileFind: clearMobileFind,
+    openMobileNotesModal: openMobileNotesModal,
+    closeMobileNotesModal: closeMobileNotesModal,
     toggleMobileTheme: toggleMobileTheme,
     toggleItemRenameEdit: toggleItemRenameEdit,
     saveItemRename: saveItemRename,

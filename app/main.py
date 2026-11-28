@@ -39,6 +39,7 @@ class FrontendStaticFiles(StaticFiles):
 
 def create_app() -> FastAPI:
     mimetypes.add_type("image/webp", ".webp")
+    mimetypes.add_type("application/manifest+json", ".webmanifest")
     settings.init_directories()
     uploads_mount = SafeUploadsStaticFiles(directory=str(settings.UPLOAD_DIR))
 

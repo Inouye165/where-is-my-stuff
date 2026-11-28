@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wims-shell-v66';
+const CACHE_NAME = 'wims-shell-v68';
 const NEVER_CACHE_PATHS = new Set(['/docs', '/redoc', '/openapi.json', '/docs/oauth2-redirect']);
 const APP_SHELL_URLS = [
   '/',
@@ -37,6 +37,7 @@ const APP_SHELL_URLS = [
   '/js/unsaved-guard.js',
   '/js/views.js',
   '/js/vision-guard.js',
+  '/icons/apple-touch-icon.png',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/icon-512-maskable.png',
